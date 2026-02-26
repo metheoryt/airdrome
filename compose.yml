@@ -9,6 +9,7 @@ services:
       - "5437:5432"
     volumes:
       - db_data:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d
     restart: always
 
 volumes:

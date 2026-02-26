@@ -1,10 +1,12 @@
 import csv
 from datetime import datetime
+from typing import Iterator
 
 from pydantic import BaseModel, Field, model_validator
-from sqlmodel import Session, select
 
-from jellyfist.models import Track, engine
+from jellyfist.enums import Platform
+from jellyfist.scrobbles.parser import ScrobbleParser
+from jellyfist.scrobbles.schemas import TrackScrobble, TrackAliasSchema
 
 
 class AppleMusicPlayActivity(BaseModel):
@@ -29,7 +31,7 @@ class AppleMusicPlayActivity(BaseModel):
         return data
 
 
-def get_apple_records(play_activity_csv_path: str):
+def get_scrobbles(play_activity_csv_path: str):
     with open(play_activity_csv_path, mode="r", newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
         for row in reader:
@@ -39,25 +41,25 @@ def get_apple_records(play_activity_csv_path: str):
             r = AppleMusicPlayActivity(**row)
             if r.play_duration_ms < 25_000:
                 continue
-            if not r.song_name and not r.album_name:
-                continue
-            if not r.song_name or not r.album_name:
-                # print(r)
+            if not r.song_name:
                 continue
 
             yield r
 
 
-def ingest_play_history(play_activity_csv_path: str):
-    mismatch = set()
-    duplicate = set()
-    with Session(engine) as session:
-        for record in get_apple_records(play_activity_csv_path):
-            tracks = session.exec(
-                select(Track).where(Track.name == record.song_name, Track.album == record.album_name)
-            ).all()
-            if not tracks:
-                mismatch.add((record.album_name, record.song_name))
-            elif len(tracks) > 1:
-                duplicate.add((record.album_name, record.song_name))
-    return mismatch, duplicate
+class AppleScrobbleParser(ScrobbleParser):
+    platform = Platform.APPLE
+
+    def __init__(self, play_activity_csv_path: str):
+        self.play_activity_csv_path = play_activity_csv_path
+
+    def _iterate_scrobbles(self) -> Iterator[TrackScrobble]:
+        for r in get_scrobbles(self.play_activity_csv_path):
+            yield TrackScrobble(
+                alias=TrackAliasSchema(
+                    artist=None,
+                    album=r.album_name,
+                    title=r.song_name,
+                ),
+                date=r.event_ts,
+            )

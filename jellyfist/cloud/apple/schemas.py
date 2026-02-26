@@ -6,17 +6,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from jellyfist.apple.utils import ensure_truncated
-from jellyfist.util import normalize_name
-
-Kind = Literal[
-    "Аудиофайл MPEG-4",  # lossless m4a
-    "Купленное аудио AAC",  # iTunes Match track, downloaded from apple music, m4a
-    "Аудиофайл MPEG",  # mp3
-    "Аудиофайл AAC",  # lossy m4a
-    "Аудиофайл AAC из Apple Music",  # Apple Music, DRM protected m4v
-    "Видеофайл MPEG-4",  # mp4 video
-]
+from jellyfist.cloud.apple.utils import ensure_truncated
+from jellyfist.enums import Kind
+from jellyfist.normalize.norm import normalize_name
 
 
 class PlaylistTrack(BaseModel):
@@ -77,11 +69,12 @@ class TrackSchema(BaseModel):
     library_folder_count: int | None = Field(None, alias="Library Folder Count")
     artist: str | None = Field(None, alias="Artist")
     """Unknown Artist in Explorer"""
-    artist_norm: str | None = Field(None)  # auto
+    artist_norm: str = Field("")  # auto
     album_artist: str | None = Field(None, alias="Album Artist")
+    album_artist_norm: str = Field("")
     album: str | None = Field(None, alias="Album")
     """Unknown Album in Explorer"""
-    album_norm: str | None = Field(None)  # auto
+    album_norm: str = Field("")  # auto
     grouping: str | None = Field(None, alias="Grouping")
     """An old field I've used to mark full albums"""
     genre: str | None = Field(None, alias="Genre")
@@ -136,15 +129,17 @@ class TrackSchema(BaseModel):
     bpm: int | None = Field(None, alias="BPM")  # cab be calculated
     clean: bool = Field(False, alias="Clean")  # 32 True
 
-    name_norm: str
-
     @model_validator(mode="before")
     @classmethod
     def set_normalized_data(cls, data):
-        for f, nf in ("Name", "name_norm"), ("Artist", "artist_norm"), ("Album", "album_norm"):
-            val = data.get(f)
-            if val:
-                data[nf] = normalize_name(val)
+        for f, nf in (
+            ("Name", "name_norm"),
+            ("Artist", "artist_norm"),
+            ("Album", "album_norm"),
+            ("Album Artist", "album_artist_norm"),
+        ):
+            if f in data:
+                data[nf] = normalize_name(data[f])
         return data
 
     @property
@@ -222,14 +217,16 @@ class TrackSchema(BaseModel):
         name_limits = (35, 40)
         # file extension
         extensions = ("mp3", "m4a")
-        # whether to include disc number into filename
-        with_discnums = (False, True)
+        # whether to include a disc number into the filename
+        with_disc_nums = (False, True)
 
-        # combine them into cartesian product
-        for sfx, lim, ext, with_discnum in itertools.product(suffixes, name_limits, extensions, with_discnums):
+        # combine them into the cartesian product
+        for sfx, lim, ext, with_disc_num in itertools.product(
+            suffixes, name_limits, extensions, with_disc_nums
+        ):
             yield self.generate_location(
                 ext=ext,
-                include_disc_num=with_discnum,
+                include_disc_num=with_disc_num,
                 name_limit=lim,
                 suffix=sfx,
             )

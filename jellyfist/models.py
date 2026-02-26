@@ -5,13 +5,18 @@ from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel, create_engine, Relationship
 
 from .enums import Platform, TrackType, Kind
+from .conf import settings
 
 
 class TrackPlaylistLink(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint("track_id", "playlist_id", name="uq_trackplaylistlink_track_id_playlist_id"),
+    )
+
     id: int | None = Field(default=None, primary_key=True)
 
-    track_id: int = Field(foreign_key="track.id", index=True)
-    playlist_id: int = Field(foreign_key="playlist.id", index=True)
+    track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
+    playlist_id: int = Field(foreign_key="playlist.id", index=True, ondelete="CASCADE")
     added_at: datetime = Field(default_factory=datetime.now)
 
 
@@ -41,31 +46,40 @@ class Playlist(SQLModel, table=True):
 
 class Track(SQLModel, table=True):
     __table_args__ = (
-        UniqueConstraint("track_id", name="uq_track_track_id"),
-        UniqueConstraint("persistent_id", name="uq_track_persistent_id"),
+        sa.Index(
+            "track_name_norm_trgm_idx",
+            "name_norm",
+            postgresql_using="gin",
+            postgresql_ops={
+                "name_norm": "gin_trgm_ops",
+            },
+        ),
     )
     id: int | None = Field(default=None, primary_key=True)
-    plays: list["TrackPlay"] = Relationship(back_populates="track")
+    files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
+    aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
     playlists: list["Playlist"] = Relationship(back_populates="tracks", link_model=TrackPlaylistLink)
 
     # Apple Music data
+    name_norm: str
+    name: str
+    album_norm: str = Field("")
+    album: str | None = Field(None)
+    """Unknown Album in Explorer"""
+    artist_norm: str = Field("")
+    artist: str | None = Field(None)
+    """Unknown Artist in Explorer"""
+    album_artist_norm: str = Field("")
+    album_artist: str | None = Field(None)
+
     track_id: int = Field(unique=True)
     track_type: TrackType = Field(sa_column=sa.Column(sa.Enum(TrackType, native_enum=False)))
-    name: str
-    name_norm: str
     persistent_id: str = Field(unique=True)
     size: int
 
     apple_music: bool = Field(False)
     """True means the track was added from Apple Music, and not from the local library"""
 
-    artist: str | None = Field(None)
-    """Unknown Artist in Explorer"""
-    artist_norm: str | None = Field(None)
-    album_artist: str | None = Field(None)
-    album: str | None = Field(None)
-    """Unknown Album in Explorer"""
-    album_norm: str | None = Field(None)
     track_number: int | None = Field(None)
     date_added: datetime | None = Field(None)
     year: int | None = Field(None)
@@ -133,14 +147,17 @@ class Track(SQLModel, table=True):
     bpm: int | None = Field(None)
     clean: bool = Field(False)
 
-    files: list["TrackFile"] = Relationship(back_populates="track")
-
     @property
     def short_info(self):
-        tn = self.track_number if self.track_number is not None else "-"
+        tn = str(self.track_number) if self.track_number is not None else "-"
+        tn += "."
         cloud = "cloud" if self.apple_music else "local"
         added = self.date_added.strftime("%Y-%m-%d %H:%M:%S")
-        return f"[{self.track_id}] {self.artist} ({self.album}) {tn}. {self.name} added {added} [{cloud}]"
+        tt = ""
+        if self.total_time:
+            secs = self.total_time // 1000
+            tt = f"{secs // 60}:{secs % 60:02d}"
+        return f"#{self.track_id:<6} [{cloud}] {self.artist or '':<40} {self.album or '':<40} {tn:<3} {self.name:<40} ({tt}) added {added}"
 
 
 class TrackFile(SQLModel, table=True):
@@ -152,16 +169,33 @@ class TrackFile(SQLModel, table=True):
     path: str
 
 
-class TrackPlay(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("platform", "date", name="uq_trackplay_platform_date"),)
-
+class TrackAlias(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("title", "album", "artist", name="uq_trackalias_title_album_artist"),)
     id: int | None = Field(default=None, primary_key=True)
 
-    date: datetime
+    artist: str | None = Field(None)
+    title: str | None = Field(None)
+    album: str | None = Field(None)
+    artist_norm: str = Field("")
+    title_norm: str = Field("")
+    album_norm: str = Field("")
+
+    track_id: int | None = Field(None, foreign_key="track.id", index=True)
+    track: Track | None = Relationship(back_populates="aliases")
+
+    scrobbles: list["TrackAliasScrobble"] = Relationship(back_populates="alias", cascade_delete=True)
+
+    @property
+    def repr(self):
+        return f"[{self.artist or ''}/{self.album or ''}/{self.title}]"
+
+
+class TrackAliasScrobble(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    alias_id: int = Field(foreign_key="trackalias.id", index=True, ondelete="CASCADE")
+    alias: TrackAlias = Relationship(back_populates="scrobbles")
+    date: datetime = Field(unique=True)
     platform: Platform
 
-    track_id: int | None = Field(foreign_key="track.id", default=None, index=True)
-    track: Track = Relationship(back_populates="plays")
 
-
-engine = create_engine("postgresql+psycopg://postgres:postgres@localhost:5437/postgres", echo=False)
+engine = create_engine(str(settings.db_dsn), echo=settings.db_echo)

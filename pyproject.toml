@@ -5,20 +5,18 @@ description = "Media Library tools"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "beautifulsoup4>=4.14.3",
-    "mutagen>=1.47.0",
     "psycopg[binary,pool]>=3.3.3",
     "pydantic>=2.12.5",
+    "pydantic-settings>=2.13.1",
     "requests>=2.32.5",
     "ruff>=0.15.2",
     "sqlmodel>=0.0.27",
     "typer>=0.24.1",
-    "win32-setctime>=1.2.0",
 ]
 
 
 [tool.ruff]
 exclude = [".git", "__pycache__", ".venv"]
-line-length = 121
+line-length = 110
 indent-width = 4
 target-version = "py314"
