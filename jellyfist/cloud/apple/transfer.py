@@ -7,19 +7,22 @@ from jellyfist.models import Track, engine
 from .schemas import TrackSchema
 
 
-def transfer_library(source_dir: Path, target_dir: Path):
+def transfer_library(source_dir: Path, target_dir_originals: Path, target_dir_copies: Path):
     if not source_dir.is_dir():
         print("source directory does not exist:", source_dir)
         return
-    if not target_dir.is_dir():
-        p = input(f"target directory {target_dir} does not exist, create? [yN]: ")
-        if p.strip().lower() != "y":
-            print("abort")
-            return
-        target_dir.mkdir(parents=True, exist_ok=True)
-        print("target directory created:", target_dir)
 
-    moves = set()
+    for path in (target_dir_originals, target_dir_copies):
+        if not path.is_dir():
+            p = input(f"target directory {path} does not exist, create? [yN]: ")
+            if p.strip().lower() != "y":
+                print("abort")
+                return
+            path.mkdir(parents=True, exist_ok=True)
+            print("target directory created:", path)
+
+    originals = set()
+    copies = set()
 
     with Session(engine) as s:
         for track in s.exec(select(Track).where(Track.files.any())):
@@ -37,33 +40,50 @@ def transfer_library(source_dir: Path, target_dir: Path):
                 print("existing", existing_paths)
                 return
 
-            relative_path = relative_paths[0]
-            src = source_dir / relative_path
-            if not src.exists():
-                print(f"source file does not exist:", src)
-                return
+            # 1 original, rest copies
+            original_paths, copy_paths = relative_paths[:1], relative_paths[1:]
 
-            dst = target_dir / relative_path
-            if dst.exists():
-                print(f"target file already exists:", dst)
-                return
+            # make copy paths unique and remove the original from them
+            copy_paths = set(copy_paths)
+            copy_paths.discard(original_paths[0])
 
-            if relative_path in moves:
-                print(f"duplicate path found:", relative_path)
-                return
+            for cat_name, category, paths in (
+                ("originals", originals, original_paths),
+                ("copies", copies, copy_paths),
+            ):
+                for path in paths:
+                    src = source_dir / path
+                    if not src.exists():
+                        # print(f"source file does not exist:", src)
+                        # return
+                        continue
 
-            moves.add(relative_path)
+                    dst = target_dir_originals / path
+                    if dst.exists():
+                        print(f"source and target files already exist:", path)
+                        return
 
-    if not moves:
-        print("no files to move")
-        return
+                    if path in category:
+                        print(f"duplicate path found in {cat_name}:", path)
+                        return
 
-    # only move files after duplicate checks passed
-    print("moving", len(moves), "files...")
-    for relative_path in moves:
-        src = source_dir / relative_path
-        dst = target_dir / relative_path
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        # move the file
-        shutil.move(src, dst)
-    print("Done! Make sure you have synced the new library, and come back to sync the playlists")
+                    category.add(path)
+
+        for cat_name, category, target_dir in (
+            ("originals", originals, target_dir_originals),
+            ("copies", copies, target_dir_copies),
+        ):
+            if not category:
+                print("no files to move in category:", cat_name)
+                continue
+
+            # only move files after duplicate checks passed
+            print("moving", len(category), f"{cat_name}...")
+            for relative_path in category:
+                src = source_dir / relative_path
+                dst = target_dir / relative_path
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                # move the file
+                shutil.move(src, dst)
+
+        print("Done! Make sure you have synced the new library, and come back to sync the playlists")

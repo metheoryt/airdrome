@@ -11,9 +11,10 @@ class Settings(BaseSettings):
     db_echo: bool = False
 
     # local directories
-    local_library_dirpath: DirectoryPath = r"C:\Music"
     # apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\iTunes\iTunes Media\Music"
     apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\Music"  # testing on a copy
+    local_library_copies_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\Copies"
+    local_library_dirpath: DirectoryPath = r"C:\Music"
 
     # data to ingest
     apple_music_library_xml_filepath: FilePath = Path("data") / "apple" / "AppleMusicLibrary.xml"

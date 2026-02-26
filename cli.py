@@ -28,7 +28,9 @@ def ingest(recreate: bool = typer.Option(False, "--recreate", "-r")):
 @app.command()
 def transfer():
     transfer_library(
-        source_dir=settings.apple_music_library_dirpath, target_dir=settings.local_library_dirpath
+        source_dir=settings.apple_music_library_dirpath,
+        target_dir_originals=settings.local_library_dirpath,
+        target_dir_copies=settings.local_library_copies_dirpath,
     )
 
 
