@@ -1,2 +1,6 @@
-data/
 .idea/
+__pycache__/
+.ruff_cache/
+.venv/
+
+data/
