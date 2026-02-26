@@ -2,7 +2,7 @@ import typer
 from rich.console import Console
 from sqlmodel import SQLModel, Session, delete
 
-from jellyfist.cloud.apple import ingest_library, AppleScrobbleParser
+from jellyfist.cloud.apple import ingest_library, AppleScrobbleParser, transfer_library
 from jellyfist.cloud.lastfm import LastFMScrobbleParser
 from jellyfist.cloud.spotify import SpotifyScrobbleParser
 from jellyfist.enums import Platform
@@ -23,6 +23,13 @@ def ingest(recreate: bool = typer.Option(False, "--recreate", "-r")):
     console.print("[bold green]Starting ingest...[/bold green]")
     ingest_library(settings.apple_music_library_xml_filepath, recreate=recreate)
     console.print("[bold green]Data ingest completed successfully.[/bold green]")
+
+
+@app.command()
+def transfer():
+    transfer_library(
+        source_dir=settings.apple_music_library_dirpath, target_dir=settings.local_library_dirpath
+    )
 
 
 @app.command("deduplicate")

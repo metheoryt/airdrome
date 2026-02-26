@@ -41,8 +41,9 @@ class PlaylistSchema(BaseModel):
 
 
 class TrackSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    id: int | None = Field(None)  # database ID, just to comply with the database model
     track_id: int = Field(alias="Track ID")
     track_type: Literal["URL", "Remote", "File"] = Field(alias="Track Type")
     name: str = Field(alias="Name")
@@ -214,7 +215,7 @@ class TrackSchema(BaseModel):
         # duplicate track suffix, 0 means no suffix
         suffixes = (f" {v}" if v > 0 else "" for v in range(max_suffix + 1))
         # filename length limit, 35 for newer iTunes/AM version, 40 for older
-        name_limits = (35, 40)
+        name_limits = (40, 35)  # try old first, they mostly contain mp3
         # file extension
         extensions = ("mp3", "m4a")
         # whether to include a disc number into the filename

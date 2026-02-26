@@ -9,12 +9,20 @@ class Settings(BaseSettings):
 
     db_dsn: PostgresDsn = "postgresql+psycopg://postgres:postgres@localhost:5437/postgres"
     db_echo: bool = False
-    duplicates_filepath: FilePath = Path("data") / "duplicates.json"
-    apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\iTunes\iTunes Media\Music"
+
+    # local directories
+    local_library_dirpath: DirectoryPath = r"C:\Music"
+    # apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\iTunes\iTunes Media\Music"
+    apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\Music"  # testing on a copy
+
+    # data to ingest
     apple_music_library_xml_filepath: FilePath = Path("data") / "apple" / "AppleMusicLibrary.xml"
     apple_music_play_activity_filepath: FilePath = Path("data") / "apple" / "Apple Music Play Activity.csv"
     lastfm_scrobbles_filepath: FilePath = Path("data") / "lastfm" / "MeTheoryT.csv"
-    spotify_streaming_history_dirpath: FilePath = Path("data") / "spotify"
+    spotify_streaming_history_dirpath: DirectoryPath = Path("data") / "spotify"
+
+    # app-produced data
+    duplicates_filepath: FilePath = Path("data") / "duplicates.json"
 
 
 settings = Settings()

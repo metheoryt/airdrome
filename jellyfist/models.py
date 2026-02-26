@@ -4,8 +4,8 @@ import sqlalchemy as sa
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel, create_engine, Relationship
 
-from .enums import Platform, TrackType, Kind
 from .conf import settings
+from .enums import Platform, TrackType, Kind
 
 
 class TrackPlaylistLink(SQLModel, table=True):
