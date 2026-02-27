@@ -152,6 +152,10 @@ class Track(SQLModel, table=True):
     path: Path | None = Field(None)  # main path of a track (already transferred)
 
     @property
+    def artist_album_name(self):
+        return f"{self.artist or ''}/{self.album or ''}/{self.name or ''}"
+
+    @property
     def short_info(self):
         tn = str(self.track_number) if self.track_number is not None else "-"
         tn += "."

@@ -5,17 +5,27 @@ from sqlmodel import SQLModel, Session, delete
 from jellyfist.cloud.apple import ingest_library, AppleScrobbleParser, transfer_library
 from jellyfist.cloud.lastfm import LastFMScrobbleParser
 from jellyfist.cloud.spotify import SpotifyScrobbleParser
+from jellyfist.conf import settings
 from jellyfist.enums import Platform
+from jellyfist.loco.navidrome import sync_playlists
 from jellyfist.models import engine, TrackAlias
 from jellyfist.normalize import deduplicate_tracks, normalize_track_names, normalize_alias_names
-from jellyfist.conf import settings
 
-app = typer.Typer(help="jellyfist CLI")
+app = typer.Typer(help="JellyFist CLI")
+navidrome_app = typer.Typer(help="JellyFist Navidrome CLI")
+app.add_typer(navidrome_app, name="navidrome")
 console = Console()
 
 
 # create any missing tables
 SQLModel.metadata.create_all(engine, checkfirst=True)
+
+
+@navidrome_app.command("playlists")
+def navidrome_playlists(username: str):
+    console.print("[bold green]Syncing jellyfist playlists to Navidrome[/bold green]")
+    sync_playlists(username)
+    console.print("[bold green]Sync completed[/bold green]")
 
 
 @app.command()
