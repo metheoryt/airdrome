@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 import sqlalchemy as sa
 from sqlalchemy import UniqueConstraint
@@ -56,7 +57,7 @@ class Track(SQLModel, table=True):
         ),
     )
     id: int | None = Field(default=None, primary_key=True)
-    files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
+    # files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
     aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
     playlists: list["Playlist"] = Relationship(back_populates="tracks", link_model=TrackPlaylistLink)
 
@@ -147,6 +148,9 @@ class Track(SQLModel, table=True):
     bpm: int | None = Field(None)
     clean: bool = Field(False)
 
+    # jellyfist data
+    path: Path | None = Field(None)  # main path of a track (already transferred)
+
     @property
     def short_info(self):
         tn = str(self.track_number) if self.track_number is not None else "-"
@@ -160,13 +164,13 @@ class Track(SQLModel, table=True):
         return f"#{self.track_id:<6} [{cloud}] {self.artist or '':<40} {self.album or '':<40} {tn:<3} {self.name:<40} ({tt}) added {added}"
 
 
-class TrackFile(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-
-    track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
-    track: Track = Relationship(back_populates="files")
-
-    path: str
+# class TrackFile(SQLModel, table=True):
+#     id: int | None = Field(default=None, primary_key=True)
+#
+#     track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
+#     track: Track = Relationship(back_populates="files")
+#
+#     path: str
 
 
 class TrackAlias(SQLModel, table=True):

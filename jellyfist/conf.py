@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\iTunes\iTunes Media\Music"
     apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\Music"  # testing on a copy
     local_library_copies_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\Copies"
-    local_library_dirpath: DirectoryPath = r"C:\Music"
+    local_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\NewLibrary"
 
     # data to ingest
     apple_music_library_xml_filepath: FilePath = Path("data") / "apple" / "AppleMusicLibrary.xml"
@@ -24,6 +24,9 @@ class Settings(BaseSettings):
 
     # app-produced data
     duplicates_filepath: FilePath = Path("data") / "duplicates.json"
+
+    # navidrome
+    navidrome_db_dsn: str = "sqlite:///./data/navidrome.db"
 
 
 settings = Settings()

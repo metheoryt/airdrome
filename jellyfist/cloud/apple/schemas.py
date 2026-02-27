@@ -43,7 +43,10 @@ class PlaylistSchema(BaseModel):
 class TrackSchema(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    id: int | None = Field(None)  # database ID, just to comply with the database model
+    # database cols
+    id: int | None = Field(None)
+    path: str | None = Field(None)
+
     track_id: int = Field(alias="Track ID")
     track_type: Literal["URL", "Remote", "File"] = Field(alias="Track Type")
     name: str = Field(alias="Name")

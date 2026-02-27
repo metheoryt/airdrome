@@ -3,7 +3,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select, SQLModel
 
-from jellyfist.models import Track, engine, Playlist, TrackPlaylistLink, TrackFile
+from jellyfist.models import Track, engine, Playlist, TrackPlaylistLink
 from .schemas import TrackSchema, PlaylistSchema
 from jellyfist.conf import settings
 
@@ -43,11 +43,11 @@ def ingest_library(filename: str, recreate: bool = False):
             session.add(track)
             session.flush()
 
-            track_paths = get_track_paths(track_schema)
-            for tp in track_paths:
-                tf = TrackFile(track_id=track.id, path=str(tp))
-                session.add(tf)
-            session.flush()
+            # track_paths = get_track_paths(track_schema)
+            # for tp in track_paths:
+            #     tf = TrackFile(track_id=track.id, path=str(tp))
+            #     session.add(tf)
+            # session.flush()
 
         session.commit()
 

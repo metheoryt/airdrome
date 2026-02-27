@@ -5,6 +5,7 @@ description = "Media Library tools"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "mutagen>=1.47.0",
     "psycopg[binary,pool]>=3.3.3",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
