@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     duplicates_filepath: FilePath = Path("data") / "duplicates.json"
 
     # navidrome
-    navidrome_db_dsn: str = "sqlite:///./data/navidrome.db"
+    navidrome_db_dsn: str = "sqlite:///C:/Navidrome/navidrome.db"
 
 
 settings = Settings()

@@ -7,7 +7,7 @@ from jellyfist.cloud.lastfm import LastFMScrobbleParser
 from jellyfist.cloud.spotify import SpotifyScrobbleParser
 from jellyfist.conf import settings
 from jellyfist.enums import Platform
-from jellyfist.loco.navidrome import sync_playlists
+from jellyfist.loco.navidrome import sync_playlists_to_navi
 from jellyfist.models import engine, TrackAlias
 from jellyfist.normalize import deduplicate_tracks, normalize_track_names, normalize_alias_names
 
@@ -24,7 +24,7 @@ SQLModel.metadata.create_all(engine, checkfirst=True)
 @navidrome_app.command("playlists")
 def navidrome_playlists(username: str):
     console.print("[bold green]Syncing jellyfist playlists to Navidrome[/bold green]")
-    sync_playlists(username)
+    sync_playlists_to_navi(username)
     console.print("[bold green]Sync completed[/bold green]")
 
 

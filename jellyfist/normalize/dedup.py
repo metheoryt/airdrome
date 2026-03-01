@@ -42,37 +42,40 @@ def deduplicate_group(human_key: str, tracks: list[Track], s: Session) -> DupGro
             # TODO re-link to playlists?
             s.delete(track)
             s.flush()
-            # print("deleted:", track.short_info)
+            print("deleted:", track.artist_album_name)
 
     return dg
 
 
 def deduplicate_tracks(s: Session):
-    artists_names = s.exec(
-        select(Track.artist_norm, Track.name_norm, func.count(Track.track_id).label("count"))
-        .group_by(Track.artist_norm, Track.name_norm)
-        .having(func.count(Track.track_id) > 1)
-        .order_by(Track.artist_norm, Track.name_norm)
-    )
+    for cols in (
+        (Track.artist_norm, Track.name_norm),
+        (Track.album_artist_norm, Track.name_norm),
+        (Track.album_norm, Track.name_norm),
+    ):
+        print(f"deduplicating by", "/".join([c.name for c in cols]))
+        combinations = s.exec(
+            select(*cols, func.count(Track.track_id).label("count"))
+            .group_by(*cols)
+            .having(func.count(Track.track_id) > 1)
+            .order_by(*cols)
+        )
 
-    try:
-        for artist, name, count in artists_names:
-            tracks = s.exec(
-                select(Track)
-                .where(
-                    Track.artist_norm == artist,
-                    Track.name_norm == name,
-                )
-                .order_by(Track.track_id)
-            ).all()
-            key = f"{artist} - {name}"
-            deduplicate_group(key, list(tracks), s)
+        try:
+            for *col_vals, count in combinations:
+                col_to_val = zip(cols, col_vals)
+                tracks = s.exec(
+                    select(Track).where(*[v[0] == v[1] for v in col_to_val]).order_by(Track.track_id)
+                ).all()
+                key = "|".join(col_vals)
+                deduplicate_group(key, list(tracks), s)
 
-        s.commit()  # commit deletion of duplicate tracks
-        # save choices permanently
-        DupGroup.dump(DUPES, settings.duplicates_filepath)
+            s.commit()  # commit deletion of duplicate tracks
+            print("tracks are deleted permanently")
+            # save choices permanently
+            DupGroup.dump(DUPES, settings.duplicates_filepath)
 
-    except KeyboardInterrupt:
-        # save choices permanently on ctrl+c
-        DupGroup.dump(DUPES, settings.duplicates_filepath)
-        raise
+        except KeyboardInterrupt:
+            # save choices permanently on ctrl+c
+            DupGroup.dump(DUPES, settings.duplicates_filepath)
+            raise

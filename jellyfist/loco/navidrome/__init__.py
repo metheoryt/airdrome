@@ -1,1 +1,1 @@
-from .sync import sync_playlists
+from .sync.playlists import sync_playlists_to_navi
