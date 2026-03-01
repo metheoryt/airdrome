@@ -47,18 +47,7 @@ def sync_playlists(username: str):
                     # print("no file:", track.short_info)
                     continue
 
-                media_file = nvs.exec(
-                    select(MediaFile).where(
-                        or_(
-                            MediaFile.path == track.path,
-                            and_(
-                                MediaFile.album == track.album,
-                                MediaFile.artist == track.artist,
-                                MediaFile.title == track.name,
-                            ),
-                        ),
-                    )
-                ).one_or_none()
+                media_file = nvs.exec(select(MediaFile).where(MediaFile.path == track.path)).one_or_none()
                 if not media_file:
                     print("cant find in navidrome:", track.artist_album_name, track.path)
                     continue
