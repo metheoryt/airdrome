@@ -10,6 +10,7 @@ from jellyfist.enums import Platform
 from jellyfist.loco.navidrome import sync_playlists_to_navi
 from jellyfist.models import engine, TrackAlias
 from jellyfist.normalize import deduplicate_tracks, normalize_track_names, normalize_alias_names
+from jellyfist.scrobbles.matcher import AliasMatcher
 
 app = typer.Typer(help="JellyFist CLI")
 navidrome_app = typer.Typer(help="JellyFist Navidrome CLI")
@@ -44,6 +45,11 @@ def transfer():
     )
 
 
+@app.command("match")
+def match_cli(reset: bool = typer.Option(False, "--reset", "-r")):
+    AliasMatcher.match_all(reset=reset)
+
+
 @app.command("deduplicate")
 def deduplicate_cli():
     with Session(engine) as session:
@@ -52,8 +58,10 @@ def deduplicate_cli():
 
 @app.command()
 def renormalize():
-    normalize_track_names()
-    normalize_alias_names()
+    with Session(engine) as session:
+        normalize_track_names(session)
+        normalize_alias_names(session)
+        session.commit()
 
 
 SCROBBLE_PARSERS = {

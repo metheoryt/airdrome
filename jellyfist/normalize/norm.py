@@ -8,11 +8,7 @@ DECORATION_PATTERNS = [
     r"\(feat\..*?\)",  # (feat. xxx)
     r"\[feat\..*?\]",  # [feat. xxx]
     r"feat\. .*?$",
-    r"\(bonus track version\)$",
     r"\(explicit\)$",
-    r"\(expanded edition\)$",
-    r"\(deluxe edition\)$",
-    r"\(deluxe version\)$",
     r"\(deluxe box set\)$",
     r"\(super deluxe\)$",
     r"\(deluxe\)$",
@@ -22,14 +18,23 @@ DECORATION_PATTERNS = [
     r"\(переиздание\)$",
     r"\(золотое издание\)$",
     r"\(target deluxe edition\)$",
-    r"\(remastered.*?\)$",
-    r"\- remaster$"
-    r"\- re-recorded$"
-    r"\(.*?remaster\)$",
     r"\(new edition\)$",
     r"\(limited edition\)$",
+    r"\(deluxe edition\)$",
+    r"\(expanded edition\)$",
+    r"\(remastered.*?\)$",
+    r"\- remaster$",
+    r"\- re-recorded$",
+    r"\(.*?remaster\)$",
     r"\(.*?version.*?\)$",
-    # r"(?<!^)\(.*?\)",  # let's try to remove any part within brackets
+    # track numbers
+    r"^\d+\.\s+",
+    r"^\d+\s+\-\s+",
+    r"^\|\d+\|\s+",
+    # a year at the end of the track
+    r"\[\d{4}\]$",
+    # ep at the end of the album
+    r"\s+\-\s+EP$",
 ]
 
 
@@ -60,7 +65,7 @@ def normalize_name(value: str | None) -> str:
     for char in "/\\":
         value = value.replace(char, " ")
 
-    for char in "-'’,.…:[]()►\"*":  # some chars, though, need to be replaced with empty string
+    for char in "-,.:\"*[]()'’‘…►":  # some chars, though, need to be replaced with empty string
         value = value.replace(char, "")
 
     value = unicodedata.normalize("NFKC", value)

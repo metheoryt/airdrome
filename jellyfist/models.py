@@ -55,6 +55,34 @@ class Track(SQLModel, table=True):
                 "name_norm": "gin_trgm_ops",
             },
         ),
+        sa.Index(
+            "track_artist_norm_trgm_idx",
+            "artist_norm",
+            postgresql_using="gin",
+            postgresql_ops={
+                "artist_norm": "gin_trgm_ops",
+            },
+        ),
+        sa.Index(
+            "track_album_artist_norm_trgm_idx",
+            "album_artist_norm",
+            postgresql_using="gin",
+            postgresql_ops={
+                "album_artist_norm": "gin_trgm_ops",
+            },
+        ),
+        sa.Index(
+            "track_album_norm_trgm_idx",
+            "album_norm",
+            postgresql_using="gin",
+            postgresql_ops={
+                "album_norm": "gin_trgm_ops",
+            },
+        ),
+        sa.Index("track_name_norm_artist_norm_album_norm_idx", "name_norm", "artist_norm", "album_norm"),
+        sa.Index(
+            "track_name_norm_album_artist_norm_album_norm_idx", "name_norm", "album_artist_norm", "album_norm"
+        ),
     )
     id: int | None = Field(default=None, primary_key=True)
     # files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
@@ -152,6 +180,10 @@ class Track(SQLModel, table=True):
     path: Path | None = Field(None)  # main path of a track (already transferred)
 
     @property
+    def repr(self):
+        return f"[{self.name} / {self.artist or ''} / {self.album or ''}]"
+
+    @property
     def artist_album_name(self):
         return f"{self.artist or ''}/{self.album or ''}/{self.name or ''}"
 
@@ -195,7 +227,7 @@ class TrackAlias(SQLModel, table=True):
 
     @property
     def repr(self):
-        return f"[{self.artist or ''}/{self.album or ''}/{self.title}]"
+        return f"[{self.title} / {self.artist or ''} / {self.album or ''}]"
 
 
 class TrackAliasScrobble(SQLModel, table=True):
