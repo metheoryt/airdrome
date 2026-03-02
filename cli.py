@@ -1,3 +1,5 @@
+from typing import Literal
+
 import typer
 from rich.console import Console
 from sqlmodel import SQLModel, Session, delete
@@ -7,14 +9,14 @@ from jellyfist.cloud.lastfm import LastFMScrobbleParser
 from jellyfist.cloud.spotify import SpotifyScrobbleParser
 from jellyfist.conf import settings
 from jellyfist.enums import Platform
-from jellyfist.loco.navidrome import sync_playlists_to_navi
+from jellyfist.loco.navidrome import sync_playlists_to_navi, sync_tracks_plays_to_navi
 from jellyfist.models import engine, TrackAlias
 from jellyfist.normalize import deduplicate_tracks, normalize_track_names, normalize_alias_names
-from jellyfist.scrobbles.matcher import AliasMatcher
+from jellyfist.scrobbles.matcher import AliasToTrackMatcher, TrackToAliasMatcher
 
 app = typer.Typer(help="JellyFist CLI")
 navidrome_app = typer.Typer(help="JellyFist Navidrome CLI")
-app.add_typer(navidrome_app, name="navidrome")
+app.add_typer(navidrome_app, name="navi")
 console = Console()
 
 
@@ -26,6 +28,13 @@ SQLModel.metadata.create_all(engine, checkfirst=True)
 def navidrome_playlists(username: str):
     console.print("[bold green]Syncing jellyfist playlists to Navidrome[/bold green]")
     sync_playlists_to_navi(username)
+    console.print("[bold green]Sync completed[/bold green]")
+
+
+@navidrome_app.command("tracks")
+def navidrome_tracks(username: str):
+    console.print("[bold green]Syncing jellyfist tracks and scrobbles to Navidrome[/bold green]")
+    sync_tracks_plays_to_navi(username)
     console.print("[bold green]Sync completed[/bold green]")
 
 
@@ -46,8 +55,17 @@ def transfer():
 
 
 @app.command("match")
-def match_cli(reset: bool = typer.Option(False, "--reset", "-r")):
-    AliasMatcher.match_all(reset=reset)
+def match_cli(
+    mode: Literal["track2alias", "alias2track"], reset: bool = typer.Option(False, "--reset", "-r")
+):
+    if mode == "track2alias":
+        print("Matching tracks to aliases")
+        TrackToAliasMatcher.match_all(reset=reset)
+    elif mode == "alias2track":
+        print("Matching aliases to tracks")
+        AliasToTrackMatcher.match_all(reset=reset)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
 
 @app.command("deduplicate")

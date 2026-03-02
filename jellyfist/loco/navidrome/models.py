@@ -1,10 +1,12 @@
-from datetime import datetime
-
-from sqlmodel import SQLModel, create_engine, Field, Relationship
-from sqlalchemy.orm import registry
-from jellyfist.conf import settings
-import string
 import random
+import string
+from datetime import datetime
+from enum import StrEnum
+
+from sqlalchemy.orm import registry
+from sqlmodel import SQLModel, create_engine, Field, Relationship
+
+from jellyfist.conf import settings
 
 
 class NVSQLModel(SQLModel, registry=registry()):
@@ -34,16 +36,6 @@ class PlaylistTracks(NVSQLModel, table=True):
     media_file_id: str = Field(foreign_key="media_file.id")
 
 
-class MediaFile(NVSQLModel, table=True):
-    __tablename__ = "media_file"
-    id: str = Field(primary_key=True, default_factory=generate_id)
-    path: str
-    title: str
-    artist: str
-    album: str
-    playlists: list["Playlist"] = Relationship(back_populates="media_files", link_model=PlaylistTracks)
-
-
 class Playlist(NVSQLModel, table=True):
     __tablename__ = "playlist"
 
@@ -62,3 +54,52 @@ class Playlist(NVSQLModel, table=True):
     evaluated_at: datetime | None = Field(None)
     owner_id: str
     media_files: list["MediaFile"] = Relationship(back_populates="playlists", link_model=PlaylistTracks)
+
+
+class MediaFile(NVSQLModel, table=True):
+    __tablename__ = "media_file"
+    id: str = Field(primary_key=True, default_factory=generate_id)
+    path: str
+    title: str
+    artist: str
+    album: str
+    album_id: str = Field("", foreign_key="album.id")
+    playlists: list["Playlist"] = Relationship(back_populates="media_files", link_model=PlaylistTracks)
+
+
+class AlbumArtist(NVSQLModel, table=True):
+    __tablename__ = "album_artists"
+    album_id: str = Field(foreign_key="album.id", primary_key=True)
+    artist_id: str = Field(foreign_key="artist.id", primary_key=True)
+    role: str = Field("", primary_key=True)
+    sub_role: str = Field("", primary_key=True)
+
+
+class Annotation(NVSQLModel, table=True):
+    """Annotates an Artist, Album, or Media File with rating, play count, and starred status."""
+
+    __tablename__ = "annotation"
+
+    class ItemType(StrEnum):
+        MEDIA_FILE = "media_file"
+        ALBUM = "album"
+        ARTIST = "artist"
+
+    user_id: str = Field(primary_key=True, foreign_key="user.id")
+    item_id: str = Field(primary_key=True)  # can be a media file, album, or artist
+    item_type: str = Field(primary_key=True)
+
+    play_count: int = Field(0)
+    play_date: datetime | None = Field(None)
+    rating: int = Field(0)
+    starred: bool = Field(False)
+    starred_at: datetime | None = Field(None)
+    rated_at: datetime | None = Field(None)
+
+
+class Scrobbles(NVSQLModel, table=True):
+    __tablename__ = "scrobbles"
+    media_file_id: str = Field(foreign_key="media_file.id", primary_key=True)
+    user_id: str = Field(foreign_key="user.id", primary_key=True)
+    # UTC timestamp of a submission
+    submission_time: int = Field(index=True, primary_key=True)
