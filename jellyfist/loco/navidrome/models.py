@@ -32,7 +32,7 @@ class User(NVSQLModel, table=True):
 class PlaylistTracks(NVSQLModel, table=True):
     __tablename__ = "playlist_tracks"
     id: int | None = Field(None, primary_key=True)
-    playlist_id: str = Field(foreign_key="playlist.id")
+    playlist_id: str = Field(foreign_key="playlist.id", primary_key=True)
     media_file_id: str = Field(foreign_key="media_file.id")
 
 
@@ -66,6 +66,8 @@ class MediaFile(NVSQLModel, table=True):
     album_id: str = Field(foreign_key="album.id")
     birth_time: datetime
     created_at: datetime
+    duration: float
+    size: int
 
     album_model: "Album" = Relationship(back_populates="media_files")
     playlists: list["Playlist"] = Relationship(back_populates="media_files", link_model=PlaylistTracks)

@@ -1,4 +1,4 @@
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 
 from ..models import (
     MediaFile,
@@ -76,6 +76,24 @@ def sync_playlist(playlist: Playlist, owner_id: int, s: Session, nvs: Session) -
             if added % 100 == 0:
                 nvs.flush()
     nvs.flush()
+
+    # sync playlist stats
+    count, total_duration, total_size = nvs.exec(
+        select(
+            func.count(),
+            func.coalesce(func.sum(MediaFile.duration), 0),
+            func.coalesce(func.sum(MediaFile.size), 0),
+        )
+        .join(PlaylistTracks)
+        .where(PlaylistTracks.playlist_id == nv_playlist.id)
+    ).one()
+
+    nv_playlist.size = total_size
+    nv_playlist.duration = total_duration
+    nv_playlist.song_count = count
+
+    nvs.flush()
+
     return nv_playlist, added, total
 
 
