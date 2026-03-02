@@ -63,8 +63,21 @@ class MediaFile(NVSQLModel, table=True):
     title: str
     artist: str
     album: str
-    album_id: str = Field("", foreign_key="album.id")
+    album_id: str = Field(foreign_key="album.id")
+    birth_time: datetime
+    created_at: datetime
+
+    album_model: "Album" = Relationship(back_populates="media_files")
     playlists: list["Playlist"] = Relationship(back_populates="media_files", link_model=PlaylistTracks)
+
+
+class Album(NVSQLModel, table=True):
+    __tablename__ = "album"
+    id: str = Field(primary_key=True, default_factory=generate_id)
+    name: str
+    created_at: datetime
+
+    media_files: list["MediaFile"] = Relationship(back_populates="album_model")
 
 
 class AlbumArtist(NVSQLModel, table=True):
