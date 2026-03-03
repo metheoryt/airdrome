@@ -1,15 +1,15 @@
 from collections import defaultdict
 from datetime import datetime, UTC
 
-from sqlmodel import Session, select, func
+from sqlmodel import Session, select, func, delete
 
 from jellyfist.models import Track, TrackAlias, engine, TrackAliasScrobble
 from ..models import Annotation, MediaFile, User, Scrobbles, AlbumArtist, engine as nv_engine, Album
 
 
-def sync_tracks_plays_to_navi(username: str):
+def sync_tracks_plays_to_navi(username: str, reset: bool):
     with Session(engine) as s, Session(nv_engine) as nvs:
-        TrackSyncer(username).sync_all(s, nvs)
+        TrackSyncer(username, reset).sync_all(s, nvs)
 
 
 def _normalize_dates(dts: list[datetime | None]):
@@ -17,8 +17,9 @@ def _normalize_dates(dts: list[datetime | None]):
 
 
 class TrackSyncer:
-    def __init__(self, username: str):
+    def __init__(self, username: str, reset: bool):
         self.username = username
+        self.reset = reset
         self._user: User | None = None
         self._item_play_count = defaultdict(int)
         self._item_latest_play = dict()
@@ -217,6 +218,18 @@ class TrackSyncer:
         return play_count
 
     def sync_all(self, s: Session, nvs: Session):
+        if self.reset:
+            # Delete all imported scrobbles.
+            # They should be older than the latest jellyfist scrobble.
+            latest_scrobble = s.exec(
+                select(TrackAliasScrobble).order_by(TrackAliasScrobble.date.desc())
+            ).first()
+            if latest_scrobble:
+                res = nvs.exec(
+                    delete(Scrobbles).where(Scrobbles.submission_time < latest_scrobble.date.timestamp())
+                )
+                nvs.commit()
+                print(f"deleted {res.rowcount} scrobbles older than", latest_scrobble.date.isoformat())
         i = pc = 0
         for track in s.exec(select(Track).where(Track.path.is_not(None))):
             i += 1

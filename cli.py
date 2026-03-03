@@ -32,9 +32,9 @@ def navidrome_playlists(username: str):
 
 
 @navidrome_app.command("tracks")
-def navidrome_tracks(username: str):
+def navidrome_tracks(username: str, reset: bool = typer.Option(False, "--reset", "-r")):
     console.print("[bold green]Syncing jellyfist tracks and scrobbles to Navidrome[/bold green]")
-    sync_tracks_plays_to_navi(username)
+    sync_tracks_plays_to_navi(username, reset)
     console.print("[bold green]Sync completed[/bold green]")
 
 
