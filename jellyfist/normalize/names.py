@@ -8,7 +8,7 @@ def normalize_track_names(s: Session):
     i = 0
     for track in s.exec(select(Track)):
         track: Track
-        track.name_norm = normalize_name(track.name)
+        track.title_norm = normalize_name(track.title)
         track.album_norm = normalize_name(track.album)
         track.artist_norm = normalize_name(track.artist)
         track.album_artist_norm = normalize_name(track.album_artist)

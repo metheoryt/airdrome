@@ -1,10 +1,11 @@
 import json
 import os
+from datetime import datetime
 from typing import Iterator
 
 from jellyfist.enums import Platform
+from jellyfist.models import TrackAlias
 from jellyfist.scrobbles.parser import ScrobbleParser
-from jellyfist.scrobbles.schemas import TrackScrobble, TrackAliasSchema
 
 
 def get_spotify_scrobbles(filename: str):
@@ -23,9 +24,7 @@ def get_spotify_scrobbles(filename: str):
             if not title:
                 continue
 
-            yield TrackScrobble(
-                alias=TrackAliasSchema(artist=artist, album=album, title=title), date=record["ts"]
-            )
+            yield TrackAlias(artist=artist, album=album, title=title), datetime.fromtimestamp(record["ts"])
 
 
 def get_spotify_streaming_history(dirpath: str):
@@ -39,6 +38,5 @@ class SpotifyScrobbleParser(ScrobbleParser):
     def __init__(self, dirpath: str):
         self.dirpath = dirpath
 
-    def _iterate_scrobbles(self) -> Iterator[TrackScrobble]:
-        for r in get_spotify_streaming_history(self.dirpath):
-            yield r
+    def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
+        yield from get_spotify_streaming_history(self.dirpath)

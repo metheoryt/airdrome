@@ -50,3 +50,35 @@ def ensure_truncated(s: str, maxlen: int = 35, is_filename: bool = False):
         tr = tr[:-1] + "_"
 
     return tr
+
+
+def generate_path(
+    artist: str,
+    album: str,
+    title: str,
+    ext: str,
+    track_n: int | None,
+    disc_n: int | None = None,
+    suffix: int = 0,
+    name_limit: int = 35,
+) -> Path:
+    """
+    Generate an Apple Music library style relative track path.
+    Example:
+        Artist Name/Album Name/1-01 Track Name.mp3
+    """
+    artist_dir = ensure_truncated(artist, maxlen=name_limit)
+    album_dir = ensure_truncated(album, maxlen=name_limit)
+    filename = title
+    if track_n is not None:
+        tn = f"{track_n:02}"
+        if disc_n is not None:
+            tn = f"{disc_n}-{tn}"
+        filename = f"{tn} {filename}"
+
+    suffix_str = f" {suffix}" if suffix else ""
+    suffix_ext = f"{suffix_str}.{ext}"
+    filename_maxlen = name_limit - len(suffix_ext)
+    filename = ensure_truncated(filename, maxlen=filename_maxlen, is_filename=True)
+    filename = f"{filename}{suffix_ext}"
+    return Path(artist_dir) / album_dir / filename

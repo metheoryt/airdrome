@@ -12,9 +12,9 @@ class Settings(BaseSettings):
 
     # local directories
     # apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\iTunes\iTunes Media\Music"
-    apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\Music"  # testing on a copy
-    local_library_copies_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\Copies"
-    local_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Jellyfist\NewLibrary"
+    apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Airdrome\Music"  # testing on a copy
+    local_library_copies_dirpath: DirectoryPath = r"C:\Users\methe\Music\Airdrome\Copies"
+    local_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Airdrome\NewLibrary"
 
     # data to ingest
     apple_music_library_xml_filepath: FilePath = Path("data") / "apple" / "AppleMusicLibrary.xml"
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     spotify_streaming_history_dirpath: DirectoryPath = Path("data") / "spotify"
 
     # app-produced data
-    duplicates_filepath: FilePath = Path("data") / "duplicates.json"
+    duplicates_filepath: Path = Path("data") / "duplicates.json"
 
     # navidrome
     navidrome_db_dsn: str = "sqlite:///C:/Navidrome/navidrome.db"

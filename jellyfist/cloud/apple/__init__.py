@@ -1,3 +1,2 @@
-from .ingest import ingest_library
+from .ingest import import_apple_library
 from .scrobbles import AppleScrobbleParser
-from .transfer import transfer_library

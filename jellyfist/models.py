@@ -1,221 +1,163 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Type, TypeVar, Any, Annotated, TYPE_CHECKING, Optional
 
 import sqlalchemy as sa
+from pydantic import model_validator, ConfigDict
 from sqlalchemy import UniqueConstraint
-from sqlmodel import Field, SQLModel, create_engine, Relationship
+from sqlmodel import Field, SQLModel, create_engine, Relationship, Session, select
 
 from .conf import settings
-from .enums import Platform, TrackType, Kind
+from .enums import Platform
+from .normalize.norm import normalize_name
+from .cloud.apple.utils import generate_path
 
 
-class TrackPlaylistLink(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint("track_id", "playlist_id", name="uq_trackplaylistlink_track_id_playlist_id"),
-    )
+if TYPE_CHECKING:
+    from jellyfist.cloud.apple.models import AppleTrack
 
+
+T = TypeVar("T", bound="Base")
+
+
+AwareDatetime = Annotated[datetime, Field(sa_column=sa.Column(sa.DateTime(timezone=True)))]
+
+AwareDatetimeDefNow = Annotated[
+    datetime,
+    Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+    ),
+]
+
+
+class Base(SQLModel):
+    @classmethod
+    def get_or_create(
+        cls: Type[T], session: Session, defaults: dict[str, Any] | None = None, **lookups: Any
+    ) -> tuple[T, bool]:
+        statement = select(cls).filter_by(**lookups)
+        instance = session.exec(statement).one_or_none()
+
+        if instance:
+            return instance, False
+
+        params = {**lookups, **(defaults or {})}
+        instance = cls(**params)
+        session.add(instance)
+        session.flush([instance])
+        return instance, True
+
+
+class TrackFile(Base, table=True):
+    __table_args__ = (UniqueConstraint("track_id", "path"),)
     id: int | None = Field(default=None, primary_key=True)
 
     track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
-    playlist_id: int = Field(foreign_key="playlist.id", index=True, ondelete="CASCADE")
-    added_at: datetime = Field(default_factory=datetime.now)
+    track: Track = Relationship(back_populates="files")
+    path: Path = Field(sa_column=sa.Column(sa.String, nullable=False))
 
 
-class Playlist(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint("playlist_id", name="uq_playlist_playlist_id"),
-        UniqueConstraint("persistent_id", name="uq_playlist_persistent_id"),
-    )
+class Track(Base, table=True):
+    """A representation of a single track in a library."""
+
+    __table_args__ = (UniqueConstraint("title", "artist", "album", "album_artist"),)
+
+    model_config = ConfigDict(validate_assignment=True)  # rerun validation on field assignment
+
     id: int | None = Field(default=None, primary_key=True)
-    playlist_id: int
-    persistent_id: str
-    name: str
-    description: str
-    all_items: bool
-    parent_persistent_id: str | None = Field(None)
 
-    master: bool = Field(False)
-    visible: bool = Field(True)
-    music: bool = Field(False)
-    folder: bool = Field(False)
-    distinguished_kind: int | None = Field(None)
-    favorited: bool = Field(False)
-    loved: bool = Field(False)
-
-    tracks: list[Track] = Relationship(back_populates="playlists", link_model=TrackPlaylistLink)
-
-
-class Track(SQLModel, table=True):
-    __table_args__ = (
-        sa.Index(
-            "track_name_norm_trgm_idx",
-            "name_norm",
-            postgresql_using="gin",
-            postgresql_ops={
-                "name_norm": "gin_trgm_ops",
-            },
-        ),
-        sa.Index(
-            "track_artist_norm_trgm_idx",
-            "artist_norm",
-            postgresql_using="gin",
-            postgresql_ops={
-                "artist_norm": "gin_trgm_ops",
-            },
-        ),
-        sa.Index(
-            "track_album_artist_norm_trgm_idx",
-            "album_artist_norm",
-            postgresql_using="gin",
-            postgresql_ops={
-                "album_artist_norm": "gin_trgm_ops",
-            },
-        ),
-        sa.Index(
-            "track_album_norm_trgm_idx",
-            "album_norm",
-            postgresql_using="gin",
-            postgresql_ops={
-                "album_norm": "gin_trgm_ops",
-            },
-        ),
-        sa.Index("track_name_norm_artist_norm_album_norm_idx", "name_norm", "artist_norm", "album_norm"),
-        sa.Index(
-            "track_name_norm_album_artist_norm_album_norm_idx", "name_norm", "album_artist_norm", "album_norm"
-        ),
-    )
-    id: int | None = Field(default=None, primary_key=True)
-    # files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
-    aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
-    playlists: list["Playlist"] = Relationship(back_populates="tracks", link_model=TrackPlaylistLink)
-
-    # Apple Music data
-    name_norm: str
-    name: str
-    album_norm: str = Field("")
-    album: str | None = Field(None)
-    """Unknown Album in Explorer"""
-    artist_norm: str = Field("")
+    title: str = Field()
     artist: str | None = Field(None)
-    """Unknown Artist in Explorer"""
-    album_artist_norm: str = Field("")
     album_artist: str | None = Field(None)
+    album: str | None = Field(None)
 
-    track_id: int = Field(unique=True)
-    track_type: TrackType = Field(sa_column=sa.Column(sa.Enum(TrackType, native_enum=False)))
-    persistent_id: str = Field(unique=True)
-    size: int
-
-    apple_music: bool = Field(False)
-    """True means the track was added from Apple Music, and not from the local library"""
-
-    track_number: int | None = Field(None)
-    date_added: datetime | None = Field(None)
-    year: int | None = Field(None)
-    release_date: datetime | None = Field(None)
-
-    kind: Kind | None = Field(None)
-    total_time: int | None = Field(None)
-    rating: int | None = Field(None)
-    rating_computed: bool = Field(False)
-    album_rating: int | None = Field(None)
-    album_rating_computed: bool = Field(False)
-    music_video: bool = Field(False)
-    has_video: bool = Field(False)
-    file_folder_count: int | None = Field(None)
-    library_folder_count: int | None = Field(None)
-    grouping: str | None = Field(None)
-    """An old field I've used to mark full albums"""
-    genre: str | None = Field(None)
-    location: str | None = Field(None)
-    """MacOS path (since we only can export the XML from Mac now)"""
-    date_modified: datetime | None = Field(None)
-    protected: bool = Field(False)
-    # extra fields
-    comments: str | None = Field(None)
-    disc_number: int | None = Field(None)
-    play_count: int | None = Field(None)
-    play_date: datetime | None = Field(None)
-    play_date_utc: datetime | None = Field(None)
-    sort_name: str | None = Field(None)
-    sort_artist: str | None = Field(None)
-    sort_album_artist: str | None = Field(None)
-    sort_album: str | None = Field(None)
-    sort_composer: str | None = Field(None)
-    album_loved: bool = Field(False)
-    disc_count: int | None = Field(None)
-    track_count: int | None = Field(None)
-    sample_rate: int | None = Field(None)
-    skip_count: int | None = Field(None)
-    skip_date: datetime | None = Field(None)
-    work: str | None = Field(None)
-    composer: str | None = Field(None)
-    loved: bool = Field(False)
-    favorited: bool = Field(False)
-    """Alias for `loved`"""
-    part_of_gapless_album: bool | None = Field(None)
-    purchased: bool = Field(False)
-    """True for kind=Купленное аудио AAC"""
-    matched: bool = Field(False)
+    track_n: int | None = Field(None)
+    disc_n: int | None = Field(None)
     compilation: bool | None = Field(None)
-    """Has "Compilations" for Artist folder."""
-    explicit: bool = Field(False)
-    normalization: int | None = Field(None)
-    hd: bool = Field(False)
-    """For video files"""
-    volume_adjustment: int | None = Field(None)
-    movement_name: str | None = Field(None)
-    movement_count: int | None = Field(None)
-    disliked: bool = Field(False)
 
-    # not goes into a database
-    playlist_only: bool = Field(False)
-    """Apple Music tracks, that are a part of a playlist but not in the library"""
-    artwork_count: int | None = Field(None)
-    bit_rate: int | None = Field(None)
-    bpm: int | None = Field(None)
-    clean: bool = Field(False)
+    title_norm: str = Field("")
+    artist_norm: str = Field("")
+    album_artist_norm: str = Field("")
+    album_norm: str = Field("")
 
-    # jellyfist data
-    path: Path | None = Field(None)  # main path of a track (already transferred)
+    main_path: Path | None = Field(None, sa_column=sa.Column(sa.String, nullable=True))
 
-    @property
-    def repr(self):
-        return f"[{self.name} / {self.artist or ''} / {self.album or ''}]"
+    # duplicates
+    canon_id: int | None = Field(None, foreign_key="track.id", index=True, ondelete="SET NULL")
+    canon: Optional["Track"] = Relationship(
+        back_populates="twins",
+        sa_relationship_kwargs={"remote_side": "Track.id"},
+    )
+    twins: list["Track"] = Relationship(back_populates="canon")
+
+    apple_tracks: list["AppleTrack"] = Relationship(back_populates="track", cascade_delete=True)
+    aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
+    files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
 
     @property
-    def artist_album_name(self):
-        return f"{self.artist or ''}/{self.album or ''}/{self.name or ''}"
+    def table_row(self) -> tuple[str, str | None, str | None, str | None]:
+        return self.title, self.artist, self.album_artist, self.album
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_normalized_fields(cls, data: Any):
+        field_map = (
+            ("title", "title_norm"),
+            ("artist", "artist_norm"),
+            ("album_artist", "album_artist_norm"),
+            ("album", "album_norm"),
+        )
+        if isinstance(data, dict):
+            # raw data
+            for f, nf in field_map:
+                if f in data:
+                    data[nf] = normalize_name(data[f])
+        elif isinstance(data, cls):
+            # existing SQLModel instance
+            for f, nf in field_map:
+                val = getattr(data, f, None)
+                setattr(data, nf, normalize_name(val))
+        else:
+            raise ValueError("Unexpected type:", type(data))
+        return data
 
     @property
-    def short_info(self):
-        tn = str(self.track_number) if self.track_number is not None else "-"
-        tn += "."
-        cloud = "cloud" if self.apple_music else "local"
-        added = self.date_added.strftime("%Y-%m-%d %H:%M:%S")
-        tt = ""
-        if self.total_time:
-            secs = self.total_time // 1000
-            tt = f"{secs // 60}:{secs % 60:02d}"
-        return f"#{self.track_id:<6} [{cloud}] {self.artist or '':<40} {self.album or '':<40} {tn:<3} {self.name:<40} ({tt}) added {added}"
+    def path_artist(self):
+        if self.compilation:
+            return "Compilations"
+        elif self.album_artist:
+            return self.album_artist
+        elif self.artist:
+            return self.artist
+        else:
+            return "Unknown Artist"
+
+    @property
+    def path_album(self):
+        return self.album or "Unknown Album"
+
+    def generate_main_path(self, ext: str) -> Path:
+        """Keep the main path consistent with Apple Library paths."""
+        return generate_path(
+            artist=self.path_artist,
+            album=self.path_album,
+            title=self.title,
+            ext=ext,
+            track_n=self.track_n,
+            disc_n=self.disc_n,
+        )
 
 
-# class TrackFile(SQLModel, table=True):
-#     id: int | None = Field(default=None, primary_key=True)
-#
-#     track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
-#     track: Track = Relationship(back_populates="files")
-#
-#     path: str
+class TrackAlias(Base, table=True):
+    __table_args__ = (UniqueConstraint("title", "album", "artist"),)
 
-
-class TrackAlias(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("title", "album", "artist", name="uq_trackalias_title_album_artist"),)
     id: int | None = Field(default=None, primary_key=True)
 
     artist: str | None = Field(None)
     title: str | None = Field(None)
     album: str | None = Field(None)
+
     artist_norm: str = Field("")
     title_norm: str = Field("")
     album_norm: str = Field("")
@@ -225,16 +167,38 @@ class TrackAlias(SQLModel, table=True):
 
     scrobbles: list["TrackAliasScrobble"] = Relationship(back_populates="alias", cascade_delete=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_normalized_fields(cls, data: Any):
+        field_map = (
+            ("title", "title_norm"),
+            ("artist", "artist_norm"),
+            ("album", "album_norm"),
+        )
+        if isinstance(data, dict):
+            # raw data
+            for f, nf in field_map:
+                if f in data:
+                    data[nf] = normalize_name(data[f])
+        elif isinstance(data, cls):
+            # existing SQLModel instance
+            for f, nf in field_map:
+                val = getattr(data, f, None)
+                setattr(data, nf, normalize_name(val))
+        else:
+            raise ValueError("Unexpected type:", type(data))
+        return data
+
     @property
     def repr(self):
         return f"[{self.title} / {self.artist or ''} / {self.album or ''}]"
 
 
-class TrackAliasScrobble(SQLModel, table=True):
+class TrackAliasScrobble(Base, table=True):
     id: int | None = Field(default=None, primary_key=True)
     alias_id: int = Field(foreign_key="trackalias.id", index=True, ondelete="CASCADE")
     alias: TrackAlias = Relationship(back_populates="scrobbles")
-    date: datetime = Field(unique=True)
+    date: AwareDatetime = Field(unique=True)
     platform: Platform
 
 

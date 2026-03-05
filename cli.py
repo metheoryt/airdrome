@@ -4,49 +4,58 @@ import typer
 from rich.console import Console
 from sqlmodel import SQLModel, Session, delete
 
-from jellyfist.cloud.apple import ingest_library, AppleScrobbleParser, transfer_library
+from jellyfist.cloud.apple import import_apple_library, AppleScrobbleParser
 from jellyfist.cloud.lastfm import LastFMScrobbleParser
 from jellyfist.cloud.spotify import SpotifyScrobbleParser
 from jellyfist.conf import settings
 from jellyfist.enums import Platform
-from jellyfist.loco.navidrome import sync_playlists_to_navi, sync_tracks_plays_to_navi
+
+# from jellyfist.loco.navidrome import sync_playlists_to_navi, sync_tracks_plays_to_navi
 from jellyfist.models import engine, TrackAlias
-from jellyfist.normalize import deduplicate_tracks, normalize_track_names, normalize_alias_names
+from jellyfist.normalize.names import normalize_track_names, normalize_alias_names
+from jellyfist.normalize.dedup import deduplicate_tracks
 from jellyfist.scrobbles.matcher import AliasToTrackMatcher, TrackToAliasMatcher
+from jellyfist.transfer import transfer_library
 
-app = typer.Typer(help="JellyFist CLI")
-navidrome_app = typer.Typer(help="JellyFist Navidrome CLI")
+app = typer.Typer(help="Airdrome CLI")
+apple_app = typer.Typer(help="Airdrome Apple Music CLI")
+navidrome_app = typer.Typer(help="Airdrome Navidrome CLI")
 app.add_typer(navidrome_app, name="navi")
+app.add_typer(apple_app, name="apple")
 console = Console()
-
 
 # create any missing tables
 SQLModel.metadata.create_all(engine, checkfirst=True)
 
 
-@navidrome_app.command("playlists")
-def navidrome_playlists(username: str):
-    console.print("[bold green]Syncing jellyfist playlists to Navidrome[/bold green]")
-    sync_playlists_to_navi(username)
-    console.print("[bold green]Sync completed[/bold green]")
-
-
-@navidrome_app.command("tracks")
-def navidrome_tracks(username: str, reset: bool = typer.Option(False, "--reset", "-r")):
-    console.print("[bold green]Syncing jellyfist tracks and scrobbles to Navidrome[/bold green]")
-    sync_tracks_plays_to_navi(username, reset)
-    console.print("[bold green]Sync completed[/bold green]")
-
-
-@app.command()
-def ingest(recreate: bool = typer.Option(False, "--recreate", "-r")):
+@apple_app.command("import-library")
+def apple_import_library(reset: bool = typer.Option(False, "--reset", "-r")):
     console.print("[bold green]Starting ingest...[/bold green]")
-    ingest_library(settings.apple_music_library_xml_filepath, recreate=recreate)
+    import_apple_library(settings.apple_music_library_xml_filepath, reset=reset)
     console.print("[bold green]Data ingest completed successfully.[/bold green]")
 
 
-@app.command()
-def transfer():
+#
+# TO ENSURE AREA
+#
+
+
+# @navidrome_app.command("sync-playlists")
+# def navidrome_playlists(username: str):
+#     console.print("[bold green]Syncing jellyfist playlists to Navidrome[/bold green]")
+#     sync_playlists_to_navi(username)
+#     console.print("[bold green]Sync completed[/bold green]")
+#
+#
+# @navidrome_app.command("sync-tracks")
+# def navidrome_tracks(username: str, reset: bool = typer.Option(False, "--reset", "-r")):
+#     console.print("[bold green]Syncing jellyfist tracks and scrobbles to Navidrome[/bold green]")
+#     sync_tracks_plays_to_navi(username, reset)
+#     console.print("[bold green]Sync completed[/bold green]")
+
+
+@apple_app.command("transfer-files")
+def apple_transfer_files():
     transfer_library(
         source_dir=settings.apple_music_library_dirpath,
         target_dir_originals=settings.local_library_dirpath,
@@ -90,9 +99,7 @@ SCROBBLE_PARSERS = {
 
 
 @app.command("scrobble")
-def scrobble_import(
-    platform: Platform | None = None, recreate: bool = typer.Option(False, "--recreate", "-r")
-):
+def scrobble_import(platform: Platform | None = None, recreate: bool = typer.Option(False, "--reset", "-r")):
     if platform:
         parsers = [SCROBBLE_PARSERS[platform]]
     else:

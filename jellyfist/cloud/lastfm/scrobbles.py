@@ -3,8 +3,8 @@ from datetime import datetime, date, timedelta
 from typing import Iterator
 
 from jellyfist.enums import Platform
+from jellyfist.models import TrackAlias
 from jellyfist.scrobbles.parser import ScrobbleParser
-from jellyfist.scrobbles.schemas import TrackScrobble, TrackAliasSchema
 from .schemas import LastFMScrobble
 
 
@@ -31,9 +31,6 @@ class LastFMScrobbleParser(ScrobbleParser):
     def __init__(self, filepath: str):
         self.filepath = filepath
 
-    def _iterate_scrobbles(self) -> Iterator[TrackScrobble]:
+    def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
         for record in get_lastfm_records(self.filepath):
-            yield TrackScrobble(
-                alias=TrackAliasSchema(artist=record.artist, album=record.album, title=record.title),
-                date=record.date,
-            )
+            yield TrackAlias(artist=record.artist, album=record.album, title=record.title), record.date

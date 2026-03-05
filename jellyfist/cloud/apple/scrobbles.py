@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from jellyfist.enums import Platform
 from jellyfist.scrobbles.parser import ScrobbleParser
-from jellyfist.scrobbles.schemas import TrackScrobble, TrackAliasSchema
+from jellyfist.models import TrackAlias
 
 
 class AppleMusicPlayActivity(BaseModel):
@@ -39,7 +39,7 @@ def get_scrobbles(play_activity_csv_path: str):
                 continue
 
             r = AppleMusicPlayActivity(**row)
-            if r.play_duration_ms < 25_000:
+            if r.play_duration_ms < 30_000:
                 continue
             if not r.song_name:
                 continue
@@ -53,13 +53,6 @@ class AppleScrobbleParser(ScrobbleParser):
     def __init__(self, play_activity_csv_path: str):
         self.play_activity_csv_path = play_activity_csv_path
 
-    def _iterate_scrobbles(self) -> Iterator[TrackScrobble]:
+    def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
         for r in get_scrobbles(self.play_activity_csv_path):
-            yield TrackScrobble(
-                alias=TrackAliasSchema(
-                    artist=None,
-                    album=r.album_name,
-                    title=r.song_name,
-                ),
-                date=r.event_ts,
-            )
+            yield TrackAlias(album=r.album_name, title=r.song_name), r.event_ts
