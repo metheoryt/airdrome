@@ -6,24 +6,33 @@ from jellyfist.conf import settings
 from jellyfist.models import Track
 from .schemas import DupGroup
 from rich.table import Table
-from rich.console import Console
+from rich.console import Console, Group
+from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.text import Text
+from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn
 
 DUPES: dict[str, list[DupGroup]] = DupGroup.load(settings.duplicates_filepath)
 
 console = Console()
+progress = Progress(
+    TextColumn("[bold blue]{task.description}"),
+    BarColumn(),
+    MofNCompleteColumn(),
+)
 
 
 def get_table_rows(t: Track) -> list[list[str]]:
     rows = []
     base_row = [
-        str(t.track_n) if t.track_n is not None else "",
-        str(t.disc_n) if t.disc_n is not None else "",
-        str(len(t.files)) if len(t.files) else "",
+        str(t.id),
         t.title,
         t.artist or "",
         t.album_artist or "",
         t.album or "",
+        str(t.track_n) if t.track_n is not None else "",
+        str(t.disc_n) if t.disc_n is not None else "",
+        str(len(t.files)) if len(t.files) else "",
     ]
 
     if not t.apple_tracks:
@@ -51,16 +60,16 @@ def get_table_rows(t: Track) -> list[list[str]]:
     return rows
 
 
-def render_duplicate_group(key: str, tracks: list[Track]):
+def compose_table(key: str, tracks: list[Track]):
     table = Table(title=f"Duplicates by {key}")
-    table.add_column("Index", style="blue")
-    table.add_column("Track №", style="pink3")
-    table.add_column("Disc №", style="pink3")
-    table.add_column("Files", style="yellow")
+    table.add_column("ID", style="blue")
     table.add_column("Title", style="orange4")
     table.add_column("Artist", style="magenta")
     table.add_column("Album Artist", style="green")
     table.add_column("Album", style="yellow")
+    table.add_column("Track №", style="pink3")
+    table.add_column("Disc №", style="pink3")
+    table.add_column("Files", style="yellow")
 
     if any(len(t.apple_tracks) for t in tracks):
         # at least 1 track has apple data, add corresponding columns
@@ -77,91 +86,133 @@ def render_duplicate_group(key: str, tracks: list[Track]):
         row_kw = {}
         if t.twins:
             row_kw["style"] = "bold"
-        for row in rows:
-            table.add_row(str(i + 1), *row, **row_kw)
+        if t.canon_id:
+            row_kw["style"] = "dim"
 
-    console.print(table)
+        for row in rows:
+            table.add_row(*row, **row_kw)
+
+    return table
 
 
 def prompt_duplicate_group(key: str, tracks: list[Track]) -> list[DupGroup]:
-    render_duplicate_group(key, tracks)
-    console.print('"1"      to mark 1 as a canon and others as twins')
-    console.print('"1: 2 3" to mark 1 as a canon and 2 3 as twins')
-
     # canon_idx: set[twin_idx]
     twins = defaultdict(set)
 
+    # available ids
+    ids = {t.id for t in tracks}
+
+    # ids selected as twins (to check against)
+    occupied_twin_ids = set()
+
     # populate keys with current canons
-    for i, t in enumerate(tracks):
-        if t.twins:
-            twins[i + 1] = set()
+    # for i, t in enumerate(tracks):
+    #     if t.twins:
+    #         twins[t.id].update(set(tw.id for tw in t.twins))
+    #         occupied_twin_ids.update(twins[t.id])
+    #     if t.canon:
+    #         twins[t.canon.id].add(t.id)
 
-    # available indices
-    idxs = {v + 1 for v in range(len(tracks))}
-    # indices selected as twins (to check against)
-    occupied_twin_idxs = set()
+    instruction_text = Text.from_markup(
+        "[bold]Enter[/bold] on empty selection - to mark all as canons\n"
+        "[bold]1[/bold] - to mark 1 as a canon and others as twins\n"
+        "[bold]1: 2 3[/bold] - to mark 1 as a canon and 2 3 as twins\n",
+    )
+    skip = False
 
+    selection_text = Text()
     while True:
+        table = compose_table(key, tracks)
+
         if twins:
             for canon, canon_twins in twins.items():
-                console.print(f"{canon}: {', '.join([str(v) for v in sorted(canon_twins)])}")
+                if selection_text:
+                    selection_text.append("\n")
+                selection_text.append(f"• Canon {canon}: ", style="bold green")
+                selected_twins = ", ".join(map(str, sorted(canon_twins)))
+                selection_text.append(f"Twins [{selected_twins}]", style="yellow")
+        else:
+            if selection_text:
+                selection_text.append("\n")
+            selection_text.append("Nothing selected yet", style="dim white")
 
-        entry = Prompt.ask("Indices, [bold]Enter[/bold] to finish, [bold]s[/bold] to skip")
+        ui_group = Group(
+            table,
+            Panel(selection_text, title="Selection", border_style="blue"),
+            Panel(
+                instruction_text,
+                title="Instructions",
+                subtitle="[[bold]s[/bold]] skip | [[bold]Enter[/bold]] finish",
+                style="dim",
+            ),
+            progress,
+        )
+
+        console.clear()
+        console.print(ui_group)
+
+        entry = Prompt.ask("Write here")
         if entry.strip().lower() == "s":
             twins = {}  # reset the choices
-            console.print("[yellow]Group skipped[/yellow]")
-            break
+            skip = True
+            selection_text = Text("The group will be skipped. Enter to continue...", style="bold yellow")
+            continue
 
         if not entry:
+            if skip:
+                break
             if not twins:
-                # no choices are made, means the group has no duplicates
-                for idx in idxs:
-                    twins[idx] = set()
-                console.print("[yellow]Canon only group[/yellow]")
+                # no choices are made, means the group is all canons
+                for id_ in ids:
+                    twins[id_] = set()
+                    selection_text = Text()
+                continue
             break
 
         if entry.strip().isdigit():
             # entry = canon
             # the rest are twins
-            canon_idx = int(entry.strip())
+            canon_id = int(entry.strip())
             # the rest of available indices that are neither the canon nor the twin
-            twin_idxs = {v for v in idxs if v != canon_idx and v not in occupied_twin_idxs and v not in twins}
+            twin_ids = {
+                id_ for id_ in ids if id_ != canon_id and id_ not in occupied_twin_ids and id_ not in twins
+            }
         else:
             try:
                 # entry = canon: twin1, twin2, twin3
                 canon_part, twin_part = entry.split(":")
-                canon_idx = int(canon_part.strip())
-                twin_idxs = {int(x.strip()) for x in twin_part.split()}
+                canon_id = int(canon_part.strip())
+                twin_ids = {int(x.strip()) for x in twin_part.split()}
             except ValueError:
-                console.print("[red]Can't parse:[/red] use format 'canon_index[: twin_index[ twin_index]]'")
+                selection_text = Text("Can't parse:", style="bold red")
+                selection_text.append(" use format 'canon_id[: twin_id[ twin_id]]'")
                 continue
 
         try:
             # second round of validation
-            if canon_idx not in idxs:
-                raise ValueError(f"Canon index out of range: {canon_idx}")
-            if twin_idxs.difference(idxs):
-                raise ValueError(f"Twin indices out of range: {twin_idxs.difference(idxs)}")
-            if canon_idx in occupied_twin_idxs:
-                raise ValueError(f"Can't use the twin as a canon: {canon_idx}")
-            if twin_idxs.intersection(set(twins)):
-                raise ValueError(f"Can't use the canon as a twin: {twin_idxs.intersection(set(twins))}")
-            if twin_idxs.intersection(occupied_twin_idxs):
-                raise ValueError(
-                    f"Can't use the same twin twice: {twin_idxs.intersection(occupied_twin_idxs)}"
-                )
-            if not twin_idxs:
-                raise ValueError("No twin indices specified")
+            if canon_id not in ids:
+                raise ValueError(f"ID not found: {canon_id}")
+            if twin_ids.difference(ids):
+                raise ValueError(f"IDs not found: {twin_ids.difference(ids)}")
+            if canon_id in occupied_twin_ids:
+                raise ValueError(f"Can't use the twin as a canon: {canon_id}")
+            if twin_ids.intersection(set(twins)):
+                raise ValueError(f"Can't use the canon as a twin: {twin_ids.intersection(set(twins))}")
+            if twin_ids.intersection(occupied_twin_ids):
+                raise ValueError(f"Can't use the same twin twice: {twin_ids.intersection(occupied_twin_ids)}")
+            if not twin_ids:
+                raise ValueError("No twin IDs specified")
         except ValueError as e:
-            console.print(f"[red]{e}[/red]")
+            selection_text = Text(f"{e}", style="bold red")
             continue
 
-        occupied_twin_idxs.update(twin_idxs)
-        twins[canon_idx].update(twin_idxs)
+        occupied_twin_ids.update(twin_ids)
+        twins[canon_id].update(twin_ids)
+        selection_text = Text()
 
     groups = []
-    for canon_idx, twin_idxs in twins.items():
-        dg = DupGroup(canon_id=tracks[canon_idx - 1].id, twin_ids=[tracks[idx - 1].id for idx in twin_idxs])
+    for canon_id, twin_ids in twins.items():
+        dg = DupGroup(canon_id=canon_id, twin_ids=sorted(twin_ids))
         groups.append(dg)
     return groups
 
@@ -171,8 +222,8 @@ def deduplicate_group(key: str, tracks: list[Track], s: Session):
     if key in DUPES:
         # cached choices
         groups: list[DupGroup] = DUPES[key]
-        if groups:
-            print("cached:", key, groups)
+        # if groups:
+        # print("cached:", key, groups)
 
     if not groups:
         groups = prompt_duplicate_group(key, tracks)
@@ -201,11 +252,11 @@ def deduplicate_tracks(s: Session):
             .having(func.count(Track.id) > 1)
             .order_by(*cols)
         ).all()
-        total_groups = len(combinations)
-        print(f"Found {total_groups} groups by", "/".join([c.name for c in cols]))
 
+        col_names = "/".join([c.name for c in cols])
+        task_id = progress.add_task(f"Duplicates by {col_names}", total=len(combinations))
         try:
-            for i, (*col_vals, count) in enumerate(combinations):
+            for *col_vals, count in combinations:
                 col_to_val = list(zip(cols, col_vals))
                 tracks = s.exec(
                     select(Track)
@@ -214,13 +265,14 @@ def deduplicate_tracks(s: Session):
                 ).all()
 
                 key = ", ".join([f"{col.name}: {val}" for col, val in col_to_val])
-                print(f"{i + 1:>3}/{total_groups:>3}")
                 deduplicate_group(key, list(tracks), s)
+                progress.update(task_id, advance=1)
 
             # persist all changes
             s.commit()
             # also save choices to a filesystem
             DupGroup.dump(DUPES, settings.duplicates_filepath)
+            print("Finished deduplication by", col_names)
 
         except KeyboardInterrupt:
             # save choices permanently on ctrl+c, dont commit

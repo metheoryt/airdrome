@@ -1,21 +1,22 @@
-from typing import Literal
-
 import typer
 from rich.console import Console
-from sqlmodel import SQLModel, Session, delete
+from sqlmodel import SQLModel, Session, update
 
-from jellyfist.cloud.apple import import_apple_library, AppleScrobbleParser
+from jellyfist.cloud.apple.ingest import import_apple_library
+from jellyfist.cloud.apple.scrobbles import AppleScrobbleParser
 from jellyfist.cloud.lastfm import LastFMScrobbleParser
+from jellyfist.cloud.listenbrainz import ListenBrainzScrobbleParser
 from jellyfist.cloud.spotify import SpotifyScrobbleParser
 from jellyfist.conf import settings
 from jellyfist.enums import Platform
 
 # from jellyfist.loco.navidrome import sync_playlists_to_navi, sync_tracks_plays_to_navi
-from jellyfist.models import engine, TrackAlias
-from jellyfist.normalize.names import normalize_track_names, normalize_alias_names
+from jellyfist.models import engine, TrackAlias, Track
 from jellyfist.normalize.dedup import deduplicate_tracks
-from jellyfist.scrobbles.matcher import AliasToTrackMatcher, TrackToAliasMatcher
-from jellyfist.transfer import transfer_library
+from jellyfist.normalize.names import normalize_track_names, normalize_alias_names
+from jellyfist.scrobbles.matcher import AliasToTrackMatcher
+
+# from jellyfist.transfer import transfer_library
 
 app = typer.Typer(help="Airdrome CLI")
 apple_app = typer.Typer(help="Airdrome Apple Music CLI")
@@ -33,6 +34,59 @@ def apple_import_library(reset: bool = typer.Option(False, "--reset", "-r")):
     console.print("[bold green]Starting ingest...[/bold green]")
     import_apple_library(settings.apple_music_library_xml_filepath, reset=reset)
     console.print("[bold green]Data ingest completed successfully.[/bold green]")
+
+
+@app.command("deduplicate")
+def deduplicate_cli(reset: bool = typer.Option(False, "--reset", "-r")):
+    with Session(engine) as session:
+        if reset:
+            session.exec(update(Track).values(canon_id=None))
+            session.commit()
+            print("Duplicates data reset")
+
+        deduplicate_tracks(session)
+
+
+@app.command()
+def renormalize():
+    with Session(engine) as session:
+        normalize_track_names(session)
+        normalize_alias_names(session)
+        session.commit()
+
+
+@app.command("match")
+def match_cli(reset: bool = typer.Option(False, "--reset", "-r")):
+    print("Matching aliases to tracks")
+    AliasToTrackMatcher.match_all(reset=reset)
+
+
+SCROBBLE_PARSERS = {
+    Platform.LISTENBRAINZ: ListenBrainzScrobbleParser(settings.listenbrainz_listens_dir_path),
+    Platform.LASTFM: LastFMScrobbleParser(settings.lastfm_scrobbles_filepath),
+    Platform.APPLE: AppleScrobbleParser(settings.apple_music_play_activity_filepath),
+    Platform.SPOTIFY: SpotifyScrobbleParser(settings.spotify_streaming_history_dirpath),
+}
+
+
+@app.command("scrobble")
+def scrobble_import(platform: Platform | None = None, recreate: bool = typer.Option(False, "--reset", "-r")):
+    if platform:
+        parsers = [SCROBBLE_PARSERS[platform]]
+    else:
+        print("Importing all scrobbles")
+        parsers = SCROBBLE_PARSERS.values()
+
+    with Session(engine) as session:
+        if recreate:
+            TrackAlias.truncate_cascade(session)
+            print("all previous track aliases/scrobbles are truncated")
+        for parser in parsers:
+            print("Importing", parser.platform, "scrobbles")
+            aim, aig, ask, sim, sig = parser.import_aliases_scrobbles(session)
+            print(parser.platform, "stats:")
+            print("Aliases created/ignored/skipped:", f"{aim}/{aig}/{ask}")
+            print("Scrobbles created/skipped:", f"{sim}/{sig}")
 
 
 #
@@ -54,71 +108,13 @@ def apple_import_library(reset: bool = typer.Option(False, "--reset", "-r")):
 #     console.print("[bold green]Sync completed[/bold green]")
 
 
-@apple_app.command("transfer-files")
-def apple_transfer_files():
-    transfer_library(
-        source_dir=settings.apple_music_library_dirpath,
-        target_dir_originals=settings.local_library_dirpath,
-        target_dir_copies=settings.local_library_copies_dirpath,
-    )
-
-
-@app.command("match")
-def match_cli(
-    mode: Literal["track2alias", "alias2track"], reset: bool = typer.Option(False, "--reset", "-r")
-):
-    if mode == "track2alias":
-        print("Matching tracks to aliases")
-        TrackToAliasMatcher.match_all(reset=reset)
-    elif mode == "alias2track":
-        print("Matching aliases to tracks")
-        AliasToTrackMatcher.match_all(reset=reset)
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
-
-@app.command("deduplicate")
-def deduplicate_cli():
-    with Session(engine) as session:
-        deduplicate_tracks(session)
-
-
-@app.command()
-def renormalize():
-    with Session(engine) as session:
-        normalize_track_names(session)
-        normalize_alias_names(session)
-        session.commit()
-
-
-SCROBBLE_PARSERS = {
-    Platform.LASTFM: LastFMScrobbleParser(settings.lastfm_scrobbles_filepath),
-    Platform.APPLE: AppleScrobbleParser(settings.apple_music_play_activity_filepath),
-    Platform.SPOTIFY: SpotifyScrobbleParser(settings.spotify_streaming_history_dirpath),
-}
-
-
-@app.command("scrobble")
-def scrobble_import(platform: Platform | None = None, recreate: bool = typer.Option(False, "--reset", "-r")):
-    if platform:
-        parsers = [SCROBBLE_PARSERS[platform]]
-    else:
-        print("Importing all scrobbles")
-        parsers = SCROBBLE_PARSERS.values()
-
-    with Session(engine) as session:
-        if recreate:
-            session.exec(delete(TrackAlias))
-            session.commit()
-            print("all previous track aliases/scrobbles are deleted")
-        for parser in parsers:
-            print("Importing", parser.platform, "scrobbles")
-            aim, aig, sim, sig = parser.import_aliases_scrobbles(session)
-            print(parser.platform, "stats:")
-            print("Aliases created:", aim)
-            print("Aliases skipped:", aig)
-            print("Scrobbles created:", sim)
-            print("Scrobbles skipped:", sig)
+# @apple_app.command("transfer-files")
+# def apple_transfer_files():
+#     transfer_library(
+#         source_dir=settings.apple_music_library_dirpath,
+#         target_dir_originals=settings.local_library_dirpath,
+#         target_dir_copies=settings.local_library_copies_dirpath,
+#     )
 
 
 @app.callback(invoke_without_command=True)

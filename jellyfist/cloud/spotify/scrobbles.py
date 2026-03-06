@@ -3,9 +3,18 @@ import os
 from datetime import datetime
 from typing import Iterator
 
+from pydantic import BaseModel, Field
+
 from jellyfist.enums import Platform
 from jellyfist.models import TrackAlias
 from jellyfist.scrobbles.parser import ScrobbleParser
+
+
+class SpotifyRecord(BaseModel):
+    artist: str = Field(alias="master_metadata_album_artist_name")
+    album: str = Field(alias="master_metadata_album_album_name")
+    title: str | None = Field(None, alias="master_metadata_track_name")
+    ts: datetime
 
 
 def get_spotify_scrobbles(filename: str):
@@ -16,15 +25,11 @@ def get_spotify_scrobbles(filename: str):
                 # do not import <30s plays
                 continue
 
-            artist, album, title = (
-                record["master_metadata_album_artist_name"],
-                record["master_metadata_album_album_name"],
-                record["master_metadata_track_name"],
-            )
-            if not title:
+            r = SpotifyRecord.model_validate(record)
+            if not r.title:
                 continue
 
-            yield TrackAlias(artist=artist, album=album, title=title), datetime.fromtimestamp(record["ts"])
+            yield TrackAlias(artist=r.artist, album=r.album, title=r.title), r.ts
 
 
 def get_spotify_streaming_history(dirpath: str):

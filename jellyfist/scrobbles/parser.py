@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 
 from jellyfist.enums import Platform
 from jellyfist.models import TrackAlias, TrackAliasScrobble
+from rich.progress import track
 
 
 class ScrobbleParser:
@@ -20,12 +21,19 @@ class ScrobbleParser:
                 aliases[alias.repr] = (alias, set())
             aliases[alias.repr][1].add(date)
 
-        for alias, dates in aliases.values():
+        for alias, dates in track(aliases.values(), description=f"Processing {len(aliases)} aliases"):
             yield alias, sorted(dates)
 
     def import_aliases_scrobbles(self, s: Session):
-        aliases_imported = aliases_ignored = scrobbles_imported = scrobbles_ignored = 0
+        aliases_imported = aliases_ignored = aliases_skipped = scrobbles_imported = scrobbles_ignored = 0
         for alias, dates in self._scrobble_list_by_alias():
+            new_scrobbles = self.get_fresh_scrobbles(s, dates)
+            scrobbles_imported += len(new_scrobbles)
+            scrobbles_ignored += len(dates) - len(new_scrobbles)
+            if not new_scrobbles:
+                aliases_skipped += 1
+                continue
+
             alias, created = TrackAlias.get_or_create(
                 s, title=alias.title, artist=alias.artist, album=alias.album
             )
@@ -34,26 +42,21 @@ class ScrobbleParser:
             else:
                 aliases_ignored += 1
 
-            new_scrobbles = self.import_scrobbles(s, alias, dates)
-            scrobbles_imported += len(new_scrobbles)
-            scrobbles_ignored += len(dates) - len(new_scrobbles)
+            alias.scrobbles.extend(new_scrobbles)
             s.flush()
-        s.commit()
-        return aliases_imported, aliases_ignored, scrobbles_imported, scrobbles_ignored
 
-    def import_scrobbles(self, s: Session, ta: TrackAlias, dates: list[datetime]) -> list[TrackAliasScrobble]:
+        s.commit()
+        return aliases_imported, aliases_ignored, aliases_skipped, scrobbles_imported, scrobbles_ignored
+
+    def get_fresh_scrobbles(self, s: Session, dates: list[datetime]) -> list[TrackAliasScrobble]:
         # search for date only, since this is a single-user database
+        dates_uniq = set(dates)
         existing_dates = {
-            tas.date for tas in s.exec(select(TrackAliasScrobble).where(TrackAliasScrobble.date.in_(dates)))
+            scrobble.date
+            for scrobble in s.exec(select(TrackAliasScrobble).where(TrackAliasScrobble.date.in_(dates_uniq)))
         }
-        new_dates = [d for d in dates if d not in existing_dates]
+        new_dates = dates_uniq.difference(existing_dates)
         new_scrobbles = []
         for date in new_dates:
-            scrobble = TrackAliasScrobble(
-                date=date,
-                alias_id=ta.id,
-                platform=self.platform,
-            )
-            s.add(scrobble)
-            new_scrobbles.append(scrobble)
+            new_scrobbles.append(TrackAliasScrobble(date=date, platform=self.platform))
         return new_scrobbles

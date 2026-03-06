@@ -5,7 +5,7 @@ from typing import Type, TypeVar, Any, Annotated, TYPE_CHECKING, Optional
 import sqlalchemy as sa
 from pydantic import model_validator, ConfigDict
 from sqlalchemy import UniqueConstraint
-from sqlmodel import Field, SQLModel, create_engine, Relationship, Session, select
+from sqlmodel import Field, SQLModel, create_engine, Relationship, Session, select, text
 
 from .conf import settings
 from .enums import Platform
@@ -43,10 +43,15 @@ class Base(SQLModel):
             return instance, False
 
         params = {**lookups, **(defaults or {})}
-        instance = cls(**params)
+        instance = cls.model_validate(params)  # to trigger model validation
         session.add(instance)
         session.flush([instance])
         return instance, True
+
+    @classmethod
+    def truncate_cascade(cls, session: Session):
+        session.exec(text(f"TRUNCATE TABLE {cls.__tablename__} RESTART IDENTITY CASCADE;"))
+        session.commit()
 
 
 class TrackFile(Base, table=True):
@@ -198,7 +203,7 @@ class TrackAliasScrobble(Base, table=True):
     id: int | None = Field(default=None, primary_key=True)
     alias_id: int = Field(foreign_key="trackalias.id", index=True, ondelete="CASCADE")
     alias: TrackAlias = Relationship(back_populates="scrobbles")
-    date: AwareDatetime = Field(unique=True)
+    date: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), unique=True))
     platform: Platform
 
 

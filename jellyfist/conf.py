@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     apple_music_play_activity_filepath: FilePath = Path("data") / "apple" / "Apple Music Play Activity.csv"
     lastfm_scrobbles_filepath: FilePath = Path("data") / "lastfm" / "MeTheoryT.csv"
     spotify_streaming_history_dirpath: DirectoryPath = Path("data") / "spotify"
+    listenbrainz_listens_dir_path: Path = (
+        Path("data") / "listenbrainz" / "listenbrainz_metheoryt_1772562030" / "listens"
+    )
 
     # app-produced data
     duplicates_filepath: Path = Path("data") / "duplicates.json"

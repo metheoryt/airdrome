@@ -1,5 +1,5 @@
 import csv
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Iterator
 
 from jellyfist.enums import Platform
@@ -22,6 +22,9 @@ def get_lastfm_records(filepath: str) -> Iterator["LastFMScrobble"]:
                 # make is start from 2010, increment by 5 minutes
                 r.date = missing_date
                 missing_date += timedelta(minutes=5)
+
+            # the time is in UTC already, just make it aware
+            r.date = r.date.replace(tzinfo=timezone.utc)
             yield r
 
 
