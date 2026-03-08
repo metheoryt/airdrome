@@ -7,19 +7,19 @@ from ..models import (
     User,
     engine as nv_engine,
 )
-from jellyfist.models import Track, engine, Playlist, TrackPlaylistLink
+from jellyfist.models import Track, engine
+from jellyfist.cloud.apple.models import AppleTrack, ApplePlaylist, ApplePlaylistTrack
 
 
-def make_playlist_track(tpl: TrackPlaylistLink, nv_playlist: NVPlaylist, s: Session, nvs: Session):
-    track = s.exec(select(Track).where(Track.id == tpl.track_id)).one()
-    if not track.path:
-        # print("no file:", track.short_info)
+def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Session, nvs: Session):
+    track: Track = apt.track.track
+    if not track.main_path:
         return
 
     # match the track between the systems by the path
-    media_file = nvs.exec(select(MediaFile).where(MediaFile.path == track.path)).one_or_none()
+    media_file = nvs.exec(select(MediaFile).where(MediaFile.path == track.main_path)).one_or_none()
     if not media_file:
-        print("cant find in navidrome:", track.artist_album_name, track.path)
+        print("cant find in navidrome:", track)
         return
 
     media_file: MediaFile
@@ -47,7 +47,9 @@ def make_playlist_track(tpl: TrackPlaylistLink, nv_playlist: NVPlaylist, s: Sess
     return PlaylistTracks(id=next_id, playlist_id=nv_playlist.id, media_file_id=media_file.id)
 
 
-def sync_playlist(playlist: Playlist, owner_id: int, s: Session, nvs: Session) -> tuple[NVPlaylist, int, int]:
+def sync_apple_playlist(
+    playlist: ApplePlaylist, owner_id: int, s: Session, nvs: Session
+) -> tuple[NVPlaylist, int, int]:
     # search for the playlist in navidrome
     nv_playlist = nvs.exec(select(NVPlaylist).where(NVPlaylist.name == playlist.name)).one_or_none()
     if not nv_playlist:
@@ -61,9 +63,9 @@ def sync_playlist(playlist: Playlist, owner_id: int, s: Session, nvs: Session) -
         # print("created navidrome playlist:", nv_playlist.name)
 
     playlist_tracks_stmt = (
-        select(TrackPlaylistLink)
-        .where(TrackPlaylistLink.playlist_id == playlist.id)
-        .order_by(TrackPlaylistLink.added_at)
+        select(ApplePlaylistTrack)
+        .where(ApplePlaylistTrack.playlist_id == playlist.id)
+        .order_by(ApplePlaylistTrack.position)
     )
 
     added = total = 0
@@ -97,7 +99,7 @@ def sync_playlist(playlist: Playlist, owner_id: int, s: Session, nvs: Session) -
     return nv_playlist, added, total
 
 
-def sync_playlists_to_navi(username: str):
+def sync_apple_playlists_to_navi(username: str):
     """
     For every playlist, get or create a Navidrome playlist.
 
@@ -109,13 +111,13 @@ def sync_playlists_to_navi(username: str):
     with Session(engine) as s, Session(nv_engine) as nvs:
         user = nvs.exec(select(User).where(User.user_name == username)).one()
 
-        playlists_stmt = select(Playlist).where(
-            Playlist.master == False, Playlist.music == False, Playlist.folder == False
+        playlists_stmt = select(ApplePlaylist).where(
+            ApplePlaylist.master == False, ApplePlaylist.music == False, ApplePlaylist.folder == False
         )
 
         playlists_handled = 0
         for playlist in s.exec(playlists_stmt):
-            nv_playlist, added, total = sync_playlist(playlist, user.id, s, nvs)
+            nv_playlist, added, total = sync_apple_playlist(playlist, user.id, s, nvs)
             stat = f"{added}/{total}"
             print(f"{stat:<9}", "tracks added to navidrome playlist", nv_playlist.name)
             if added > 0:

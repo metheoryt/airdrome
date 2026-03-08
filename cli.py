@@ -13,27 +13,33 @@ from jellyfist.enums import Platform
 # from jellyfist.loco.navidrome import sync_playlists_to_navi, sync_tracks_plays_to_navi
 from jellyfist.models import engine, TrackAlias, Track
 from jellyfist.normalize.dedup import deduplicate_tracks
-from jellyfist.normalize.names import normalize_track_names, normalize_alias_names
-from jellyfist.scrobbles.matcher import AliasToTrackMatcher
+from jellyfist.normalize.names import normalize_track_names, normalize_alias_names, normalize_track_file_names
+from jellyfist.scrobbles.match_aliases import match_aliases
+from jellyfist.scrobbles.augment_aliases import augment_aliases
+from jellyfist.tools.reindex import index_library
 
 # from jellyfist.transfer import transfer_library
 
 app = typer.Typer(help="Airdrome CLI")
+
 apple_app = typer.Typer(help="Airdrome Apple Music CLI")
+app.add_typer(apple_app, name="apple")
+
 navidrome_app = typer.Typer(help="Airdrome Navidrome CLI")
 app.add_typer(navidrome_app, name="navi")
-app.add_typer(apple_app, name="apple")
+
+scrobble_app = typer.Typer(help="Airdrome scrobbles CLI")
+app.add_typer(scrobble_app, name="scrobble")
+
 console = Console()
 
 # create any missing tables
 SQLModel.metadata.create_all(engine, checkfirst=True)
 
 
-@apple_app.command("import-library")
-def apple_import_library(reset: bool = typer.Option(False, "--reset", "-r")):
-    console.print("[bold green]Starting ingest...[/bold green]")
-    import_apple_library(settings.apple_music_library_xml_filepath, reset=reset)
-    console.print("[bold green]Data ingest completed successfully.[/bold green]")
+@app.command("index")
+def index_library_cli():
+    index_library(settings.apple_music_library_dirpath)
 
 
 @app.command("deduplicate")
@@ -41,7 +47,6 @@ def deduplicate_cli(reset: bool = typer.Option(False, "--reset", "-r")):
     with Session(engine) as session:
         if reset:
             session.exec(update(Track).values(canon_id=None))
-            session.commit()
             print("Duplicates data reset")
 
         deduplicate_tracks(session)
@@ -52,13 +57,22 @@ def renormalize():
     with Session(engine) as session:
         normalize_track_names(session)
         normalize_alias_names(session)
+        normalize_track_file_names(session)
         session.commit()
 
 
-@app.command("match")
-def match_cli(reset: bool = typer.Option(False, "--reset", "-r")):
-    print("Matching aliases to tracks")
-    AliasToTrackMatcher.match_all(reset=reset)
+@apple_app.command("import-library")
+def apple_import_library(reset: bool = typer.Option(False, "--reset", "-r")):
+    console.print("Starting ingest...", style="bold green")
+    import_apple_library(settings.apple_music_library_xml_filepath, reset=reset)
+    console.print("Data ingest completed successfully.", style="bold green")
+
+
+@scrobble_app.command("match")
+def match_cli(
+    reset: bool = typer.Option(False, "--reset", "-r"), dry_run: bool = typer.Option(False, "--dry-run", "-d")
+):
+    match_aliases(reset=reset, dry_run=dry_run)
 
 
 SCROBBLE_PARSERS = {
@@ -69,7 +83,7 @@ SCROBBLE_PARSERS = {
 }
 
 
-@app.command("scrobble")
+@scrobble_app.command("import")
 def scrobble_import(platform: Platform | None = None, recreate: bool = typer.Option(False, "--reset", "-r")):
     if platform:
         parsers = [SCROBBLE_PARSERS[platform]]
@@ -87,6 +101,12 @@ def scrobble_import(platform: Platform | None = None, recreate: bool = typer.Opt
             print(parser.platform, "stats:")
             print("Aliases created/ignored/skipped:", f"{aim}/{aig}/{ask}")
             print("Scrobbles created/skipped:", f"{sim}/{sig}")
+
+
+@scrobble_app.command("augment")
+def complete_cli(dry_run: bool = typer.Option(False, "--dry-run", "-d")):
+    with Session(engine) as session:
+        augment_aliases(session, dry_run=dry_run)
 
 
 #

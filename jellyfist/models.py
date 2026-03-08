@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Type, TypeVar, Any, Annotated, TYPE_CHECKING, Optional
 
 import sqlalchemy as sa
-from pydantic import model_validator, ConfigDict
+from pydantic import model_validator, ConfigDict, field_validator
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel, create_engine, Relationship, Session, select, text
 
@@ -11,7 +11,8 @@ from .conf import settings
 from .enums import Platform
 from .normalize.norm import normalize_name
 from .cloud.apple.utils import generate_path
-
+from mutagen import File
+from sqlalchemy.types import TypeDecorator
 
 if TYPE_CHECKING:
     from jellyfist.cloud.apple.models import AppleTrack
@@ -29,6 +30,21 @@ AwareDatetimeDefNow = Annotated[
         default_factory=lambda: datetime.now(timezone.utc),
     ),
 ]
+
+
+class PathType(TypeDecorator):
+    impl = sa.String
+    cache_ok = True
+
+    def process_bind_param(self, value: Path | None, dialect):
+        if value is None:
+            return None
+        return value.as_posix()
+
+    def process_result_value(self, value: str, dialect):
+        if value is None:
+            return None
+        return Path(value)
 
 
 class Base(SQLModel):
@@ -52,15 +68,6 @@ class Base(SQLModel):
     def truncate_cascade(cls, session: Session):
         session.exec(text(f"TRUNCATE TABLE {cls.__tablename__} RESTART IDENTITY CASCADE;"))
         session.commit()
-
-
-class TrackFile(Base, table=True):
-    __table_args__ = (UniqueConstraint("track_id", "path"),)
-    id: int | None = Field(default=None, primary_key=True)
-
-    track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
-    track: Track = Relationship(back_populates="files")
-    path: Path = Field(sa_column=sa.Column(sa.String, nullable=False))
 
 
 class Track(Base, table=True):
@@ -152,6 +159,76 @@ class Track(Base, table=True):
             track_n=self.track_n,
             disc_n=self.disc_n,
         )
+
+
+class TrackFile(Base, table=True):
+    model_config = ConfigDict(validate_assignment=True)  # rerun validation on field assignment
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    path: Path = Field(sa_column=sa.Column(PathType(), nullable=False, unique=True))
+
+    track_id: int | None = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
+    track: Track | None = Relationship(back_populates="files")
+
+    duration: float | None = Field(None)
+    bitrate: int | None = Field(None)
+    date: str | None = Field(None)
+
+    title: str | None = Field(None)
+    artist: str | None = Field(None)
+    album_artist: str | None = Field(None)
+    album: str | None = Field(None)
+
+    title_norm: str = Field("")
+    artist_norm: str = Field("")
+    album_artist_norm: str = Field("")
+    album_norm: str = Field("")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_normalized_fields(cls, data: Any):
+        field_map = (
+            ("title", "title_norm"),
+            ("artist", "artist_norm"),
+            ("album_artist", "album_artist_norm"),
+            ("album", "album_norm"),
+        )
+        if isinstance(data, dict):
+            # raw data
+            for f, nf in field_map:
+                if f in data:
+                    data[nf] = normalize_name(data[f])
+        elif isinstance(data, cls):
+            # existing SQLModel instance
+            for f, nf in field_map:
+                val = getattr(data, f, None)
+                setattr(data, nf, normalize_name(val))
+        else:
+            raise ValueError("Unexpected type:", type(data))
+        return data
+
+    @classmethod
+    def enrich(cls, instance: "TrackFile", base_path: Path):
+        audio = File(base_path / instance.path)
+        if audio is None:
+            raise ValueError("Unsupported or corrupted file")
+        tags = audio.tags or {}
+
+        def get(*keys):
+            for k in keys:
+                if k in tags:
+                    v = tags[k]
+                    return "; ".join(v) if isinstance(v, list) else str(v)
+            return None
+
+        instance.artist = get("TPE1", "©ART")
+        instance.album = get("TALB", "©alb")
+        instance.album_artist = get("TPE2", "aART")
+        instance.title = get("TIT2", "©nam")
+        instance.date = get("TDRC", "TDOR", "©day")
+        instance.duration = getattr(audio.info, "length")
+        instance.bitrate = getattr(audio.info, "bitrate", 0)
 
 
 class TrackAlias(Base, table=True):

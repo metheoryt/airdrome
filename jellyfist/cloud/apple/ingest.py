@@ -2,7 +2,7 @@ import plistlib
 from pathlib import Path
 
 from sqlmodel import Session, select, delete, exists
-
+from rich.progress import track as track_progress
 from jellyfist.conf import settings
 from jellyfist.models import Track, TrackFile, engine
 from .models import AppleTrack, ApplePlaylistImport, ApplePlaylist, ApplePlaylistTrack
@@ -10,10 +10,6 @@ from .models import AppleTrack, ApplePlaylistImport, ApplePlaylist, ApplePlaylis
 
 def get_track_paths(t: AppleTrack) -> set[Path]:
     paths = set()
-
-    # if t.apple_music:
-    #     # cloud track doesn't have a file on disk
-    #     return paths
 
     for track_path in t.possible_locations(max_suffix=2):
         full_path = settings.apple_music_library_dirpath / track_path
@@ -32,25 +28,25 @@ def import_apple_library(filename: str, reset: bool = False):
             s.exec(delete(ApplePlaylist))
             s.commit()
         print("Apple library purged")
-        input("hold on")
 
     with open(filename, "rb") as f:
         plist = plistlib.load(f)
 
     with Session(engine) as s:
-        for i, (track_id, data) in enumerate(plist["Tracks"].items()):
-            apple_track_schema = AppleTrack(**data)
+        for i, (track_id, data) in track_progress(
+            enumerate(plist["Tracks"].items()), description=f"Importing {len(plist['Tracks'])} tracks"
+        ):
+            at = AppleTrack(**data)
 
             apple_track = s.exec(
-                select(AppleTrack).where(AppleTrack.apple_track_id == apple_track_schema.apple_track_id)
+                select(AppleTrack).where(AppleTrack.apple_track_id == at.apple_track_id)
             ).one_or_none()
             if apple_track:
                 # already exists
-                print("apple track already exists:", apple_track_schema.apple_track_id, " - skipping")
+                # print("apple track already exists:", at.apple_track_id, " - skipping")
                 continue
 
-            # track_data = {k: getattr(track_schema, k) for k in TrackSchema.model_fields()}
-            apple_track = apple_track_schema
+            apple_track = at
 
             # bind to an Airdrome Track (many to 1)
             track, created = Track.get_or_create(
@@ -70,13 +66,19 @@ def import_apple_library(filename: str, reset: bool = False):
             s.add(apple_track)
             s.flush()
 
-            for tp in get_track_paths(apple_track):
-                TrackFile.get_or_create(s, track=track, path=str(tp))
-            print(f"Imported {i + 1:>8} of {len(plist['Tracks'])} tracks", end="\r", flush=True)
+            if not apple_track.apple_music:
+                for tp in get_track_paths(apple_track):
+                    tf, created = TrackFile.get_or_create(s, track_id=track.id, path=tp)
+                    TrackFile.enrich(tf, base_path=settings.apple_music_library_dirpath)
+            s.flush()
 
-        print()
-        print(f"Importing {len(plist['Playlists'])} playlists")
-        for pl in plist["Playlists"]:
+        for pl in track_progress(
+            plist["Playlists"], description=f"Importing {len(plist['Playlists'])} playlists"
+        ):
+            pl_import = ApplePlaylistImport(**pl)
+            if pl_import.smart_info:
+                print("Skipping smart playlist", pl_import.name)
+                continue
             pl_import = ApplePlaylistImport(**pl)
             if pl_import.smart_info:
                 print("Skipping smart playlist", pl_import.name)

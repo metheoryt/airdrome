@@ -12,7 +12,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn
 
-DUPES: dict[str, list[DupGroup]] = DupGroup.load(settings.duplicates_filepath)
+DUPES: dict[str, DupGroup] = DupGroup.load(settings.duplicates_filepath)
 
 console = Console()
 progress = Progress(
@@ -26,6 +26,7 @@ def get_table_rows(t: Track) -> list[list[str]]:
     rows = []
     base_row = [
         str(t.id),
+        str(t.canon_id),
         t.title,
         t.artist or "",
         t.album_artist or "",
@@ -60,8 +61,10 @@ def get_table_rows(t: Track) -> list[list[str]]:
     return rows
 
 
-def compose_table(key: str, tracks: list[Track]):
+def compose_table(key: str, tracks: list[Track], canons: list[int | None]):
     table = Table(title=f"Duplicates by {key}")
+    table.add_column("Index", style="blue")
+    table.add_column("Canon ID", style="blue")
     table.add_column("ID", style="blue")
     table.add_column("Title", style="orange4")
     table.add_column("Artist", style="magenta")
@@ -90,59 +93,32 @@ def compose_table(key: str, tracks: list[Track]):
             row_kw["style"] = "dim"
 
         for row in rows:
-            table.add_row(*row, **row_kw)
+            table.add_row(f"{i + 1}", f"{canons[i] or '-'}", *row, **row_kw)
 
     return table
 
 
-def prompt_duplicate_group(key: str, tracks: list[Track]) -> list[DupGroup]:
-    # canon_idx: set[twin_idx]
-    twins = defaultdict(set)
-
-    # available ids
-    ids = {t.id for t in tracks}
-
-    # ids selected as twins (to check against)
-    occupied_twin_ids = set()
-
-    # populate keys with current canons
-    # for i, t in enumerate(tracks):
-    #     if t.twins:
-    #         twins[t.id].update(set(tw.id for tw in t.twins))
-    #         occupied_twin_ids.update(twins[t.id])
-    #     if t.canon:
-    #         twins[t.canon.id].add(t.id)
+def prompt_duplicate_group(key: str, tracks: list[Track]) -> DupGroup | None:
+    members = [t.id for t in tracks]
+    canons = [t.canon_id for t in tracks]
 
     instruction_text = Text.from_markup(
-        "[bold]Enter[/bold] on empty selection - to mark all as canons\n"
+        "[bold]Enter[/bold] to confirm current state\n"
         "[bold]1[/bold] - to mark 1 as a canon and others as twins\n"
-        "[bold]1: 2 3[/bold] - to mark 1 as a canon and 2 3 as twins\n",
+        "[bold]1 2 3[/bold] - to mark 1 as a canon of 2 and 3\n",
     )
-    skip = False
-
-    selection_text = Text()
+    skip = confirm = False
+    feedback_text = Text()
     while True:
-        table = compose_table(key, tracks)
-
-        if twins:
-            for canon, canon_twins in twins.items():
-                if selection_text:
-                    selection_text.append("\n")
-                selection_text.append(f"• Canon {canon}: ", style="bold green")
-                selected_twins = ", ".join(map(str, sorted(canon_twins)))
-                selection_text.append(f"Twins [{selected_twins}]", style="yellow")
-        else:
-            if selection_text:
-                selection_text.append("\n")
-            selection_text.append("Nothing selected yet", style="dim white")
+        table = compose_table(key, tracks, canons)
 
         ui_group = Group(
             table,
-            Panel(selection_text, title="Selection", border_style="blue"),
+            Panel(feedback_text, title="Feedback", border_style="dim blue"),
             Panel(
                 instruction_text,
                 title="Instructions",
-                subtitle="[[bold]s[/bold]] skip | [[bold]Enter[/bold]] finish",
+                subtitle="[[bold]r[/bold]] reset choices | [[bold]s[/bold]] skip group | [[bold]Enter[/bold]] finish",
                 style="dim",
             ),
             progress,
@@ -152,91 +128,96 @@ def prompt_duplicate_group(key: str, tracks: list[Track]) -> list[DupGroup]:
         console.print(ui_group)
 
         entry = Prompt.ask("Write here")
-        if entry.strip().lower() == "s":
-            twins = {}  # reset the choices
-            skip = True
-            selection_text = Text("The group will be skipped. Enter to continue...", style="bold yellow")
-            continue
-
         if not entry:
-            if skip:
-                break
-            if not twins:
-                # no choices are made, means the group is all canons
-                for id_ in ids:
-                    twins[id_] = set()
-                    selection_text = Text()
+            # Enter to confirm choices
+            if not confirm:
+                confirm = True
+                feedback_text = Text("Enter to confirm", style="bold yellow")
                 continue
             break
 
+        if entry.strip().lower() == "s":
+            skip = confirm = True
+            feedback_text = Text("The group will be skipped. Enter to continue...", style="bold yellow")
+            continue
+
+        elif entry.strip().lower() == "r":
+            # reset choices
+            canons = [t.canon_id for t in tracks]
+            feedback_text = Text("Choices are reset", style="bold yellow")
+            continue
+
         if entry.strip().isdigit():
-            # entry = canon
+            # entry = "canon_idx"
             # the rest are twins
-            canon_id = int(entry.strip())
-            # the rest of available indices that are neither the canon nor the twin
-            twin_ids = {
-                id_ for id_ in ids if id_ != canon_id and id_ not in occupied_twin_ids and id_ not in twins
-            }
+            canon_idx = int(entry.strip()) - 1
+            member_idxs = [i for i in range(len(members)) if i != canon_idx]
         else:
+            # this is not a digit, means this is 2 digits
             try:
-                # entry = canon: twin1, twin2, twin3
-                canon_part, twin_part = entry.split(":")
-                canon_id = int(canon_part.strip())
-                twin_ids = {int(x.strip()) for x in twin_part.split()}
+                # entry = "canon_idx twin_idx[ twin_idx]"
+                canon_idx, *member_idxs = [int(v) - 1 for v in entry.split()]
             except ValueError:
-                selection_text = Text("Can't parse:", style="bold red")
-                selection_text.append(" use format 'canon_id[: twin_id[ twin_id]]'")
+                feedback_text = Text("Can't parse:", style="bold red")
+                feedback_text.append(" use format ")
+                feedback_text.append("canon_idx[ twin_idx]", style="bold")
                 continue
 
         try:
             # second round of validation
-            if canon_id not in ids:
-                raise ValueError(f"ID not found: {canon_id}")
-            if twin_ids.difference(ids):
-                raise ValueError(f"IDs not found: {twin_ids.difference(ids)}")
-            if canon_id in occupied_twin_ids:
-                raise ValueError(f"Can't use the twin as a canon: {canon_id}")
-            if twin_ids.intersection(set(twins)):
-                raise ValueError(f"Can't use the canon as a twin: {twin_ids.intersection(set(twins))}")
-            if twin_ids.intersection(occupied_twin_ids):
-                raise ValueError(f"Can't use the same twin twice: {twin_ids.intersection(occupied_twin_ids)}")
-            if not twin_ids:
-                raise ValueError("No twin IDs specified")
+            for idx in (canon_idx, *member_idxs):
+                if idx not in range(len(members)):
+                    raise ValueError(f"Index out of range: {canon_idx + 1}")
+
+            for member_idx in member_idxs:
+                if canon_idx == member_idx:
+                    raise ValueError(f"Can't make the track as canon of itself: {canon_idx + 1}")
+                if members[member_idx] in canons:
+                    raise ValueError(f"Already chosen as a canon: {member_idx + 1}")
+                # already a twin
+                if canons[canon_idx]:
+                    raise ValueError(f"Already has a canon: {canon_idx + 1}")
         except ValueError as e:
-            selection_text = Text(f"{e}", style="bold red")
+            feedback_text = Text(f"{e}", style="bold red")
             continue
 
-        occupied_twin_ids.update(twin_ids)
-        twins[canon_id].update(twin_ids)
-        selection_text = Text()
+        for member_idx in member_idxs:
+            canons[member_idx] = members[canon_idx]
 
-    groups = []
-    for canon_id, twin_ids in twins.items():
-        dg = DupGroup(canon_id=canon_id, twin_ids=sorted(twin_ids))
-        groups.append(dg)
-    return groups
+        confirm = True
+        feedback_text = Text()
+
+    if skip:
+        return None
+
+    return DupGroup(members=members, canons=canons)
 
 
 def deduplicate_group(key: str, tracks: list[Track], s: Session):
-    groups: list[DupGroup] = []
+    group: DupGroup | None = None
     if key in DUPES:
         # cached choices
-        groups: list[DupGroup] = DUPES[key]
-        # if groups:
-        # print("cached:", key, groups)
+        group: DupGroup = DUPES[key]
 
-    if not groups:
-        groups = prompt_duplicate_group(key, tracks)
+    if not group:
+        group = prompt_duplicate_group(key, tracks)
 
-    for dg in groups:
-        for twin_id in dg.twin_ids:
-            twin = [t for t in tracks if t.id == twin_id][0]
-            if twin.canon_id and twin.canon_id != dg.canon_id:
-                raise ValueError(f"Twin {twin.id} already has a different canon: {twin.canon_id}")
-            twin.canon_id = dg.canon_id
+    if not group:
+        # skip this group
+        return
+
+    for i in range(len(group.members)):
+        if group.canons[i]:
+            # this track has a canon, means it is a twin
+            track = tracks[i]
+            if track.canon_id and track.canon_id != group.canons[i]:
+                raise ValueError(
+                    f"Track {track.id} already has a canon: current {track.canon_id}, new {group.canons[i]}"
+                )
+            track.canon_id = group.canons[i]
     s.flush()
 
-    DUPES[key] = groups
+    DUPES[key] = group
 
 
 def deduplicate_tracks(s: Session):
