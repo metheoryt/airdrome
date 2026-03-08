@@ -3,8 +3,8 @@ from collections import Counter
 from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn
 from sqlmodel import Session, select, update
 
-from jellyfist.match import generate_match_filter_sets
-from jellyfist.models import TrackAlias, Track, engine, TrackFile
+from airdrome.match import generate_match_filter_sets
+from airdrome.models import TrackAlias, Track, engine, TrackFile
 
 progress = Progress(
     TextColumn("[progress.description]{task.description}"),

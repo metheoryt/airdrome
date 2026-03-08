@@ -15,7 +15,7 @@ from mutagen import File
 from sqlalchemy.types import TypeDecorator
 
 if TYPE_CHECKING:
-    from jellyfist.cloud.apple.models import AppleTrack
+    from airdrome.cloud.apple.models import AppleTrack
 
 
 T = TypeVar("T", bound="Base")

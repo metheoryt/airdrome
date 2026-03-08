@@ -1,7 +1,7 @@
 from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn
 from sqlmodel import Session, select, or_
 
-from jellyfist.models import TrackAlias
+from airdrome.models import TrackAlias
 
 complete_progress = Progress(
     TextColumn("[progress.description]{task.description}"),

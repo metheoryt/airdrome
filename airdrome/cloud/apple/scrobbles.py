@@ -4,9 +4,9 @@ from typing import Iterator
 
 from pydantic import BaseModel, Field, model_validator
 
-from jellyfist.enums import Platform
-from jellyfist.scrobbles.parser import ScrobbleParser
-from jellyfist.models import TrackAlias
+from airdrome.enums import Platform
+from airdrome.scrobbles.parser import ScrobbleParser
+from airdrome.models import TrackAlias
 
 
 class AppleMusicPlayActivity(BaseModel):

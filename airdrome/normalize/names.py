@@ -1,6 +1,6 @@
 from sqlmodel import Session, select
 
-from jellyfist.models import Track, TrackAlias, TrackFile
+from airdrome.models import Track, TrackAlias, TrackFile
 from .norm import normalize_name
 
 

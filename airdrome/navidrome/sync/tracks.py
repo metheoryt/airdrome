@@ -3,7 +3,7 @@ from datetime import datetime, UTC
 
 from sqlmodel import Session, select, func, delete
 
-from jellyfist.models import Track, TrackAlias, engine, TrackAliasScrobble
+from airdrome.models import Track, TrackAlias, engine, TrackAliasScrobble
 from ..models import Annotation, MediaFile, User, Scrobbles, AlbumArtist, engine as nv_engine, Album
 
 
@@ -220,7 +220,7 @@ class TrackSyncer:
     def sync_all(self, s: Session, nvs: Session):
         if self.reset:
             # Delete all imported scrobbles.
-            # They should be older than the latest jellyfist scrobble.
+            # They should be older than the latest airdrome scrobble.
             latest_scrobble = s.exec(
                 select(TrackAliasScrobble).order_by(TrackAliasScrobble.date.desc())
             ).first()

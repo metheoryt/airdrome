@@ -3,8 +3,8 @@ from pathlib import Path
 
 from sqlmodel import Session, select, delete, exists
 from rich.progress import track as track_progress
-from jellyfist.conf import settings
-from jellyfist.models import Track, TrackFile, engine
+from airdrome.conf import settings
+from airdrome.models import Track, TrackFile, engine
 from .models import AppleTrack, ApplePlaylistImport, ApplePlaylist, ApplePlaylistTrack
 
 

@@ -7,8 +7,8 @@ from ..models import (
     User,
     engine as nv_engine,
 )
-from jellyfist.models import Track, engine
-from jellyfist.cloud.apple.models import AppleTrack, ApplePlaylist, ApplePlaylistTrack
+from airdrome.models import Track, engine
+from airdrome.cloud.apple.models import AppleTrack, ApplePlaylist, ApplePlaylistTrack
 
 
 def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Session, nvs: Session):

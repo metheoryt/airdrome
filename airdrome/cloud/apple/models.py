@@ -6,7 +6,7 @@ from pydantic import ConfigDict
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, Relationship
 
-from jellyfist.models import Base, AwareDatetime, Track
+from airdrome.models import Base, AwareDatetime, Track
 from .enums import TrackType, Kind
 from .schemas import PlaylistTrackSchema
 from .utils import generate_path

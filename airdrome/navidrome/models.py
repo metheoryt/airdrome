@@ -6,7 +6,7 @@ from enum import StrEnum
 from sqlalchemy.orm import registry
 from sqlmodel import SQLModel, create_engine, Field, Relationship
 
-from jellyfist.conf import settings
+from airdrome.conf import settings
 
 
 class NVSQLModel(SQLModel, registry=registry()):

@@ -2,9 +2,9 @@ import csv
 from datetime import datetime, date, timedelta, timezone
 from typing import Iterator
 
-from jellyfist.enums import Platform
-from jellyfist.models import TrackAlias
-from jellyfist.scrobbles.parser import ScrobbleParser
+from airdrome.enums import Platform
+from airdrome.models import TrackAlias
+from airdrome.scrobbles.parser import ScrobbleParser
 from .schemas import LastFMScrobble
 
 

@@ -1,7 +1,7 @@
 [project]
-name = "jellyfist"
+name = "airdrome"
 version = "0.1.0"
-description = "Media Library tools"
+description = "Toolset for migrating from cloud services to Navidrome"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

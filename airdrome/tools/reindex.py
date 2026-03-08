@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from sqlmodel import Session, select
-from jellyfist.models import TrackFile, engine, Track
-from jellyfist.match import generate_match_filter_sets
+from airdrome.models import TrackFile, engine, Track
+from airdrome.match import generate_match_filter_sets
 from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn, MofNCompleteColumn
 
 

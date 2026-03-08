@@ -2,23 +2,23 @@ import typer
 from rich.console import Console
 from sqlmodel import SQLModel, Session, update
 
-from jellyfist.cloud.apple.ingest import import_apple_library
-from jellyfist.cloud.apple.scrobbles import AppleScrobbleParser
-from jellyfist.cloud.lastfm import LastFMScrobbleParser
-from jellyfist.cloud.listenbrainz import ListenBrainzScrobbleParser
-from jellyfist.cloud.spotify import SpotifyScrobbleParser
-from jellyfist.conf import settings
-from jellyfist.enums import Platform
+from airdrome.cloud.apple.ingest import import_apple_library
+from airdrome.cloud.apple.scrobbles import AppleScrobbleParser
+from airdrome.cloud.lastfm import LastFMScrobbleParser
+from airdrome.cloud.listenbrainz import ListenBrainzScrobbleParser
+from airdrome.cloud.spotify import SpotifyScrobbleParser
+from airdrome.conf import settings
+from airdrome.enums import Platform
 
-# from jellyfist.loco.navidrome import sync_playlists_to_navi, sync_tracks_plays_to_navi
-from jellyfist.models import engine, TrackAlias, Track
-from jellyfist.normalize.dedup import deduplicate_tracks
-from jellyfist.normalize.names import normalize_track_names, normalize_alias_names, normalize_track_file_names
-from jellyfist.scrobbles.match_aliases import match_aliases
-from jellyfist.scrobbles.augment_aliases import augment_aliases
-from jellyfist.tools.reindex import index_library
+# from airdrome.loco.navidrome import sync_playlists_to_navi, sync_tracks_plays_to_navi
+from airdrome.models import engine, TrackAlias, Track
+from airdrome.normalize.dedup import deduplicate_tracks
+from airdrome.normalize.names import normalize_track_names, normalize_alias_names, normalize_track_file_names
+from airdrome.scrobbles.match_aliases import match_aliases
+from airdrome.scrobbles.augment_aliases import augment_aliases
+from airdrome.tools.reindex import index_library
 
-# from jellyfist.transfer import transfer_library
+# from airdrome.transfer import transfer_library
 
 app = typer.Typer(help="Airdrome CLI")
 
@@ -116,14 +116,14 @@ def complete_cli(dry_run: bool = typer.Option(False, "--dry-run", "-d")):
 
 # @navidrome_app.command("sync-playlists")
 # def navidrome_playlists(username: str):
-#     console.print("[bold green]Syncing jellyfist playlists to Navidrome[/bold green]")
+#     console.print("[bold green]Syncing airdrome playlists to Navidrome[/bold green]")
 #     sync_playlists_to_navi(username)
 #     console.print("[bold green]Sync completed[/bold green]")
 #
 #
 # @navidrome_app.command("sync-tracks")
 # def navidrome_tracks(username: str, reset: bool = typer.Option(False, "--reset", "-r")):
-#     console.print("[bold green]Syncing jellyfist tracks and scrobbles to Navidrome[/bold green]")
+#     console.print("[bold green]Syncing airdrome tracks and scrobbles to Navidrome[/bold green]")
 #     sync_tracks_plays_to_navi(username, reset)
 #     console.print("[bold green]Sync completed[/bold green]")
 

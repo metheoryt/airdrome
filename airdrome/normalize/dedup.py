@@ -2,8 +2,8 @@ from collections import defaultdict
 
 from sqlmodel import Session, select, func
 
-from jellyfist.conf import settings
-from jellyfist.models import Track
+from airdrome.conf import settings
+from airdrome.models import Track
 from .schemas import DupGroup
 from rich.table import Table
 from rich.console import Console, Group

@@ -4,7 +4,7 @@ from pathlib import Path
 from mutagen import File
 from sqlmodel import Session, select
 
-from jellyfist.models import Track, engine
+from airdrome.models import Track, engine
 from .schemas import TrackSchema
 
 
