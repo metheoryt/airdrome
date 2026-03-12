@@ -1,11 +1,13 @@
 import plistlib
 from pathlib import Path
 
-from sqlmodel import Session, select, delete, exists
 from rich.progress import track as track_progress
+from sqlmodel import Session, delete, exists, select
+
 from airdrome.conf import settings
 from airdrome.models import Track, TrackFile, engine
-from .models import AppleTrack, ApplePlaylistImport, ApplePlaylist, ApplePlaylistTrack
+
+from .models import ApplePlaylist, ApplePlaylistImport, ApplePlaylistTrack, AppleTrack
 
 
 def get_track_paths(t: AppleTrack) -> set[Path]:

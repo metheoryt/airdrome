@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import Iterator
 
+from rich.progress import track
 from sqlmodel import Session, select
 
 from airdrome.enums import Platform
 from airdrome.models import TrackAlias, TrackAliasScrobble
-from rich.progress import track
 
 
 class ScrobbleParser:

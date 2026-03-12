@@ -1,10 +1,11 @@
 from collections import defaultdict
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
-from sqlmodel import Session, select, func, delete
+from sqlmodel import Session, delete, func, select
 
-from airdrome.models import Track, TrackAlias, engine, TrackAliasScrobble
-from ..models import Annotation, MediaFile, User, Scrobbles, AlbumArtist, engine as nv_engine, Album
+from airdrome.models import Track, TrackAlias, TrackAliasScrobble, engine
+
+from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, engine as nv_engine
 
 
 def sync_tracks_plays_to_navi(username: str, reset: bool):

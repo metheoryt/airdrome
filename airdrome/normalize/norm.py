@@ -11,8 +11,9 @@ DECORATION_PATTERNS = [
     r"\s+\-\s+ep$",
     r"\s+ep$",
     r"\s+\-\s+single$",
-    r"\(feat\..*?\)",  # (feat. xxx)
-    r"\[feat\..*?\]",  # [feat. xxx]
+    r"\(.*?feat\..*?\)",  # (feat. xxx) (... feat. xxx)
+    r"\(.*?ft\s+.*?\)",  # (ft xxx) (... ft xxx)
+    r"\[.*?feat\..*?\]",  # [feat. xxx] [... feat. xxx]
     r"\(bonus track\)",
     r"\(.*?remastered.*?\)",
     r"feat\. .*?$",
@@ -37,6 +38,7 @@ DECORATION_PATTERNS = [
     r"^\d+\.\s+",
     r"^\d+\s+\-\s+",
     r"^\|\d+\|\s+",
+    "collectors edition",
 ]
 
 

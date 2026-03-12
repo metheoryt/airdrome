@@ -15,9 +15,28 @@ dependencies = [
     "typer>=0.24.1",
 ]
 
+[tool.setuptools]
+packages = ["airdrome", "terminal"]
+
+[project.scripts]
+airdrome = "terminal.app:app"
 
 [tool.ruff]
 exclude = [".git", "__pycache__", ".venv"]
 line-length = 110
 indent-width = 4
 target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["airdrome"]
+combine-as-imports = true
+lines-after-imports = 2
+split-on-trailing-comma = false
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+]

@@ -1,14 +1,9 @@
-from sqlmodel import Session, select, func
+from sqlmodel import Session, func, select
 
-from ..models import (
-    MediaFile,
-    Playlist as NVPlaylist,
-    PlaylistTracks,
-    User,
-    engine as nv_engine,
-)
+from airdrome.cloud.apple.models import ApplePlaylist, ApplePlaylistTrack
 from airdrome.models import Track, engine
-from airdrome.cloud.apple.models import AppleTrack, ApplePlaylist, ApplePlaylistTrack
+
+from ..models import MediaFile, Playlist as NVPlaylist, PlaylistTracks, User, engine as nv_engine
 
 
 def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Session, nvs: Session):
@@ -112,7 +107,7 @@ def sync_apple_playlists_to_navi(username: str):
         user = nvs.exec(select(User).where(User.user_name == username)).one()
 
         playlists_stmt = select(ApplePlaylist).where(
-            ApplePlaylist.master == False, ApplePlaylist.music == False, ApplePlaylist.folder == False
+            ~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder
         )
 
         playlists_handled = 0

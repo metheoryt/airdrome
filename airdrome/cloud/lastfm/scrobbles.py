@@ -1,10 +1,11 @@
 import csv
-from datetime import datetime, date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterator
 
 from airdrome.enums import Platform
 from airdrome.models import TrackAlias
 from airdrome.scrobbles.parser import ScrobbleParser
+
 from .schemas import LastFMScrobble
 
 

@@ -5,6 +5,7 @@ from mutagen import File
 from sqlmodel import Session, select
 
 from airdrome.models import Track, engine
+
 from .schemas import TrackSchema
 
 
@@ -140,7 +141,7 @@ def transfer_library(source_dir: Path, target_dir_originals: Path, target_dir_co
     mover = TrackMover(src_dir=source_dir, dst_dir=target_dir_originals, dst_dir_copies=target_dir_copies)
     i = 0
     with Session(engine) as s:
-        for track in s.exec(select(Track).where(Track.apple_music == False)):
+        for track in s.exec(select(Track).where(~Track.apple_music)):
             new_path = mover.transfer_track(track)
             if new_path:
                 i += 1

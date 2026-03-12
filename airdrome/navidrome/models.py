@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy.orm import registry
-from sqlmodel import SQLModel, create_engine, Field, Relationship
+from sqlmodel import Field, Relationship, SQLModel, create_engine
 
 from airdrome.conf import settings
 

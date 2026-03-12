@@ -5,8 +5,8 @@ from typing import Iterator
 from pydantic import BaseModel, Field, model_validator
 
 from airdrome.enums import Platform
-from airdrome.scrobbles.parser import ScrobbleParser
 from airdrome.models import TrackAlias
+from airdrome.scrobbles.parser import ScrobbleParser
 
 
 class AppleMusicPlayActivity(BaseModel):

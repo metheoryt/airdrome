@@ -1,18 +1,19 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Type, TypeVar, Any, Annotated, TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional, Type, TypeVar
 
 import sqlalchemy as sa
-from pydantic import model_validator, ConfigDict, field_validator
+from mutagen import File
+from pydantic import ConfigDict, model_validator
 from sqlalchemy import UniqueConstraint
-from sqlmodel import Field, SQLModel, create_engine, Relationship, Session, select, text
+from sqlalchemy.types import TypeDecorator
+from sqlmodel import Field, Index, Relationship, Session, SQLModel, create_engine, select, text
 
+from .cloud.apple.utils import generate_path
 from .conf import settings
 from .enums import Platform
 from .normalize.norm import normalize_name
-from .cloud.apple.utils import generate_path
-from mutagen import File
-from sqlalchemy.types import TypeDecorator
+
 
 if TYPE_CHECKING:
     from airdrome.cloud.apple.models import AppleTrack
@@ -73,7 +74,37 @@ class Base(SQLModel):
 class Track(Base, table=True):
     """A representation of a single track in a library."""
 
-    __table_args__ = (UniqueConstraint("title", "artist", "album", "album_artist"),)
+    __table_args__ = (
+        UniqueConstraint("title", "artist", "album", "album_artist"),
+        # trigram indexes for matching
+        Index(
+            "ix_track_title_norm_trgm",
+            "title_norm",
+            postgresql_using="gin",
+            postgresql_ops={"title_norm": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_track_artist_norm_trgm",
+            "artist_norm",
+            postgresql_using="gin",
+            postgresql_ops={"artist_norm": "gin_trgm_ops"},
+            postgresql_where=text("artist_norm <> ''"),
+        ),
+        Index(
+            "ix_track_album_norm_trgm",
+            "album_norm",
+            postgresql_using="gin",
+            postgresql_ops={"album_norm": "gin_trgm_ops"},
+            postgresql_where=text("album_norm <> ''"),
+        ),
+        Index(
+            "ix_track_album_artist_norm_trgm",
+            "album_artist_norm",
+            postgresql_using="gin",
+            postgresql_ops={"album_artist_norm": "gin_trgm_ops"},
+            postgresql_where=text("album_artist_norm <> ''"),
+        ),
+    )
 
     model_config = ConfigDict(validate_assignment=True)  # rerun validation on field assignment
 
@@ -162,6 +193,37 @@ class Track(Base, table=True):
 
 
 class TrackFile(Base, table=True):
+    __table_args__ = (
+        # trigram indexes for matching
+        Index(
+            "ix_trackfile_title_norm_trgm",
+            "title_norm",
+            postgresql_using="gin",
+            postgresql_ops={"title_norm": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_trackfile_artist_norm_trgm",
+            "artist_norm",
+            postgresql_using="gin",
+            postgresql_ops={"artist_norm": "gin_trgm_ops"},
+            postgresql_where=text("artist_norm <> ''"),
+        ),
+        Index(
+            "ix_trackfile_album_norm_trgm",
+            "album_norm",
+            postgresql_using="gin",
+            postgresql_ops={"album_norm": "gin_trgm_ops"},
+            postgresql_where=text("album_norm <> ''"),
+        ),
+        Index(
+            "ix_trackfile_album_artist_norm_trgm",
+            "album_artist_norm",
+            postgresql_using="gin",
+            postgresql_ops={"album_artist_norm": "gin_trgm_ops"},
+            postgresql_where=text("album_artist_norm <> ''"),
+        ),
+    )
+
     model_config = ConfigDict(validate_assignment=True)  # rerun validation on field assignment
 
     id: int | None = Field(default=None, primary_key=True)
@@ -232,7 +294,30 @@ class TrackFile(Base, table=True):
 
 
 class TrackAlias(Base, table=True):
-    __table_args__ = (UniqueConstraint("title", "album", "artist"),)
+    __table_args__ = (
+        UniqueConstraint("title", "album", "artist"),
+        # trigram indexes for matching
+        Index(
+            "ix_trackalias_title_norm_trgm",
+            "title_norm",
+            postgresql_using="gin",
+            postgresql_ops={"title_norm": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_trackalias_artist_norm_trgm",
+            "artist_norm",
+            postgresql_using="gin",
+            postgresql_ops={"artist_norm": "gin_trgm_ops"},
+            postgresql_where=text("artist_norm <> ''"),
+        ),
+        Index(
+            "ix_trackalias_album_norm_trgm",
+            "album_norm",
+            postgresql_using="gin",
+            postgresql_ops={"album_norm": "gin_trgm_ops"},
+            postgresql_where=text("album_norm <> ''"),
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
 

@@ -1,6 +1,7 @@
-from pydantic import BaseModel
 import json
 import os
+
+from pydantic import BaseModel
 
 
 class DupGroup(BaseModel):

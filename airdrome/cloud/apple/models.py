@@ -6,8 +6,9 @@ from pydantic import ConfigDict
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, Relationship
 
-from airdrome.models import Base, AwareDatetime, Track
-from .enums import TrackType, Kind
+from airdrome.models import AwareDatetime, Base, Track
+
+from .enums import Kind, TrackType
 from .schemas import PlaylistTrackSchema
 from .utils import generate_path
 

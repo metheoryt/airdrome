@@ -1,7 +1,8 @@
-from rich.progress import Progress, TextColumn, BarColumn, TimeElapsedColumn
-from sqlmodel import Session, select, or_
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from sqlmodel import Session, or_, select
 
 from airdrome.models import TrackAlias
+
 
 complete_progress = Progress(
     TextColumn("[progress.description]{task.description}"),

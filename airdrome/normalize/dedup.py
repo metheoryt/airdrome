@@ -1,16 +1,16 @@
-from collections import defaultdict
-
-from sqlmodel import Session, select, func
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
+from rich.prompt import Prompt
+from rich.table import Table
+from rich.text import Text
+from sqlmodel import Session, func, select
 
 from airdrome.conf import settings
 from airdrome.models import Track
+
 from .schemas import DupGroup
-from rich.table import Table
-from rich.console import Console, Group
-from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.text import Text
-from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn
+
 
 DUPES: dict[str, DupGroup] = DupGroup.load(settings.duplicates_filepath)
 
@@ -26,7 +26,6 @@ def get_table_rows(t: Track) -> list[list[str]]:
     rows = []
     base_row = [
         str(t.id),
-        str(t.canon_id),
         t.title,
         t.artist or "",
         t.album_artist or "",
@@ -118,7 +117,9 @@ def prompt_duplicate_group(key: str, tracks: list[Track]) -> DupGroup | None:
             Panel(
                 instruction_text,
                 title="Instructions",
-                subtitle="[[bold]r[/bold]] reset choices | [[bold]s[/bold]] skip group | [[bold]Enter[/bold]] finish",
+                subtitle="[[bold]r[/bold]] reset choices | "
+                "[[bold]s[/bold]] skip group | "
+                "[[bold]Enter[/bold]] finish",
                 style="dim",
             ),
             progress,

@@ -1,41 +1,84 @@
 from typing import Any
 
-from sqlmodel import Column
+from sqlmodel import Session, func, select
+
+from .models import Track
+
 
 ColVal = tuple[Any, str]
 ColOptVal = tuple[Any, str | None]
 
 
-def generate_match_filter_sets(
-    title: ColVal, artist: ColOptVal, album: ColOptVal, album_artist_col: Any | None = None
-):
-    """
-    Generate a set of filters for given columns and their respective value.
+def build_match_score(artist_norm, album_norm):
+    if artist_norm:
+        artist_sim_expr = func.greatest(
+            func.similarity(Track.artist_norm, artist_norm),
+            func.similarity(Track.album_artist_norm, artist_norm),
+        )
+    else:
+        # alias has no artist → perfect match
+        artist_sim_expr = 1.0
 
-    Go from stricter filtering to broader.
-    """
-    filtersets = []
-    filters = [
-        (title, artist, album),
-        (title, artist, None),
-        (title, None, album),
-    ]
-    if not album[1] and not artist[1]:
-        # filter by title-only aliases that have title only
-        filters.append((title, None, None))
+    if album_norm:
+        album_sim_expr = func.similarity(Track.album_norm, album_norm)
+    else:
+        if artist_norm:
+            album_sim_expr = 0.5
+        else:
+            album_sim_expr = 1.0
 
-    artist_cols = [artist[0]]
-    if album_artist_col:
-        artist_cols.append(album_artist_col)
+    artist_w = 0.75
+    album_w = 0.25
 
-    # equals
-    for title, artist, album in filters:
-        for artist_col in artist_cols:
-            filterset = [title[0] == title[1]]
-            if artist:
-                filterset.append(artist_col == artist[1])
-            if album:
-                filterset.append(album[0] == album[1])
-            filtersets.append(tuple(filterset))
+    weighted_sum = artist_sim_expr * artist_w + album_sim_expr * album_w
+    weight_sum = artist_w + album_w
+    score = weighted_sum / weight_sum
 
-    return list(dict.fromkeys(filtersets))
+    return score
+
+
+def find_best_track(
+    session: Session, title_norm, artist_norm, album_norm, threshold: float = 0.4
+) -> Track | None:
+
+    if not artist_norm and not album_norm:
+        stmt = (
+            select(Track)
+            .where(Track.title_norm == title_norm)
+            .order_by(
+                Track.canon_id,  # originals first
+                Track.album_artist_norm,
+                Track.artist_norm,
+                Track.album_norm,
+            )
+            .limit(1)
+        )
+        track, score_val = session.exec(stmt).one_or_none(), 1.0
+    else:
+        score = build_match_score(artist_norm, album_norm).label("score")
+        stmt = select(Track, score).where(Track.title_norm == title_norm).order_by(score.desc()).limit(1)
+
+        result = session.exec(stmt).one_or_none()
+        if result:
+            track, score_val = result
+        else:
+            track, score_val = None, 0.0
+
+    if not track:
+        return None
+
+    if score_val < threshold:
+        return None
+    if score_val < threshold + 0.1:
+        alias_l = f"{title_norm[:25]:<25} | {album_norm[:40]:<40} | {artist_norm[:25]:<25}"
+        track_l = (
+            f"{track.title_norm[:25]:<25} | "
+            f"{track.album_norm[:40]:<40} | "
+            f"{track.artist_norm[:25]:<25} | "
+            f"{track.album_artist_norm[:25]:<25}"
+        )
+        print(f"alias {score_val:.03f}:", alias_l)
+        print(f"track {score_val:.03f}:", track_l)
+        print()
+
+    return track
