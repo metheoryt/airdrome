@@ -22,17 +22,17 @@ class FileIndexer:
             TimeElapsedColumn(),
         )
 
-    def index_track(self, rel_path: Path, s: Session, match_threshold: float = 0.4):
+    def index_track(self, abs_path: Path, s: Session, match_threshold: float = 0.4):
         # check whether it's already in the database
         created = track_created = False
-        tf = s.exec(select(TrackFile).where(TrackFile.path == rel_path)).one_or_none()
+        tf = s.exec(select(TrackFile).where(TrackFile.path == abs_path)).one_or_none()
         if not tf:
-            tf = TrackFile(path=rel_path)
+            tf = TrackFile(path=abs_path)
             s.add(tf)
             created = True
 
         # get tags and metadata
-        TrackFile.enrich(tf, base_path=self.library_path)
+        tf.enrich()
 
         if not tf.track:
             # try to match it with an existing track
@@ -58,12 +58,11 @@ class FileIndexer:
                 file_created=n_created,
                 track_created=n_tracks_created,
             )
-            for path in self.library_path.rglob("*"):
-                if not path.is_file() or path.suffix not in self.EXTENSIONS:
+            for abs_path in self.library_path.rglob("*"):
+                if not abs_path.is_file() or abs_path.suffix not in self.EXTENSIONS:
                     continue
 
-                relative_path = path.relative_to(self.library_path)
-                tf, created, track_created = self.index_track(relative_path, s)
+                tf, created, track_created = self.index_track(abs_path, s)
                 if created:
                     n_created += 1
                 if track_created:

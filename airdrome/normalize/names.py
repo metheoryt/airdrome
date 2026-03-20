@@ -41,7 +41,7 @@ def normalize_track_file_names(s: Session):
         track_file.title_norm = normalize_name(track_file.title)
         track_file.album_norm = normalize_name(track_file.album)
         track_file.artist_norm = normalize_name(track_file.artist)
-        track_file.album_artist_norm = normalize_name(track_file.album_artist_norm)
+        track_file.album_artist_norm = normalize_name(track_file.album_artist)
         i += 1
         if i % 1000 == 0:
             s.flush()

@@ -4,25 +4,24 @@ from pathlib import Path
 from rich.progress import track as track_progress
 from sqlmodel import Session, delete, exists, select
 
-from airdrome.conf import settings
 from airdrome.models import Track, TrackFile, engine
 
 from .models import ApplePlaylist, ApplePlaylistImport, ApplePlaylistTrack, AppleTrack
 
 
-def get_track_paths(t: AppleTrack) -> set[Path]:
+def get_track_full_paths(t: AppleTrack, root_dir: str) -> set[Path]:
     paths = set()
 
     for track_path in t.possible_locations(max_suffix=2):
-        full_path = settings.apple_music_library_dirpath / track_path
+        full_path = root_dir / track_path
 
         if full_path.exists():
-            paths.add(track_path)
+            paths.add(full_path)
 
     return paths
 
 
-def import_apple_library(filename: str, reset: bool = False):
+def import_apple_library(xml_filename: str, root_dir: str, reset: bool = False):
     if reset:
         print("Purging imported Apple library...")
         with Session(engine) as s:
@@ -31,10 +30,11 @@ def import_apple_library(filename: str, reset: bool = False):
             s.commit()
         print("Apple library purged")
 
-    with open(filename, "rb") as f:
+    with open(xml_filename, "rb") as f:
         plist = plistlib.load(f)
 
     with Session(engine) as s:
+        # 1. import tracks (idempotent)
         for i, (track_id, data) in track_progress(
             enumerate(plist["Tracks"].items()), description=f"Importing {len(plist['Tracks'])} tracks"
         ):
@@ -44,8 +44,7 @@ def import_apple_library(filename: str, reset: bool = False):
                 select(AppleTrack).where(AppleTrack.apple_track_id == at.apple_track_id)
             ).one_or_none()
             if apple_track:
-                # already exists
-                # print("apple track already exists:", at.apple_track_id, " - skipping")
+                # already exists (can happen within a single library)
                 continue
 
             apple_track = at
@@ -69,11 +68,12 @@ def import_apple_library(filename: str, reset: bool = False):
             s.flush()
 
             if not apple_track.apple_music:
-                for tp in get_track_paths(apple_track):
+                for tp in get_track_full_paths(apple_track, root_dir):
                     tf, created = TrackFile.get_or_create(s, track_id=track.id, path=tp)
-                    TrackFile.enrich(tf, base_path=settings.apple_music_library_dirpath)
+                    tf.enrich()
             s.flush()
 
+        # 2. import playlists (idempotent)
         for pl in track_progress(
             plist["Playlists"], description=f"Importing {len(plist['Playlists'])} playlists"
         ):

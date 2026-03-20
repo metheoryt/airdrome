@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import DirectoryPath, FilePath, PostgresDsn
+from pydantic import DirectoryPath, Field, FilePath, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,15 +10,12 @@ class Settings(BaseSettings):
     db_dsn: PostgresDsn = "postgresql+psycopg://postgres:postgres@localhost:5437/postgres"
     db_echo: bool = False
 
-    # local directories
-    # apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\iTunes\iTunes Media\Music"
-    apple_music_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Airdrome\Music"  # testing on a copy
-    local_library_copies_dirpath: DirectoryPath = r"C:\Users\methe\Music\Airdrome\Copies"
-    local_library_dirpath: DirectoryPath = r"C:\Users\methe\Music\Airdrome\NewLibrary"
+    library_dir: Path = Field(
+        r"C:\Users\methe\Music\Airdrome",
+        description="Airdrome-organized library path. Must be empty for a fresh install.",
+    )
 
-    # data to ingest
-    apple_music_library_xml_filepath: FilePath = Path("data") / "apple" / "AppleMusicLibrary.xml"
-    apple_music_play_activity_filepath: FilePath = Path("data") / "apple" / "Apple Music Play Activity.csv"
+    # data ingest
     lastfm_scrobbles_filepath: FilePath = Path("data") / "lastfm" / "MeTheoryT.csv"
     spotify_streaming_history_dirpath: DirectoryPath = Path("data") / "spotify"
     listenbrainz_listens_dir_path: Path = (

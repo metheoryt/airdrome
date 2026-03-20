@@ -124,7 +124,7 @@ class Track(Base, table=True):
     album_artist_norm: str = Field("")
     album_norm: str = Field("")
 
-    main_path: Path | None = Field(None, sa_column=sa.Column(sa.String, nullable=True))
+    main_path: Path | None = Field(None, sa_column=sa.Column(PathType(), nullable=True))
 
     # duplicates
     canon_id: int | None = Field(None, foreign_key="track.id", index=True, ondelete="SET NULL")
@@ -180,7 +180,7 @@ class Track(Base, table=True):
     def path_album(self):
         return self.album or "Unknown Album"
 
-    def generate_main_path(self, ext: str) -> Path:
+    def generate_main_path(self, ext: str, suffix: int = 0) -> Path:
         """Keep the main path consistent with Apple Library paths."""
         return generate_path(
             artist=self.path_artist,
@@ -189,6 +189,7 @@ class Track(Base, table=True):
             ext=ext,
             track_n=self.track_n,
             disc_n=self.disc_n,
+            suffix=suffix,
         )
 
 
@@ -224,8 +225,6 @@ class TrackFile(Base, table=True):
         ),
     )
 
-    model_config = ConfigDict(validate_assignment=True)  # rerun validation on field assignment
-
     id: int | None = Field(default=None, primary_key=True)
 
     path: Path = Field(sa_column=sa.Column(PathType(), nullable=False, unique=True))
@@ -247,32 +246,8 @@ class TrackFile(Base, table=True):
     album_artist_norm: str = Field("")
     album_norm: str = Field("")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _populate_normalized_fields(cls, data: Any):
-        field_map = (
-            ("title", "title_norm"),
-            ("artist", "artist_norm"),
-            ("album_artist", "album_artist_norm"),
-            ("album", "album_norm"),
-        )
-        if isinstance(data, dict):
-            # raw data
-            for f, nf in field_map:
-                if f in data:
-                    data[nf] = normalize_name(data[f])
-        elif isinstance(data, cls):
-            # existing SQLModel instance
-            for f, nf in field_map:
-                val = getattr(data, f, None)
-                setattr(data, nf, normalize_name(val))
-        else:
-            raise ValueError("Unexpected type:", type(data))
-        return data
-
-    @classmethod
-    def enrich(cls, instance: "TrackFile", base_path: Path):
-        audio = File(base_path / instance.path)
+    def enrich(self):
+        audio = File(self.path)
         if audio is None:
             raise ValueError("Unsupported or corrupted file")
         tags = audio.tags or {}
@@ -284,13 +259,21 @@ class TrackFile(Base, table=True):
                     return "; ".join(v) if isinstance(v, list) else str(v)
             return None
 
-        instance.artist = get("TPE1", "©ART")
-        instance.album = get("TALB", "©alb")
-        instance.album_artist = get("TPE2", "aART")
-        instance.title = get("TIT2", "©nam")
-        instance.date = get("TDRC", "TDOR", "©day")
-        instance.duration = getattr(audio.info, "length")
-        instance.bitrate = getattr(audio.info, "bitrate", 0)
+        self.artist = get("TPE1", "©ART")
+        self.artist_norm = normalize_name(self.artist)
+
+        self.album = get("TALB", "©alb")
+        self.album_norm = normalize_name(self.album)
+
+        self.album_artist = get("TPE2", "aART")
+        self.album_artist_norm = normalize_name(self.album_artist)
+
+        self.title = get("TIT2", "©nam")
+        self.title_norm = normalize_name(self.title)
+
+        self.date = get("TDRC", "TDOR", "©day")
+        self.duration = getattr(audio.info, "length")
+        self.bitrate = getattr(audio.info, "bitrate", 0)
 
 
 class TrackAlias(Base, table=True):
