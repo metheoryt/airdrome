@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build_meta"
 
 [project]
 name = "airdrome"
@@ -19,8 +19,8 @@ dependencies = [
     "typer>=0.24.1",
 ]
 
-[tool.setuptools]
-packages = ["airdrome"]
+[tool.hatch.build.targets.sdist]
+include = ["/airdrome"]
 
 [project.scripts]
 airdrome = "airdrome.terminal.app:app"

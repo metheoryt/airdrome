@@ -7,12 +7,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    db_dsn: PostgresDsn = "postgresql+psycopg://postgres:postgres@localhost:5437/postgres"
+    db_dsn: PostgresDsn
     db_echo: bool = False
 
     library_dir: Path = Field(
-        r"C:\Users\methe\Music\Airdrome",
-        description="Airdrome-organized library path. Must be empty for a fresh install.",
+        description="Airdrome-organized library path. Must be empty for a fresh install."
     )
 
     # data ingest

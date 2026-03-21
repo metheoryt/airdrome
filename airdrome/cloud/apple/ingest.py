@@ -16,7 +16,7 @@ def get_track_full_paths(t: AppleTrack, root_dir: str) -> set[Path]:
         full_path = root_dir / track_path
 
         if full_path.exists():
-            paths.add(full_path)
+            paths.add(full_path.resolve())
 
     return paths
 
@@ -69,7 +69,7 @@ def import_apple_library(xml_filename: str, root_dir: str, reset: bool = False):
 
             if not apple_track.apple_music:
                 for tp in get_track_full_paths(apple_track, root_dir):
-                    tf, created = TrackFile.get_or_create(s, track_id=track.id, path=tp)
+                    tf, created = TrackFile.get_or_create(s, track_id=track.id, source_path=tp)
                     tf.enrich()
             s.flush()
 

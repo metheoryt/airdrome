@@ -7,12 +7,15 @@ from airdrome.models import Track, TrackFile, engine
 
 
 class FileOrganizer:
-    def __init__(self, dst_dir: Path, dst_dir_copies: Path, copy: bool = False):
+    MAIN_SUBDIR = "Library"
+    COPIES_SUBDIR = "Copies"
+
+    def __init__(self, dst_dir: Path, copy: bool = False):
         self.dst_dir = dst_dir
-        self.dst_dir_copies = dst_dir_copies
         self.copy = copy
 
-    def select_file(self, files: list[TrackFile]) -> TrackFile:
+    @classmethod
+    def select_main(cls, files: list[TrackFile]) -> TrackFile:
         """
         Select the most suitable file for a track.
 
@@ -26,62 +29,84 @@ class FileOrganizer:
 
         selected = sorted(
             files,
-            key=lambda tf: (tf.bitrate // 1000, ext_priority[tf.path.suffix[1:].lower()]),
+            key=lambda tf: (tf.bitrate // 1000, ext_priority[tf.source_path.suffix[1:].lower()]),
             reverse=True,
         )[0]
         return selected
 
-    def get_file_paths(self, files: list[TrackFile]) -> tuple[TrackFile | None, list[TrackFile]]:
+    def split_main_copies(self, files: list[TrackFile]) -> tuple[TrackFile | None, list[TrackFile]]:
         if not len(files):
             return None, []
 
         if len(files) > 1:
-            canon_tf = self.select_file(files)
-            copies = [tf for tf in files if tf.id != canon_tf.id]
+            main_tf = self.select_main(files)
+            copies = [tf for tf in files if tf.id != main_tf.id]
             print("multiple files found:")
             for tf in files:
-                print("V" if tf.id == canon_tf.id else " ", tf.path)
+                print("V" if tf.id == main_tf.id else " ", tf.source_path)
             # input("Press enter to continue...")
         else:
-            canon_tf = files[0]
-            copies = []
+            main_tf, copies = files[0], []
 
-        return canon_tf, copies
+        main_tf.is_main = True  # mark the main file
+        return main_tf, copies
 
-    def transfer(self, src_abs: Path, dst_rel: Path, dst_base: Path) -> Path:
+    def transfer(self, src_abs: Path, dst_abs: Path) -> Path | None:
         """
-        Move a file from `src_abs` to `dst_dir/dst_rel`.
+        Move a file from `src_abs` to `dst_dir_mains/dst_rel`.
 
-        Return the real relative path of the moved destination file.
+        Return the real absolut path of the moved destination file.
         """
-        dst_abs = dst_base / dst_rel
+
+        if not src_abs.exists():
+            # source file does not exist, ignore
+            raise FileNotFoundError(f"Source file does not exist: {src_abs}")
 
         if dst_abs.exists():
-            return dst_abs.resolve()
-            # raise FileExistsError(f"Destination file already exists: {dst}")
+            raise FileExistsError(f"Destination file already exists: {dst_abs}")
+
         dst_abs.parent.mkdir(parents=True, exist_ok=True)
 
         if self.copy:
             new = shutil.copy(src_abs, dst_abs)
         else:
             new = shutil.move(src_abs, dst_abs)
+        # return a real path, with the correct case
+        return new.resolve()
 
-        new = Path(new).resolve()  # get actual path
-        return new
+    def transfer_file(self, tf: TrackFile, dst_rel: Path, dst_dir: Path) -> Path | None:
+        """
+        Transfer a single file to a destination directory.
+
+        Write the relative library path to the TrackFile instance library path.
+        Return the relative path of the transferred file if it was transferred, None otherwise.
+        """
+        if tf.library_path and (dst_dir / tf.library_path).exists():
+            # Already transferred before
+            print("Already transferred:", tf.library_path, "->", dst_rel, " (skipped")
+            return None
+
+        dst_abs_real = self.transfer(
+            src_abs=tf.source_path,
+            dst_abs=dst_dir / dst_rel,
+        )
+        dst_rel_real = dst_abs_real.relative_to(dst_dir)
+        tf.library_path = dst_rel_real
+        return dst_rel_real
 
     def transfer_track(self, t: Track) -> Path | None:
         """
         Transfer track files to destination directories.
 
-        The main track file is transferred to the `target_dir` directory.
-        Other files that also represent the track are transferred to the `target_dir_copies` directory.
+        The main track file is transferred to the library directory.
+        Other files that also represent the track are transferred to the library copies directory.
 
         :return: The relative path of the transferred main track file.
         :return: None, if no transfer happened.
         """
         if t.canon:
-            # Do not handle twins
-            return None
+            # Do not handle twins, they will be handled together with their canon track
+            return self.transfer_track(t.canon)
 
         files = [tf for tf in t.files]
 
@@ -89,60 +114,49 @@ class FileOrganizer:
             # the track has twins, combine all files from all twins
             files.extend([tf for t in t.twins for tf in t.files])
 
-        if t.main_path:
-            dst = self.dst_dir / t.main_path
-            if dst.exists():
-                # already transferred, don't even check for copies
-                return None
-
         if not len(files):
             return None
 
-        canon, copies = self.get_file_paths(files)
-        ext = canon.path.suffix[1:]
-        new_rel_path = self.transfer(
-            src_abs=canon.path, dst_rel=t.generate_main_path(ext), dst_base=self.dst_dir
-        )
+        main_tf, copies = self.split_main_copies(files)
+
+        # main file
+        dst_rel = t.generate_relative_path(ext=main_tf.source_path.suffix[1:])
+        new_path = self.transfer_file(main_tf, dst_rel=Path(self.MAIN_SUBDIR) / dst_rel, dst_dir=self.dst_dir)
+        if not new_path:
+            return None
 
         # copies
-        for i, tf in enumerate(copies):
-            ext = tf.path.suffix[1:]
-            rel_path = t.generate_main_path(ext, suffix=i)
-            try:
-                self.transfer(
-                    src_abs=tf.path, dst_rel=t.generate_main_path(ext, suffix=i), dst_base=self.dst_dir_copies
-                )
-            except FileExistsError:
-                # ignore existing copyfile error
-                print("copy file already exist:", self.dst_dir_copies / rel_path)
-
-        return new_rel_path
+        for i, copy_tf in enumerate(copies):
+            dst_rel = t.generate_relative_path(ext=copy_tf.source_path.suffix[1:], suffix=i)
+            self.transfer_file(copy_tf, dst_rel=Path(self.COPIES_SUBDIR) / dst_rel, dst_dir=self.dst_dir)
+        return new_path
 
 
 def organize_library(
-    target_dir_originals: Path,
-    target_dir_copies: Path,
+    dst_dir: Path,
     copy: bool = False,
 ):
-    for path in (target_dir_originals, target_dir_copies):
-        if not path.is_dir():
-            path.mkdir(parents=True)
-
-    mover = FileOrganizer(dst_dir=target_dir_originals, dst_dir_copies=target_dir_copies, copy=copy)
+    mover = FileOrganizer(dst_dir=dst_dir, copy=copy)
     i = 0
     with Session(engine) as s:
-        for track in s.exec(select(Track).where(Track.main_path.isnot(None))):
+        for track in s.exec(
+            select(Track)
+            .where(Track.files.any(TrackFile.library_path.is_(None)))
+            .order_by(Track.artist_norm, Track.album_norm, Track.title_norm)
+        ):
             track: Track
+            # print("track", track.table_row)
             new_path = mover.transfer_track(track)
             if new_path:
                 i += 1
-                track.main_path = new_path.as_posix()
                 if i % 100 == 0:
                     s.flush()
 
-                print(i, "tracks moved", end="\r", flush=True)
-
-        print()
-        print("committing...")
-        s.commit()
-        print("Done!")
+                print(i, "tracks", "copied" if copy else "moved", end="\r", flush=True)
+        if i:
+            print()
+            print("committing...")
+            s.commit()
+            print("Done!")
+        else:
+            print("Nothing to do.")

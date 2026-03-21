@@ -8,11 +8,13 @@ from ..models import MediaFile, Playlist as NVPlaylist, PlaylistTracks, User, en
 
 def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Session, nvs: Session):
     track: Track = apt.track.track
-    if not track.main_path:
+    if not track.main_file:
         return
 
     # match the track between the systems by the path
-    media_file = nvs.exec(select(MediaFile).where(MediaFile.path == track.main_path)).one_or_none()
+    media_file = nvs.exec(
+        select(MediaFile).where(MediaFile.path == track.main_file.library_path)
+    ).one_or_none()
     if not media_file:
         print("cant find in navidrome:", track)
         return

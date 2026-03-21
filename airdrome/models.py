@@ -124,8 +124,6 @@ class Track(Base, table=True):
     album_artist_norm: str = Field("")
     album_norm: str = Field("")
 
-    main_path: Path | None = Field(None, sa_column=sa.Column(PathType(), nullable=True))
-
     # duplicates
     canon_id: int | None = Field(None, foreign_key="track.id", index=True, ondelete="SET NULL")
     canon: Optional["Track"] = Relationship(
@@ -141,6 +139,10 @@ class Track(Base, table=True):
     @property
     def table_row(self) -> tuple[str, str | None, str | None, str | None]:
         return self.title, self.artist, self.album_artist, self.album
+
+    @property
+    def main_file(self) -> Optional["TrackFile"]:
+        return next((t for t in self.files if t.is_main), None)
 
     @model_validator(mode="before")
     @classmethod
@@ -180,7 +182,7 @@ class Track(Base, table=True):
     def path_album(self):
         return self.album or "Unknown Album"
 
-    def generate_main_path(self, ext: str, suffix: int = 0) -> Path:
+    def generate_relative_path(self, ext: str, suffix: int = 0) -> Path:
         """Keep the main path consistent with Apple Library paths."""
         return generate_path(
             artist=self.path_artist,
@@ -227,7 +229,9 @@ class TrackFile(Base, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
 
-    path: Path = Field(sa_column=sa.Column(PathType(), nullable=False, unique=True))
+    source_path: Path = Field(sa_column=sa.Column(PathType(), nullable=False, unique=True))
+    library_path: Path | None = Field(None, sa_column=sa.Column(PathType(), nullable=True, unique=True))
+    is_main: bool = Field(False, nullable=False)
 
     track_id: int | None = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
     track: Track | None = Relationship(back_populates="files")
@@ -246,8 +250,19 @@ class TrackFile(Base, table=True):
     album_artist_norm: str = Field("")
     album_norm: str = Field("")
 
+    @property
+    def absolute_path(self) -> Path:
+        """
+        Returns the current usable absolute path of the file.
+        Prefers the library_path (joined with settings) if it exists,
+        otherwise falls back to source_path.
+        """
+        if self.library_path:
+            return settings.library_dir / self.library_path
+        return self.source_path
+
     def enrich(self):
-        audio = File(self.path)
+        audio = File(self.absolute_path)
         if audio is None:
             raise ValueError("Unsupported or corrupted file")
         tags = audio.tags or {}
