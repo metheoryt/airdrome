@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import DirectoryPath, Field, FilePath, PostgresDsn
+from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,18 +14,11 @@ class Settings(BaseSettings):
         description="Airdrome-organized library path. Must be empty for a fresh install."
     )
 
-    # data ingest
-    lastfm_scrobbles_filepath: FilePath = Path("data") / "lastfm" / "MeTheoryT.csv"
-    spotify_streaming_history_dirpath: DirectoryPath = Path("data") / "spotify"
-    listenbrainz_listens_dir_path: Path = (
-        Path("data") / "listenbrainz" / "listenbrainz_metheoryt_1772562030" / "listens"
-    )
-
     # app-produced data
     duplicates_filepath: Path = Path("data") / "duplicates.json"
 
     # navidrome
-    navidrome_db_dsn: str = "sqlite:///C:/Navidrome/navidrome.db"
+    navidrome_db_dsn: str | None = None
 
 
 settings = Settings()
