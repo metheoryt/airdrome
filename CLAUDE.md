@@ -8,6 +8,8 @@ Airdrome migrates music libraries and scrobble/play history from cloud services 
 
 ## Commands
 
+The project interpreter is in `.venv`. Any command that uses packages from `pyproject.toml` must be run either via `uv run <cmd>` or with the virtualenv activated (`.venv/Scripts/activate` on Windows, `.venv/bin/activate` on Unix).
+
 ```bash
 # Install (requires Python 3.14+)
 uv sync
@@ -19,11 +21,12 @@ docker compose up -d
 ruff check .
 ruff format .
 
+# Run tests (requires PostgreSQL running)
+uv run pytest
+
 # Run CLI
 airdrome --help
 ```
-
-No test suite exists yet.
 
 ## Architecture
 

@@ -1,5 +1,6 @@
 import shutil
 from pathlib import Path
+from typing import Callable
 
 from sqlmodel import Session, func, select, update
 
@@ -45,7 +46,6 @@ class FileOrganizer:
             for tf in files:
                 marker = "[green]✓[/green]" if tf.id == main_tf.id else " "
                 console.print(f"[dim]  {marker} {tf.source_path}[/dim]")
-            # input("Press enter to continue...")
         else:
             main_tf, copies = files[0], []
 
@@ -83,8 +83,6 @@ class FileOrganizer:
         Return the relative path of the transferred file if it was transferred, None otherwise.
         """
         if tf.library_path and (self.dst_dir / tf.library_path).exists():
-            # Already transferred before
-            # print("Already transferred:", tf.library_path, "->", dst_rel, " (skipped")
             return None
 
         dst_abs_real = self.transfer(
@@ -132,6 +130,30 @@ class FileOrganizer:
             self.transfer_file(copy_tf, dst_rel=Path(COPIES_SUBDIR) / MUSIC_SUBDIR / dst_rel)
         return new_path
 
+    def organize(self, s: Session, reset: bool = False, _on_item: Callable[[int], None] | None = None) -> int:
+        """
+        Core organize logic. Returns number of tracks transferred.
+
+        Testable directly — no session creation, no progress output.
+        """
+        if reset:
+            s.exec(update(TrackFile).values(library_path=None, is_main=False))
+            s.flush()
+
+        pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
+        i = 0
+        for track in s.exec(pending_stmt.order_by(Track.artist_norm, Track.album_norm, Track.title_norm)):
+            new_path = self.transfer_track(track)
+            if new_path:
+                i += 1
+                if i % 100 == 0:
+                    s.flush()
+            if _on_item:
+                _on_item(i)
+
+        s.commit()
+        return i
+
 
 def organize_library(
     dst_dir: Path,
@@ -142,26 +164,16 @@ def organize_library(
     verb = "copied" if copy else "moved"
     with Session(engine) as s:
         if reset:
-            s.exec(update(TrackFile).values(library_path=None, is_main=False))
-            s.commit()
             console.print("[yellow]library paths reset[/yellow]")
 
         pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
         total = s.exec(select(func.count()).select_from(pending_stmt.subquery())).one()
-        if not total:
+        if not total and not reset:
             console.print("[dim]Nothing to do.[/dim]")
             return
 
-        i = 0
         with make_progress() as progress:
             task = progress.add_task(f"Organizing library ({verb})", total=total)
-            for track in s.exec(pending_stmt.order_by(Track.artist_norm, Track.album_norm, Track.title_norm)):
-                new_path = mover.transfer_track(track)
-                if new_path:
-                    i += 1
-                    if i % 100 == 0:
-                        s.flush()
-                progress.advance(task)
+            i = mover.organize(s, reset=reset, _on_item=lambda _: progress.advance(task))
 
-        s.commit()
-        console.print(f"[green]{i} tracks {verb}[/green]")
+    console.print(f"[green]{i} tracks {verb}[/green]")

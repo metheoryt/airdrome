@@ -203,6 +203,8 @@ class Track(Base, table=True):
 
 
 class TrackFile(Base, table=True):
+    model_config = ConfigDict(validate_assignment=True)
+
     __table_args__ = (
         # trigram indexes for matching
         Index(
@@ -308,6 +310,8 @@ class TrackFile(Base, table=True):
 
 
 class TrackAlias(Base, table=True):
+    model_config = ConfigDict(validate_assignment=True)
+
     __table_args__ = (
         UniqueConstraint("title", "album", "artist"),
         # trigram indexes for matching
