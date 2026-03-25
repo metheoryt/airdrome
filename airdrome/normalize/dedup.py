@@ -1,4 +1,4 @@
-from rich.console import Console, Group
+from rich.console import Group
 from rich.panel import Panel
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 from rich.prompt import Prompt
@@ -7,19 +7,10 @@ from rich.text import Text
 from sqlmodel import Session, func, select
 
 from airdrome.conf import settings
+from airdrome.console import console
 from airdrome.models import Track
 
 from .schemas import DupGroup
-
-
-DUPES: dict[str, DupGroup] = DupGroup.load(settings.duplicates_filepath)
-
-console = Console()
-progress = Progress(
-    TextColumn("[bold blue]{task.description}"),
-    BarColumn(),
-    MofNCompleteColumn(),
-)
 
 
 def get_table_rows(t: Track) -> list[list[str]]:
@@ -97,7 +88,7 @@ def compose_table(key: str, tracks: list[Track], canons: list[int | None]):
     return table
 
 
-def prompt_duplicate_group(key: str, tracks: list[Track]) -> DupGroup | None:
+def prompt_duplicate_group(key: str, tracks: list[Track], progress: Progress) -> DupGroup | None:
     members = [t.id for t in tracks]
     canons = [t.canon_id for t in tracks]
 
@@ -194,14 +185,13 @@ def prompt_duplicate_group(key: str, tracks: list[Track]) -> DupGroup | None:
     return DupGroup(members=members, canons=canons)
 
 
-def deduplicate_group(key: str, tracks: list[Track], s: Session):
-    group: DupGroup | None = None
-    if key in DUPES:
-        # cached choices
-        group: DupGroup = DUPES[key]
+def deduplicate_group(
+    key: str, tracks: list[Track], s: Session, dupes: dict[str, DupGroup], progress: Progress
+):
+    group: DupGroup | None = dupes.get(key)
 
     if not group:
-        group = prompt_duplicate_group(key, tracks)
+        group = prompt_duplicate_group(key, tracks, progress)
 
     if not group:
         # skip this group
@@ -218,10 +208,17 @@ def deduplicate_group(key: str, tracks: list[Track], s: Session):
             track.canon_id = group.canons[i]
     s.flush()
 
-    DUPES[key] = group
+    dupes[key] = group
 
 
 def deduplicate_tracks(s: Session):
+    dupes: dict[str, DupGroup] = DupGroup.load(settings.duplicates_filepath)
+    progress = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+    )
+
     for cols in (
         (Track.artist_norm, Track.title_norm),
         (Track.album_artist_norm, Track.title_norm),
@@ -247,18 +244,17 @@ def deduplicate_tracks(s: Session):
                 ).all()
 
                 key = ", ".join([f"{col.name}: {val}" for col, val in col_to_val])
-                deduplicate_group(key, list(tracks), s)
+                deduplicate_group(key, list(tracks), s, dupes, progress)
                 progress.update(task_id, advance=1)
 
             # persist all changes
             s.commit()
             # also save choices to a filesystem
-            DupGroup.dump(DUPES, settings.duplicates_filepath)
-            print("Finished deduplication by", col_names)
+            DupGroup.dump(dupes, settings.duplicates_filepath)
+            console.print(f"[green]Finished deduplication by {col_names}[/green]")
 
         except KeyboardInterrupt:
             # save choices permanently on ctrl+c, dont commit
-            DupGroup.dump(DUPES, settings.duplicates_filepath)
-            print()
-            print("saved choices to the filesystem")
+            DupGroup.dump(dupes, settings.duplicates_filepath)
+            console.print("[yellow]Interrupted — choices saved to disk[/yellow]")
             raise

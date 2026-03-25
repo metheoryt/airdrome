@@ -42,7 +42,7 @@ class MusicScanner:
         if not tf.track:
             # create a new track if nothing found
             tf.track = Track(title=tf.title, artist=tf.artist, album_artist=tf.album_artist, album=tf.album)
-            s.add(tf)
+            s.add(tf.track)
             track_created = True
 
         return tf, created, track_created

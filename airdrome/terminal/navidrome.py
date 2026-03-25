@@ -1,11 +1,10 @@
 import typer
-from rich.console import Console
 
 from airdrome.conf import settings
+from airdrome.console import console
 from airdrome.navidrome import sync_apple_playlists_to_navi, sync_tracks_plays_to_navi
 
 
-console = Console()
 navidrome_app = typer.Typer(help="Navidrome sync")
 push_app = typer.Typer(help="Push data from Airdrome to Navidrome")
 pull_app = typer.Typer(help="Pull data from Navidrome into Airdrome")

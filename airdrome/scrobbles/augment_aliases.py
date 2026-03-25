@@ -1,17 +1,8 @@
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from sqlmodel import Session, or_, select
 
+from airdrome.console import console
 from airdrome.models import TrackAlias
-
-
-complete_progress = Progress(
-    TextColumn("[progress.description]{task.description}"),
-    BarColumn(),
-    TextColumn("✅ {task.fields[full]}  "),
-    TextColumn("☑️ {task.fields[partial]}  "),
-    TextColumn("🗿 {task.fields[no]}  "),
-    TimeElapsedColumn(),
-)
 
 
 def maybe_complete_alias(alias: TrackAlias, s: Session):
@@ -69,16 +60,18 @@ def augment_aliases(s: Session, dry_run: bool = False):
     aliases = s.exec(
         select(TrackAlias).where(or_(TrackAlias.album_norm == "", TrackAlias.artist_norm == ""))
     ).all()
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("✅ {task.fields[full]}  "),
+        TextColumn("☑️ {task.fields[partial]}  "),
+        TextColumn("🗿 {task.fields[no]}  "),
+        TimeElapsedColumn(),
+    )
     description = f"Augmenting {len(aliases)} aliases{' [dry run]' if dry_run else ''}"
     full = partial = no = 0
-    task_id = complete_progress.add_task(
-        description,
-        total=len(aliases),
-        full=full,
-        partial=partial,
-        no=no,
-    )
-    with complete_progress:
+    task_id = progress.add_task(description, total=len(aliases), full=full, partial=partial, no=no)
+    with progress:
         for alias in aliases:
             completed = maybe_complete_alias(alias, s)
             if len(completed) == 2:
@@ -87,11 +80,11 @@ def augment_aliases(s: Session, dry_run: bool = False):
                 partial += 1
             else:
                 no += 1
-            complete_progress.update(task_id, advance=1, full=full, partial=partial, no=no)
+            progress.update(task_id, advance=1, full=full, partial=partial, no=no)
 
     if dry_run:
         s.rollback()
-        print("dry run, no changes were made")
+        console.print("[dim]dry run — no changes saved[/dim]")
     else:
         s.commit()
-        print("changes committed")
+        console.print("[green]changes committed[/green]")

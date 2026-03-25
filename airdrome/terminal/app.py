@@ -1,7 +1,7 @@
 import typer
-from rich.console import Console
 from sqlmodel import SQLModel
 
+from airdrome.console import console
 from airdrome.models import engine
 
 from .library import library_app
@@ -11,8 +11,6 @@ from .scrobble import scrobble_app
 
 # create any missing tables
 SQLModel.metadata.create_all(engine, checkfirst=True)
-
-console = Console()
 
 app = typer.Typer(help="Airdrome CLI")
 app.add_typer(library_app, name="library")

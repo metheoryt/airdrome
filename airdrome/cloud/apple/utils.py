@@ -1,6 +1,8 @@
 import os  # os.walk is useful for bottom-up traversal
 from pathlib import Path
 
+from airdrome.console import console
+
 
 def remove_empty_dirs_recursively(root_dir_path: Path):
     """
@@ -11,7 +13,7 @@ def remove_empty_dirs_recursively(root_dir_path: Path):
                        empty subdirectories.
     """
     if not root_dir_path.is_dir():
-        print(f"Provided path is not a directory: {root_dir_path}")
+        console.print(f"[bold red]Not a directory: {root_dir_path}[/bold red]")
         return
 
     # os.walk(topdown=False) traverses from the deepest directories upwards,
@@ -21,12 +23,10 @@ def remove_empty_dirs_recursively(root_dir_path: Path):
         # that haven't already been deleted by previous iterations.
         if not dirnames and not filenames:
             try:
-                # Use Path.rmdir() to attempt removal
                 Path(dirpath).rmdir()
-                print(f"Removed empty directory: {dirpath}")
+                console.print(f"[dim]removed empty dir: {dirpath}[/dim]")
             except OSError as e:
-                # This might happen if another process creates a file, or for permissions issues
-                print(f"Error removing directory {dirpath}: {e}")
+                console.print(f"[yellow]could not remove {dirpath}: {e}[/yellow]")
             # except FileNotFoundError:
             #     # Sometimes a race condition might occur (?)
             #     pass

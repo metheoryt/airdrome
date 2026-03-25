@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlmodel import Session, func, select
 
+from .console import console
 from .models import Track
 
 
@@ -77,8 +78,8 @@ def find_best_track(
             f"{track.artist_norm[:25]:<25} | "
             f"{track.album_artist_norm[:25]:<25}"
         )
-        print(f"alias {score_val:.03f}:", alias_l)
-        print(f"track {score_val:.03f}:", track_l)
-        print()
+        console.print(f"[dim]low confidence {score_val:.03f}[/dim]")
+        console.print(f"[dim]  alias: {alias_l}[/dim]")
+        console.print(f"[dim]  track: {track_l}[/dim]")
 
     return track

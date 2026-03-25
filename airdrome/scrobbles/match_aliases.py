@@ -1,26 +1,25 @@
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from sqlmodel import Session, select, update
 
+from airdrome.console import console
 from airdrome.match import find_best_track
 from airdrome.models import TrackAlias, engine
 
 
-progress = Progress(
-    TextColumn("[progress.description]{task.description}"),
-    BarColumn(),
-    TextColumn("✅ {task.fields[match]}  "),
-    TextColumn("⚠️ {task.fields[multimatch]}  "),
-    TextColumn("❌ {task.fields[mismatch]}  "),
-    TimeElapsedColumn(),
-)
-
-
 def match_aliases(reset: bool = False, dry_run: bool = False, threshold: float = 0.4):
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("✅ {task.fields[match]}  "),
+        TextColumn("⚠️ {task.fields[multimatch]}  "),
+        TextColumn("❌ {task.fields[mismatch]}  "),
+        TimeElapsedColumn(),
+    )
     with Session(engine) as s, progress:
         if reset:
             s.exec(update(TrackAlias).values(track_id=None))
             s.flush()
-            print("dropped all alias-track links")
+            console.print("[yellow]dropped all alias-track links[/yellow]")
 
         aliases = s.exec(select(TrackAlias).where(TrackAlias.track_id.is_(None))).all()
 
@@ -56,7 +55,7 @@ def match_aliases(reset: bool = False, dry_run: bool = False, threshold: float =
 
         if dry_run:
             s.rollback()
-            print("dry run, no changes were made")
+            console.print("[dim]dry run — no changes saved[/dim]")
         else:
             s.commit()
-            print("changes committed")
+            console.print("[green]changes committed[/green]")

@@ -1,11 +1,11 @@
 from pathlib import Path
 
 import typer
-from rich.console import Console
 from sqlmodel import Session, update
 
 from airdrome.cloud.apple.ingest import import_apple_library
 from airdrome.conf import settings
+from airdrome.console import console
 from airdrome.library.organize import organize_library
 from airdrome.library.scan import MusicScanner
 from airdrome.models import Track, engine
@@ -14,7 +14,6 @@ from airdrome.normalize.names import normalize_alias_names, normalize_track_file
 
 
 library_app = typer.Typer(help="Library tools")
-console = Console()
 
 
 @library_app.command("import-apple")
@@ -57,7 +56,7 @@ def deduplicate_cli(reset: bool = typer.Option(False, "--reset", "-r")):
     with Session(engine) as session:
         if reset:
             session.exec(update(Track).values(canon_id=None))
-            print("Duplicates data reset")
+            console.print("[yellow]duplicates data reset[/yellow]")
 
         deduplicate_tracks(session)
 

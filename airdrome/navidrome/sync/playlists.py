@@ -1,6 +1,7 @@
 from sqlmodel import Session, func, select
 
 from airdrome.cloud.apple.models import ApplePlaylist, ApplePlaylistTrack, AppleTrack
+from airdrome.console import console
 from airdrome.models import Track, TrackFile, engine
 
 from ..models import MediaFile, Playlist as NVPlaylist, PlaylistTracks, User, get_nv_engine
@@ -16,7 +17,7 @@ def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Ses
         select(MediaFile).where(MediaFile.path == track.main_file.navidrome_path)
     ).one_or_none()
     if not media_file:
-        print("cant find in navidrome:", track.main_file.navidrome_path)
+        console.print(f"[yellow]not found in Navidrome: {track.main_file.navidrome_path}[/yellow]")
         return
 
     media_file: MediaFile
@@ -27,7 +28,6 @@ def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Ses
         )
     ).one_or_none()
     if mediafile_in_playlist:
-        print(f"already in nv playlist: {track!r}")
         return
 
     # get next id for the playlist
@@ -118,10 +118,9 @@ def sync_apple_playlists_to_navi(username: str):
         playlists_handled = 0
         for playlist in s.exec(playlists_stmt):
             nv_playlist, added, total = sync_apple_playlist(playlist, user.id, s, nvs)
-            stat = f"{added}/{total}"
-            print(f"{stat:<9}", "tracks added to navidrome playlist", nv_playlist.name)
             if added > 0:
                 playlists_handled += 1
+            console.print(f"  [cyan]{added}/{total}[/cyan]  {nv_playlist.name}")
 
         nvs.commit()
-        print(playlists_handled, "playlists imported")
+        console.print(f"[green]{playlists_handled} playlists imported[/green]")

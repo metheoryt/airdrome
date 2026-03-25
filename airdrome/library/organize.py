@@ -1,8 +1,9 @@
 import shutil
 from pathlib import Path
 
-from sqlmodel import Session, select, update
+from sqlmodel import Session, func, select, update
 
+from airdrome.console import console, make_progress
 from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
 from airdrome.models import Track, TrackFile, engine
 
@@ -40,9 +41,10 @@ class FileOrganizer:
         if len(files) > 1:
             main_tf = self.select_main(files)
             copies = [tf for tf in files if tf.id != main_tf.id]
-            print("multiple files found:")
+            console.print("[dim]multiple files — picking best:[/dim]")
             for tf in files:
-                print("V" if tf.id == main_tf.id else " ", tf.source_path)
+                marker = "[green]✓[/green]" if tf.id == main_tf.id else " "
+                console.print(f"[dim]  {marker} {tf.source_path}[/dim]")
             # input("Press enter to continue...")
         else:
             main_tf, copies = files[0], []
@@ -137,32 +139,29 @@ def organize_library(
     reset: bool = False,
 ):
     mover = FileOrganizer(dst_dir=dst_dir, copy=copy)
-    i = 0
+    verb = "copied" if copy else "moved"
     with Session(engine) as s:
         if reset:
             s.exec(update(TrackFile).values(library_path=None, is_main=False))
-            print("resetting library paths")
             s.commit()
-            print("done")
+            console.print("[yellow]library paths reset[/yellow]")
 
-        for track in s.exec(
-            select(Track)
-            .where(Track.files.any(TrackFile.library_path.is_(None)))
-            .order_by(Track.artist_norm, Track.album_norm, Track.title_norm)
-        ):
-            track: Track
-            # print("track", track.table_row)
-            new_path = mover.transfer_track(track)
-            if new_path:
-                i += 1
-                if i % 100 == 0:
-                    s.flush()
+        pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
+        total = s.exec(select(func.count()).select_from(pending_stmt.subquery())).one()
+        if not total:
+            console.print("[dim]Nothing to do.[/dim]")
+            return
 
-                print(i, "tracks", "copied" if copy else "moved", end="\r", flush=True)
-        if i:
-            print()
-            print("committing...")
-            s.commit()
-            print("Done!")
-        else:
-            print("Nothing to do.")
+        i = 0
+        with make_progress() as progress:
+            task = progress.add_task(f"Organizing library ({verb})", total=total)
+            for track in s.exec(pending_stmt.order_by(Track.artist_norm, Track.album_norm, Track.title_norm)):
+                new_path = mover.transfer_track(track)
+                if new_path:
+                    i += 1
+                    if i % 100 == 0:
+                        s.flush()
+                progress.advance(task)
+
+        s.commit()
+        console.print(f"[green]{i} tracks {verb}[/green]")

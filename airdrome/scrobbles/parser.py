@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterator
 
@@ -6,6 +7,15 @@ from sqlmodel import Session, select
 
 from airdrome.enums import Platform
 from airdrome.models import TrackAlias, TrackAliasScrobble
+
+
+@dataclass
+class ImportStats:
+    aliases_created: int = 0
+    aliases_ignored: int = 0
+    aliases_skipped: int = 0
+    scrobbles_created: int = 0
+    scrobbles_ignored: int = 0
 
 
 class ScrobbleParser:
@@ -24,29 +34,29 @@ class ScrobbleParser:
         for alias, dates in track(aliases.values(), description=f"Processing {len(aliases)} aliases"):
             yield alias, sorted(dates)
 
-    def import_aliases_scrobbles(self, s: Session):
-        aliases_imported = aliases_ignored = aliases_skipped = scrobbles_imported = scrobbles_ignored = 0
+    def import_aliases_scrobbles(self, s: Session) -> ImportStats:
+        stats = ImportStats()
         for alias, dates in self._scrobble_list_by_alias():
             new_scrobbles = self.get_fresh_scrobbles(s, dates)
-            scrobbles_imported += len(new_scrobbles)
-            scrobbles_ignored += len(dates) - len(new_scrobbles)
+            stats.scrobbles_created += len(new_scrobbles)
+            stats.scrobbles_ignored += len(dates) - len(new_scrobbles)
             if not new_scrobbles:
-                aliases_skipped += 1
+                stats.aliases_skipped += 1
                 continue
 
             alias, created = TrackAlias.get_or_create(
                 s, title=alias.title, artist=alias.artist, album=alias.album
             )
             if created:
-                aliases_imported += 1
+                stats.aliases_created += 1
             else:
-                aliases_ignored += 1
+                stats.aliases_ignored += 1
 
             alias.scrobbles.extend(new_scrobbles)
             s.flush()
 
         s.commit()
-        return aliases_imported, aliases_ignored, aliases_skipped, scrobbles_imported, scrobbles_ignored
+        return stats
 
     def get_fresh_scrobbles(self, s: Session, dates: list[datetime]) -> list[TrackAliasScrobble]:
         # search for date only, since this is a single-user database

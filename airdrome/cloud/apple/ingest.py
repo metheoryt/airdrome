@@ -4,6 +4,7 @@ from pathlib import Path
 from rich.progress import track as track_progress
 from sqlmodel import Session, delete, exists, select
 
+from airdrome.console import console
 from airdrome.models import Track, TrackFile, engine
 
 from .models import ApplePlaylist, ApplePlaylistImport, ApplePlaylistTrack, AppleTrack
@@ -23,12 +24,11 @@ def get_track_full_paths(t: AppleTrack, root_dir: str) -> set[Path]:
 
 def import_apple_library(xml_filename: str, root_dir: str, reset: bool = False):
     if reset:
-        print("Purging imported Apple library...")
         with Session(engine) as s:
             s.exec(delete(Track).where(exists().where(AppleTrack.track_id == Track.id)))
             s.exec(delete(ApplePlaylist))
             s.commit()
-        print("Apple library purged")
+        console.print("[yellow]Apple library purged[/yellow]")
 
     with open(xml_filename, "rb") as f:
         plist = plistlib.load(f)
@@ -79,11 +79,7 @@ def import_apple_library(xml_filename: str, root_dir: str, reset: bool = False):
         ):
             pl_import = ApplePlaylistImport(**pl)
             if pl_import.smart_info:
-                print("Skipping smart playlist", pl_import.name)
-                continue
-            pl_import = ApplePlaylistImport(**pl)
-            if pl_import.smart_info:
-                print("Skipping smart playlist", pl_import.name)
+                console.print(f"[dim]skipping smart playlist: {pl_import.name}[/dim]")
                 continue
 
             pl_db = s.exec(
@@ -112,8 +108,8 @@ def import_apple_library(xml_filename: str, root_dir: str, reset: bool = False):
                 s.add(apt)
                 seen.add(pls_track.apple_track_id)
             s.flush()
-            print(f"Imported {len(seen):>7} tracks into", pl_import.name)
+            console.print(f"  [cyan]{len(seen):>7}[/cyan]  {pl_import.name}")
 
         # commit at the end
         s.commit()
-    print("Apple library import finished")
+    console.print("[green]Apple library import finished[/green]")

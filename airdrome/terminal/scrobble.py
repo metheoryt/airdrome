@@ -7,6 +7,7 @@ from airdrome.cloud.apple.scrobbles import AppleScrobbleParser
 from airdrome.cloud.lastfm import LastFMScrobbleParser
 from airdrome.cloud.listenbrainz import ListenBrainzScrobbleParser
 from airdrome.cloud.spotify import SpotifyScrobbleParser
+from airdrome.console import console
 from airdrome.enums import Platform
 from airdrome.models import TrackAlias, engine
 from airdrome.scrobbles.augment_aliases import augment_aliases
@@ -35,12 +36,17 @@ def scrobble_import(
     with Session(engine) as session:
         if recreate:
             TrackAlias.truncate_cascade(session)
-            print("all previous track aliases/scrobbles are truncated")
-        print("Importing", parser.platform, "scrobbles")
-        aim, aig, ask, sim, sig = parser.import_aliases_scrobbles(session)
-        print(parser.platform, "stats:")
-        print("Aliases created/ignored/skipped:", f"{aim}/{aig}/{ask}")
-        print("Scrobbles created/skipped:", f"{sim}/{sig}")
+            console.print("[yellow]all previous track aliases/scrobbles truncated[/yellow]")
+        console.print(f"Importing [bold]{parser.platform}[/bold] scrobbles")
+        stats = parser.import_aliases_scrobbles(session)
+        console.print(
+            f"  aliases:   [cyan]{stats.aliases_created}[/cyan] created "
+            f"/ {stats.aliases_ignored} ignored "
+            f"/ {stats.aliases_skipped} skipped"
+        )
+        console.print(
+            f"  scrobbles: [cyan]{stats.scrobbles_created}[/cyan] created / {stats.scrobbles_ignored} ignored"
+        )
 
 
 @scrobble_app.command("augment", help="run this after importing all scrobbles, to augment existing aliases")

@@ -1,8 +1,10 @@
 from collections import defaultdict
 from datetime import UTC, datetime
 
+from rich.progress import TextColumn
 from sqlmodel import Session, delete, func, select
 
+from airdrome.console import console, make_progress
 from airdrome.models import Track, TrackAlias, TrackAliasScrobble, TrackFile, engine
 
 from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, get_nv_engine
@@ -185,19 +187,25 @@ class TrackSyncer:
                     delete(Scrobbles).where(Scrobbles.submission_time < latest_scrobble.date.timestamp())
                 )
                 nvs.commit()
-                print(f"deleted {res.rowcount} scrobbles older than", latest_scrobble.date.isoformat())
+                console.print(
+                    f"[yellow]deleted {res.rowcount} scrobbles older than "
+                    f"{latest_scrobble.date.isoformat()}[/yellow]"
+                )
 
         stmt = (
             select(Track)
             .join(TrackFile, (TrackFile.track_id == Track.id) & (TrackFile.is_main.is_(True)))
             .where(TrackFile.library_path.is_not(None))
         )
+        total = s.exec(select(func.count()).select_from(stmt.subquery())).one()
 
         i = pc = 0
-        for track in s.exec(stmt):
-            i += 1
-            pc += self.update_track(track, s, nvs)
-            print(f"{i:>6} tracks with {pc:>8} total plays synced", end="\r", flush=True)
+        with make_progress(TextColumn("  [cyan]{task.fields[plays]}[/cyan] plays")) as progress:
+            task = progress.add_task("Syncing tracks to Navidrome", total=total, plays=0)
+            for track in s.exec(stmt):
+                i += 1
+                pc += self.update_track(track, s, nvs)
+                progress.update(task, advance=1, plays=pc)
 
         nvs.commit()
-        print()
+        console.print(f"[green]{i} tracks synced with {pc} total plays[/green]")
