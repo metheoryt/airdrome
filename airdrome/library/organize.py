@@ -1,15 +1,13 @@
 import shutil
 from pathlib import Path
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, update
 
+from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
 from airdrome.models import Track, TrackFile, engine
 
 
 class FileOrganizer:
-    MAIN_SUBDIR = "Library"
-    COPIES_SUBDIR = "Copies"
-
     def __init__(self, dst_dir: Path, copy: bool = False):
         self.dst_dir = dst_dir
         self.copy = copy
@@ -23,6 +21,7 @@ class FileOrganizer:
         """
         # for the same bitrate, prefer m4a over mp3
         ext_priority = {
+            "flac": 3,
             "m4a": 2,
             "mp3": 1,
         }
@@ -74,23 +73,23 @@ class FileOrganizer:
         # return a real path, with the correct case
         return new.resolve()
 
-    def transfer_file(self, tf: TrackFile, dst_rel: Path, dst_dir: Path) -> Path | None:
+    def transfer_file(self, tf: TrackFile, dst_rel: Path) -> Path | None:
         """
         Transfer a single file to a destination directory.
 
         Write the relative library path to the TrackFile instance library path.
         Return the relative path of the transferred file if it was transferred, None otherwise.
         """
-        if tf.library_path and (dst_dir / tf.library_path).exists():
+        if tf.library_path and (self.dst_dir / tf.library_path).exists():
             # Already transferred before
-            print("Already transferred:", tf.library_path, "->", dst_rel, " (skipped")
+            # print("Already transferred:", tf.library_path, "->", dst_rel, " (skipped")
             return None
 
         dst_abs_real = self.transfer(
             src_abs=tf.source_path,
-            dst_abs=dst_dir / dst_rel,
+            dst_abs=self.dst_dir / dst_rel,
         )
-        dst_rel_real = dst_abs_real.relative_to(dst_dir)
+        dst_rel_real = dst_abs_real.relative_to(self.dst_dir)
         tf.library_path = dst_rel_real
         return dst_rel_real
 
@@ -121,24 +120,31 @@ class FileOrganizer:
 
         # main file
         dst_rel = t.generate_relative_path(ext=main_tf.source_path.suffix[1:])
-        new_path = self.transfer_file(main_tf, dst_rel=Path(self.MAIN_SUBDIR) / dst_rel, dst_dir=self.dst_dir)
+        new_path = self.transfer_file(main_tf, dst_rel=Path(MAIN_SUBDIR) / MUSIC_SUBDIR / dst_rel)
         if not new_path:
             return None
 
         # copies
         for i, copy_tf in enumerate(copies):
             dst_rel = t.generate_relative_path(ext=copy_tf.source_path.suffix[1:], suffix=i)
-            self.transfer_file(copy_tf, dst_rel=Path(self.COPIES_SUBDIR) / dst_rel, dst_dir=self.dst_dir)
+            self.transfer_file(copy_tf, dst_rel=Path(COPIES_SUBDIR) / MUSIC_SUBDIR / dst_rel)
         return new_path
 
 
 def organize_library(
     dst_dir: Path,
     copy: bool = False,
+    reset: bool = False,
 ):
     mover = FileOrganizer(dst_dir=dst_dir, copy=copy)
     i = 0
     with Session(engine) as s:
+        if reset:
+            s.exec(update(TrackFile).values(library_path=None, is_main=False))
+            print("resetting library paths")
+            s.commit()
+            print("done")
+
         for track in s.exec(
             select(Track)
             .where(Track.files.any(TrackFile.library_path.is_(None)))

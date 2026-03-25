@@ -12,6 +12,7 @@ from sqlmodel import Field, Index, Relationship, Session, SQLModel, create_engin
 from .cloud.apple.utils import generate_path
 from .conf import settings
 from .enums import Platform
+from .library import MAIN_SUBDIR
 from .normalize.norm import normalize_name
 
 
@@ -124,6 +125,8 @@ class Track(Base, table=True):
     album_artist_norm: str = Field("")
     album_norm: str = Field("")
 
+    rating: int | None = Field(None)
+
     # duplicates
     canon_id: int | None = Field(None, foreign_key="track.id", index=True, ondelete="SET NULL")
     canon: Optional["Track"] = Relationship(
@@ -135,6 +138,10 @@ class Track(Base, table=True):
     apple_tracks: list["AppleTrack"] = Relationship(back_populates="track", cascade_delete=True)
     aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
     files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
+    plays: list["TrackPlay"] = Relationship(back_populates="track", cascade_delete=True)  # direct play events
+
+    def __repr__(self):
+        return f"<Track {self.title} by {self.artist} on {self.album}>"
 
     @property
     def table_row(self) -> tuple[str, str | None, str | None, str | None]:
@@ -229,7 +236,9 @@ class TrackFile(Base, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
 
+    # absolute path of the original file
     source_path: Path = Field(sa_column=sa.Column(PathType(), nullable=False, unique=True))
+    # relative path of the file in the library (after organizing)
     library_path: Path | None = Field(None, sa_column=sa.Column(PathType(), nullable=True, unique=True))
     is_main: bool = Field(False, nullable=False)
 
@@ -249,6 +258,13 @@ class TrackFile(Base, table=True):
     artist_norm: str = Field("")
     album_artist_norm: str = Field("")
     album_norm: str = Field("")
+
+    @property
+    def navidrome_path(self) -> str | None:
+        """Path relative to the Navidrome root (Library/), used for MediaFile matching."""
+        if self.library_path and self.library_path.parts[0] == MAIN_SUBDIR:
+            return self.library_path.relative_to(MAIN_SUBDIR).as_posix()
+        return None
 
     @property
     def absolute_path(self) -> Path:
@@ -364,6 +380,18 @@ class TrackAliasScrobble(Base, table=True):
     alias_id: int = Field(foreign_key="trackalias.id", index=True, ondelete="CASCADE")
     alias: TrackAlias = Relationship(back_populates="scrobbles")
     date: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), unique=True))
+    platform: Platform
+
+
+class TrackPlay(Base, table=True):
+    """A play event linked directly to a canonical Track (no alias matching required)."""
+
+    __table_args__ = (UniqueConstraint("track_id", "played_at"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
+    track: Track = Relationship(back_populates="plays")
+    played_at: AwareDatetime
     platform: Platform
 
 

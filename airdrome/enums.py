@@ -1,4 +1,3 @@
-import enum
 from enum import StrEnum
 
 
@@ -7,3 +6,4 @@ class Platform(StrEnum):
     LASTFM = "lastfm"
     APPLE = "apple"
     LISTENBRAINZ = "listenbrainz"
+    NAVIDROME = "navidrome"

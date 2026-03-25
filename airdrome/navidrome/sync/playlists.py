@@ -1,9 +1,9 @@
 from sqlmodel import Session, func, select
 
-from airdrome.cloud.apple.models import ApplePlaylist, ApplePlaylistTrack
-from airdrome.models import Track, engine
+from airdrome.cloud.apple.models import ApplePlaylist, ApplePlaylistTrack, AppleTrack
+from airdrome.models import Track, TrackFile, engine
 
-from ..models import MediaFile, Playlist as NVPlaylist, PlaylistTracks, User, engine as nv_engine
+from ..models import MediaFile, Playlist as NVPlaylist, PlaylistTracks, User, get_nv_engine
 
 
 def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Session, nvs: Session):
@@ -13,10 +13,10 @@ def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Ses
 
     # match the track between the systems by the path
     media_file = nvs.exec(
-        select(MediaFile).where(MediaFile.path == track.main_file.library_path)
+        select(MediaFile).where(MediaFile.path == track.main_file.navidrome_path)
     ).one_or_none()
     if not media_file:
-        print("cant find in navidrome:", track)
+        print("cant find in navidrome:", track.main_file.navidrome_path)
         return
 
     media_file: MediaFile
@@ -27,7 +27,7 @@ def make_playlist_track(apt: ApplePlaylistTrack, nv_playlist: NVPlaylist, s: Ses
         )
     ).one_or_none()
     if mediafile_in_playlist:
-        # print("already in nv playlist:", track.short_info)
+        print(f"already in nv playlist: {track!r}")
         return
 
     # get next id for the playlist
@@ -61,7 +61,10 @@ def sync_apple_playlist(
 
     playlist_tracks_stmt = (
         select(ApplePlaylistTrack)
-        .where(ApplePlaylistTrack.playlist_id == playlist.id)
+        .join(AppleTrack)
+        .join(Track)
+        .join(TrackFile)
+        .where(ApplePlaylistTrack.playlist_id == playlist.id, TrackFile.is_main.is_(True))
         .order_by(ApplePlaylistTrack.position)
     )
 
@@ -105,7 +108,7 @@ def sync_apple_playlists_to_navi(username: str):
 
     The procedure is safe to rerun multiple times.
     """
-    with Session(engine) as s, Session(nv_engine) as nvs:
+    with Session(engine) as s, Session(get_nv_engine()) as nvs:
         user = nvs.exec(select(User).where(User.user_name == username)).one()
 
         playlists_stmt = select(ApplePlaylist).where(

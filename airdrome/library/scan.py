@@ -51,7 +51,7 @@ class MusicScanner:
         with Session(engine) as s, self.progress:
             n_created = n_tracks_created = 0
             task_id = self.progress.add_task(
-                f"Indexing {self.target_path}",
+                f"Scanning {self.target_path}",
                 total=None,
                 file_created=n_created,
                 track_created=n_tracks_created,

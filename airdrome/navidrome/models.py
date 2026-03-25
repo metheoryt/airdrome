@@ -1,6 +1,6 @@
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 
 from sqlalchemy.orm import registry
@@ -13,7 +13,16 @@ class NVSQLModel(SQLModel, registry=registry()):
     pass
 
 
-engine = create_engine(settings.navidrome_db_dsn, echo=False)
+_engine = None
+
+
+def get_nv_engine():
+    global _engine
+    if _engine is None:
+        if not settings.navidrome_db_dsn:
+            raise RuntimeError("NAVIDROME_DB_DSN is not configured in .env")
+        _engine = create_engine(settings.navidrome_db_dsn, echo=False)
+    return _engine
 
 
 # these are existing Navidrome tables, only declare columns that are needed
@@ -45,8 +54,8 @@ class Playlist(NVSQLModel, table=True):
     duration: float = Field(0)
     song_count: int = Field(0)
     public: bool = Field(False)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     path: str = Field("")
     sync: bool = Field(False)
     size: int = Field(0)

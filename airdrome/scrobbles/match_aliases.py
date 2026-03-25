@@ -35,7 +35,9 @@ def match_aliases(reset: bool = False, dry_run: bool = False, threshold: float =
         for alias in aliases:
             alias: TrackAlias
 
-            track = find_best_track(s, alias, threshold=threshold)
+            track = find_best_track(
+                s, alias.title_norm, alias.artist_norm, alias.album_norm, threshold=threshold
+            )
             if track:
                 match += 1
                 alias.track = track
