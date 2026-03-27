@@ -9,7 +9,7 @@ from airdrome.console import console
 from airdrome.library.organize import organize_library
 from airdrome.library.scan import MusicScanner
 from airdrome.models import Track, engine
-from airdrome.normalize.dedup import deduplicate_tracks
+from airdrome.normalize.dedup import Deduplicator
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
 
@@ -57,8 +57,7 @@ def deduplicate_cli(reset: bool = typer.Option(False, "--reset", "-r")):
         if reset:
             session.exec(update(Track).values(canon_id=None))
             console.print("[yellow]duplicates data reset[/yellow]")
-
-        deduplicate_tracks(session)
+        Deduplicator(session).run()
 
 
 @library_app.command()

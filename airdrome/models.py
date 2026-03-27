@@ -148,6 +148,12 @@ class Track(Base, table=True):
         return self.title, self.artist, self.album_artist, self.album
 
     @property
+    def duplicate_hash(self):
+        return ";".join(
+            str(v) if v is not None else "" for v in [self.title, self.artist, self.album_artist, self.album]
+        )
+
+    @property
     def main_file(self) -> Optional["TrackFile"]:
         return next((t for t in self.files if t.is_main), None)
 

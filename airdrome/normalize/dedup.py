@@ -1,16 +1,15 @@
+from dataclasses import dataclass, field
+
 from rich.console import Group
 from rich.panel import Panel
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
-from sqlmodel import Session, func, select
+from sqlmodel import Column, Session, func, select
 
-from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.models import Track
-
-from .schemas import DupGroup
 
 
 def get_table_rows(t: Track) -> list[list[str]]:
@@ -88,173 +87,178 @@ def compose_table(key: str, tracks: list[Track], canons: list[int | None]):
     return table
 
 
-def prompt_duplicate_group(key: str, tracks: list[Track], progress: Progress) -> DupGroup | None:
-    members = [t.id for t in tracks]
-    canons = [t.canon_id for t in tracks]
+@dataclass
+class Page:
+    tracks: list[Track]
+    canons: list[int | None]
+    chosen_canons: list[int | None] = field(default_factory=list)
 
-    instruction_text = Text.from_markup(
-        "[bold]Enter[/bold] to confirm current state\n"
-        "[bold]1[/bold] - to mark 1 as a canon and others as twins\n"
-        "[bold]1 2 3[/bold] - to mark 1 as a canon of 2 and 3\n",
-    )
-    skip = confirm = False
-    feedback_text = Text()
-    while True:
-        table = compose_table(key, tracks, canons)
 
-        ui_group = Group(
-            table,
-            Panel(feedback_text, title="Feedback", border_style="dim blue"),
-            Panel(
-                instruction_text,
-                title="Instructions",
-                subtitle="[[bold]r[/bold]] reset choices | "
-                "[[bold]s[/bold]] skip group | "
-                "[[bold]Enter[/bold]] finish",
-                style="dim",
-            ),
-            progress,
+@dataclass
+class DeduplicatorState:
+    pages: dict[str, Page]
+    current_idx: int
+    pages_iter: list[tuple[str, Page]] = None
+
+    def __post_init__(self):
+        self.pages_iter = list(self.pages.items())
+
+
+class Deduplicator:
+    COLUMN_SETS = [
+        [Track.artist_norm, Track.title_norm],
+        [Track.album_artist_norm, Track.title_norm],
+        [Track.album_norm, Track.title_norm],
+    ]
+
+    def __init__(self, s: Session):
+        self.s = s
+        self.progress = Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
         )
+        self.state: DeduplicatorState | None = None
 
-        console.clear()
-        console.print(ui_group)
+    def prompt_duplicate_group(self, key: str, tracks: list[Track]):
+        members = [t.id for t in tracks]
+        canons = [t.canon_id for t in tracks]
 
-        entry = Prompt.ask("Write here")
-        if not entry:
-            # Enter to confirm choices
-            if not confirm:
-                confirm = True
-                feedback_text = Text("Enter to confirm", style="bold yellow")
+        instruction_text = Text.from_markup(
+            "[bold]Enter[/bold] to confirm current state\n"
+            "[bold]1[/bold] - to mark 1 as a canon and others as twins\n"
+            "[bold]1 2 3[/bold] - to mark 1 as a canon of 2 and 3\n",
+        )
+        skip = confirm = False
+        feedback_text = Text()
+        while True:
+            table = compose_table(key, tracks, canons)
+
+            ui_group = Group(
+                table,
+                Panel(feedback_text, title="Feedback", border_style="dim blue"),
+                Panel(
+                    instruction_text,
+                    title="Instructions",
+                    subtitle="[[bold]r[/bold]] reset choices | "
+                    "[[bold]s[/bold]] skip group | "
+                    "[[bold]Enter[/bold]] finish",
+                    style="dim",
+                ),
+                self.progress,
+            )
+
+            console.clear()
+            console.print(ui_group)
+
+            entry = Prompt.ask("Write here")
+            if not entry:
+                # Enter to confirm choices
+                if not confirm:
+                    confirm = True
+                    feedback_text = Text("Enter to confirm", style="bold yellow")
+                    continue
+                break
+
+            if entry.strip().lower() == "s":
+                skip = confirm = True
+                feedback_text = Text("The group will be skipped. Enter to continue...", style="bold yellow")
                 continue
-            break
 
-        if entry.strip().lower() == "s":
-            skip = confirm = True
-            feedback_text = Text("The group will be skipped. Enter to continue...", style="bold yellow")
-            continue
+            elif entry.strip().lower() == "r":
+                # reset choices
+                skip = confirm = False
+                canons = [t.canon_id for t in tracks]
+                feedback_text = Text("Choices are reset", style="bold yellow")
+                continue
 
-        elif entry.strip().lower() == "r":
-            # reset choices
-            canons = [t.canon_id for t in tracks]
-            feedback_text = Text("Choices are reset", style="bold yellow")
-            continue
+            if entry.strip().isdigit():
+                # entry = "canon_idx"
+                # the rest are twins
+                canon_idx = int(entry.strip()) - 1
+                member_idxs = [i for i in range(len(members)) if i != canon_idx]
+            else:
+                # this is not a digit, means this is 2 digits
+                try:
+                    # entry = "canon_idx twin_idx[ twin_idx]"
+                    canon_idx, *member_idxs = [int(v) - 1 for v in entry.split()]
+                except ValueError:
+                    feedback_text = Text("Can't parse:", style="bold red")
+                    feedback_text.append(" use format ")
+                    feedback_text.append("canon_idx[ twin_idx]", style="bold")
+                    continue
 
-        if entry.strip().isdigit():
-            # entry = "canon_idx"
-            # the rest are twins
-            canon_idx = int(entry.strip()) - 1
-            member_idxs = [i for i in range(len(members)) if i != canon_idx]
-        else:
-            # this is not a digit, means this is 2 digits
             try:
-                # entry = "canon_idx twin_idx[ twin_idx]"
-                canon_idx, *member_idxs = [int(v) - 1 for v in entry.split()]
-            except ValueError:
-                feedback_text = Text("Can't parse:", style="bold red")
-                feedback_text.append(" use format ")
-                feedback_text.append("canon_idx[ twin_idx]", style="bold")
-                continue
+                # second round of validation
+                for idx in (canon_idx, *member_idxs):
+                    if idx not in range(len(members)):
+                        raise ValueError(f"Index out of range: {canon_idx + 1}")
 
-        try:
-            # second round of validation
-            for idx in (canon_idx, *member_idxs):
-                if idx not in range(len(members)):
-                    raise ValueError(f"Index out of range: {canon_idx + 1}")
+                for member_idx in member_idxs:
+                    if canon_idx == member_idx:
+                        raise ValueError(f"Can't make the track as canon of itself: {canon_idx + 1}")
+                    if members[member_idx] in canons:
+                        raise ValueError(f"Already chosen as a canon: {member_idx + 1}")
+                    # already a twin
+                    if canons[canon_idx]:
+                        raise ValueError(f"Already has a canon: {canon_idx + 1}")
+            except ValueError as e:
+                feedback_text = Text(f"{e}", style="bold red")
+                continue
 
             for member_idx in member_idxs:
-                if canon_idx == member_idx:
-                    raise ValueError(f"Can't make the track as canon of itself: {canon_idx + 1}")
-                if members[member_idx] in canons:
-                    raise ValueError(f"Already chosen as a canon: {member_idx + 1}")
-                # already a twin
-                if canons[canon_idx]:
-                    raise ValueError(f"Already has a canon: {canon_idx + 1}")
-        except ValueError as e:
-            feedback_text = Text(f"{e}", style="bold red")
-            continue
+                canons[member_idx] = members[canon_idx]
 
-        for member_idx in member_idxs:
-            canons[member_idx] = members[canon_idx]
+            confirm = True
+            feedback_text = Text()
 
-        confirm = True
-        feedback_text = Text()
+        if skip:
+            return None
 
-    if skip:
-        return None
+    def serve(self):
+        if not self.state:
+            return
+        while True:
+            self.refresh()
 
-    return DupGroup(members=members, canons=canons)
-
-
-def deduplicate_group(
-    key: str, tracks: list[Track], s: Session, dupes: dict[str, DupGroup], progress: Progress
-):
-    group: DupGroup | None = dupes.get(key)
-
-    if not group:
-        group = prompt_duplicate_group(key, tracks, progress)
-
-    if not group:
-        # skip this group
-        return
-
-    for i in range(len(group.members)):
-        if group.canons[i]:
-            # this track has a canon, means it is a twin
-            track = tracks[i]
-            if track.canon_id and track.canon_id != group.canons[i]:
-                raise ValueError(
-                    f"Track {track.id} already has a canon: current {track.canon_id}, new {group.canons[i]}"
-                )
-            track.canon_id = group.canons[i]
-    s.flush()
-
-    dupes[key] = group
-
-
-def deduplicate_tracks(s: Session):
-    dupes: dict[str, DupGroup] = DupGroup.load(settings.duplicates_filepath)
-    progress = Progress(
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-    )
-
-    for cols in (
-        (Track.artist_norm, Track.title_norm),
-        (Track.album_artist_norm, Track.title_norm),
-        (Track.album_norm, Track.title_norm),
-    ):
-        combinations = s.exec(
+    def get_track_groups(self, cols: list[Column]) -> list[tuple[str, list[Track]]]:
+        combinations = self.s.exec(
             select(*cols, func.count(Track.id).label("count"))
-            .where(Track.canon_id.is_(None))  # exclude tracks already marked as twins
+            # .where(Track.canon_id.is_(None))  # exclude tracks already marked as twins
             .group_by(*cols)
             .having(func.count(Track.id) > 1)
             .order_by(*cols)
-        ).all()
-
-        col_names = "/".join([c.name for c in cols])
-        task_id = progress.add_task(f"Duplicates by {col_names}", total=len(combinations))
-        try:
-            for *col_vals, count in combinations:
-                col_to_val = list(zip(cols, col_vals))
-                tracks = s.exec(
+        )
+        groups = []
+        for *col_vals, count in combinations:
+            col_to_val = list(zip(cols, col_vals))
+            key = ",".join(f"{c.name}={v}" for c, v in col_to_val)
+            track_group = list(
+                self.s.exec(
                     select(Track)
-                    .where(Track.canon_id.is_(None), *[col == val for col, val in col_to_val])
+                    .where(
+                        # Track.canon_id.is_(None),
+                        *[col == val for col, val in col_to_val]
+                    )
                     .order_by(Track.id)
-                ).all()
+                )
+            )
+            groups.append((key, track_group))
+        return groups
 
-                key = ", ".join([f"{col.name}: {val}" for col, val in col_to_val])
-                deduplicate_group(key, list(tracks), s, dupes, progress)
-                progress.update(task_id, advance=1)
+    def fill_state(self):
+        pages = {}
+        for cols in self.COLUMN_SETS:
+            for key, tracks in self.get_track_groups(cols):
+                pages[key] = Page(
+                    tracks=tracks,
+                    canons=[t.canon_id for t in tracks],
+                    chosen_canons=[t.canon_id for t in tracks],
+                )
+        self.state = DeduplicatorState(pages=pages, current_idx=0)
 
-            # persist all changes
-            s.commit()
-            # also save choices to a filesystem
-            DupGroup.dump(dupes, settings.duplicates_filepath)
-            console.print(f"[green]Finished deduplication by {col_names}[/green]")
-
-        except KeyboardInterrupt:
-            # save choices permanently on ctrl+c, dont commit
-            DupGroup.dump(dupes, settings.duplicates_filepath)
-            console.print("[yellow]Interrupted — choices saved to disk[/yellow]")
-            raise
+    def run(self):
+        # fill the buffer with all the duplicate track groups
+        self.fill_state()
+        # run the selection UI
+        self.serve()
