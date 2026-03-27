@@ -12,6 +12,16 @@ from airdrome.console import console
 from airdrome.models import Track
 
 
+INSTRUCTION_TEXT = Text.from_markup(
+    "[bold]1[/bold] - mark 1 as canon, others as twins\n"
+    "[bold]1 2 3[/bold] - mark 1 as canon of 2 and 3\n"
+    "[bold]r[/bold] - reset choices for this group\n"
+    "[bold]a[/bold] / [bold]d[/bold] - previous / next group\n"
+    "[bold]c[/bold] - commit changes\n"
+    "[bold]q[/bold] - exit\n"
+)
+
+
 def get_table_rows(t: Track) -> list[list[str]]:
     rows = []
     base_row = [
@@ -92,6 +102,7 @@ class Page:
     tracks: list[Track]
     canons: list[int | None]
     chosen_canons: list[int | None] = field(default_factory=list)
+    confirmed: bool = False  # whether the user confirmed the choices
 
 
 @dataclass
@@ -119,107 +130,135 @@ class Deduplicator:
             MofNCompleteColumn(),
         )
         self.state: DeduplicatorState | None = None
+        self.feedback_text = Text()
 
-    def prompt_duplicate_group(self, key: str, tracks: list[Track]):
-        members = [t.id for t in tracks]
-        canons = [t.canon_id for t in tracks]
-
-        instruction_text = Text.from_markup(
-            "[bold]Enter[/bold] to confirm current state\n"
-            "[bold]1[/bold] - to mark 1 as a canon and others as twins\n"
-            "[bold]1 2 3[/bold] - to mark 1 as a canon of 2 and 3\n",
+    def render_page(self, key: str, page: Page):
+        table = compose_table(key, page.tracks, page.chosen_canons)
+        ui_group = Group(
+            table,
+            Panel(self.feedback_text, title="Feedback", border_style="dim blue"),
+            Panel(INSTRUCTION_TEXT, title="Instructions", style="dim"),
+            self.progress,
         )
-        skip = confirm = False
-        feedback_text = Text()
-        while True:
-            table = compose_table(key, tracks, canons)
+        console.clear()
+        console.print(ui_group)
 
-            ui_group = Group(
-                table,
-                Panel(feedback_text, title="Feedback", border_style="dim blue"),
-                Panel(
-                    instruction_text,
-                    title="Instructions",
-                    subtitle="[[bold]r[/bold]] reset choices | "
-                    "[[bold]s[/bold]] skip group | "
-                    "[[bold]Enter[/bold]] finish",
-                    style="dim",
-                ),
-                self.progress,
-            )
+    def handle_input(self, entry: str, page: Page) -> str | None:
+        """Process one input entry against the given page.
 
-            console.clear()
-            console.print(ui_group)
-
-            entry = Prompt.ask("Write here")
-            if not entry:
-                # Enter to confirm choices
-                if not confirm:
-                    confirm = True
-                    feedback_text = Text("Enter to confirm", style="bold yellow")
-                    continue
-                break
-
-            if entry.strip().lower() == "s":
-                skip = confirm = True
-                feedback_text = Text("The group will be skipped. Enter to continue...", style="bold yellow")
-                continue
-
-            elif entry.strip().lower() == "r":
-                # reset choices
-                skip = confirm = False
-                canons = [t.canon_id for t in tracks]
-                feedback_text = Text("Choices are reset", style="bold yellow")
-                continue
-
-            if entry.strip().isdigit():
-                # entry = "canon_idx"
-                # the rest are twins
-                canon_idx = int(entry.strip()) - 1
-                member_idxs = [i for i in range(len(members)) if i != canon_idx]
-            else:
-                # this is not a digit, means this is 2 digits
-                try:
-                    # entry = "canon_idx twin_idx[ twin_idx]"
-                    canon_idx, *member_idxs = [int(v) - 1 for v in entry.split()]
-                except ValueError:
-                    feedback_text = Text("Can't parse:", style="bold red")
-                    feedback_text.append(" use format ")
-                    feedback_text.append("canon_idx[ twin_idx]", style="bold")
-                    continue
-
-            try:
-                # second round of validation
-                for idx in (canon_idx, *member_idxs):
-                    if idx not in range(len(members)):
-                        raise ValueError(f"Index out of range: {canon_idx + 1}")
-
-                for member_idx in member_idxs:
-                    if canon_idx == member_idx:
-                        raise ValueError(f"Can't make the track as canon of itself: {canon_idx + 1}")
-                    if members[member_idx] in canons:
-                        raise ValueError(f"Already chosen as a canon: {member_idx + 1}")
-                    # already a twin
-                    if canons[canon_idx]:
-                        raise ValueError(f"Already has a canon: {canon_idx + 1}")
-            except ValueError as e:
-                feedback_text = Text(f"{e}", style="bold red")
-                continue
-
-            for member_idx in member_idxs:
-                canons[member_idx] = members[canon_idx]
-
-            confirm = True
-            feedback_text = Text()
-
-        if skip:
+        Mutates page.chosen_canons in place.
+        Returns (feedback_text, action) where action is "next", "prev", "commit", or None (stay).
+        """
+        self.feedback_text = Text()
+        cmd = entry.strip().lower()
+        if cmd == "":
+            # confirm the group setup, even if no changes were made
+            return "confirm"
+        if cmd == "q":
+            return "exit"
+        if cmd == "a":
+            return "prev"
+        if cmd == "d":
+            return "next"
+        if cmd == "c":
+            return "commit"
+        if cmd == "r":
+            page.chosen_canons = list(page.canons)
+            self.feedback_text = Text("Choices reset", style="bold yellow")
             return None
 
-    def serve(self):
-        if not self.state:
+        members = [t.id for t in page.tracks]
+        chosen = page.chosen_canons
+
+        if entry.strip().isdigit():
+            canon_idx = int(entry.strip()) - 1
+            member_idxs = [i for i in range(len(members)) if i != canon_idx]
+        else:
+            try:
+                canon_idx, *member_idxs = [int(v) - 1 for v in entry.split()]
+            except ValueError:
+                feedback = Text("Can't parse:", style="bold red")
+                feedback.append(" use format ")
+                feedback.append("canon_idx[ twin_idx]", style="bold")
+                self.feedback_text = feedback
+                return None
+
+        try:
+            for idx in (canon_idx, *member_idxs):
+                if idx not in range(len(members)):
+                    raise ValueError(f"Index out of range: {idx + 1}")
+            for member_idx in member_idxs:
+                if canon_idx == member_idx:
+                    raise ValueError(f"Can't mark track as canon of itself: {canon_idx + 1}")
+                if members[member_idx] in chosen:
+                    raise ValueError(f"Already chosen as a canon: {member_idx + 1}")
+                if chosen[canon_idx]:
+                    raise ValueError(f"Already has a canon: {canon_idx + 1}")
+        except ValueError as e:
+            self.feedback_text = Text(f"{e}", style="bold red")
+            return None
+
+        for member_idx in member_idxs:
+            page.chosen_canons[member_idx] = members[canon_idx]
+
+        return None
+
+    def apply_changes(self) -> int:
+        changed = 0
+        for key, page in self.state.pages_iter:
+            if not page.confirmed:
+                # do not commit unconfirmed changes
+                continue
+            for i, track in enumerate(page.tracks):
+                new_canon = page.chosen_canons[i]
+                if new_canon != page.canons[i]:
+                    track.canon_id = new_canon
+                    self.s.add(track)
+                    changed += 1
+        if changed:
+            self.s.commit()
+        return changed
+
+    def _update(self, task_id):
+        self.progress.update(task_id, completed=self.state.current_idx + 1)
+
+    def _serve(self):
+        if not self.state.pages_iter:
+            console.print("[green]No duplicates found.[/green]")
             return
+
+        total = len(self.state.pages_iter)
+        task_id = self.progress.add_task("Deduplicating", total=total)
+        self._update(task_id)
+
+        self.feedback_text = Text()
         while True:
-            self.refresh()
+            key, page = self.state.pages_iter[self.state.current_idx]
+            self.render_page(key, page)
+            entry = Prompt.ask("Write here")
+            action = self.handle_input(entry, page)
+
+            if action == "next":
+                if self.state.current_idx < total - 1:
+                    self.state.current_idx += 1
+                    self._update(task_id)
+                    self.feedback_text = Text()
+            elif action == "prev":
+                if self.state.current_idx > 0:
+                    self.state.current_idx -= 1
+                    self._update(task_id)
+                    self.feedback_text = Text()
+            elif action == "confirm":
+                page.confirmed = True
+                self.state.current_idx += 1
+                self._update(task_id)
+                self.feedback_text = Text()
+            elif action == "commit":
+                n = self.apply_changes()
+                self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
+            elif action == "exit":
+                console.print("[green]Exited.[/green]")
+                return
 
     def get_track_groups(self, cols: list[Column]) -> list[tuple[str, list[Track]]]:
         combinations = self.s.exec(
@@ -261,4 +300,4 @@ class Deduplicator:
         # fill the buffer with all the duplicate track groups
         self.fill_state()
         # run the selection UI
-        self.serve()
+        self._serve()
