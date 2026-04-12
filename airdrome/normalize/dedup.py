@@ -107,9 +107,9 @@ class Page:
 
 @dataclass
 class DeduplicatorState:
-    pages: dict[str, Page]
-    current_idx: int
-    pages_iter: list[tuple[str, Page]] = None
+    pages: dict[str, Page] = field(default_factory=dict)
+    current_idx: int = field(default=0)
+    pages_iter: list[tuple[str, Page]] = field(default_factory=list)
 
     def __post_init__(self):
         self.pages_iter = list(self.pages.items())
@@ -129,7 +129,7 @@ class Deduplicator:
             BarColumn(),
             MofNCompleteColumn(),
         )
-        self.state: DeduplicatorState | None = None
+        self.state: DeduplicatorState = DeduplicatorState()  # empty, filled by fill_state()
         self.feedback_text = Text()
 
     def render_page(self, key: str, page: Page):
