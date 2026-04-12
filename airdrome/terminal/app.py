@@ -19,6 +19,9 @@ app.add_typer(navidrome_app, name="navidrome")
 
 
 @app.callback(invoke_without_command=True)
+@library_app.callback(invoke_without_command=True)
+@scrobble_app.callback(invoke_without_command=True)
+@navidrome_app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
