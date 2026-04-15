@@ -40,7 +40,7 @@ def get_table_rows(t: Track) -> list[list[str]]:
         return rows
 
     for at in t.apple_tracks:
-        tt = None
+        tt = ""
         if at.total_time:
             secs = at.total_time // 1000
             tt = f"{secs // 60}:{secs % 60:02d}"
