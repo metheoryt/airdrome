@@ -1,4 +1,6 @@
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from rich.console import Group
 from rich.panel import Panel
@@ -122,8 +124,9 @@ class Deduplicator:
         [Track.album_norm, Track.title_norm],
     ]
 
-    def __init__(self, s: Session):
+    def __init__(self, s: Session, filepath: Path | None = None):
         self.s = s
+        self.filepath = filepath
         self.progress = Progress(
             TextColumn("[bold blue]{task.description}"),
             BarColumn(),
@@ -147,7 +150,7 @@ class Deduplicator:
         """Process one input entry against the given page.
 
         Mutates page.chosen_canons in place.
-        Returns (feedback_text, action) where action is "next", "prev", "commit", or None (stay).
+        Returns (feedback_text, action) where the action is "next", "prev", "commit", or None (stay).
         """
         self.feedback_text = Text()
         cmd = entry.strip().lower()
@@ -219,6 +222,51 @@ class Deduplicator:
             self.s.commit()
         return changed
 
+    def _dump(self, path: Path) -> None:
+        data: dict = {}
+        for key, page in self.state.pages_iter:
+            id_to_hash = {t.id: t.duplicate_hash for t in page.tracks}
+            data[key] = {
+                "members": [t.duplicate_hash for t in page.tracks],
+                "canon_hashes": [
+                    id_to_hash.get(canon_id) if canon_id is not None else None
+                    for canon_id in page.chosen_canons
+                ],
+                "confirmed": page.confirmed,
+            }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _load(self, path: Path) -> None:
+        if not path.exists():
+            return
+        with path.open("r", encoding="utf-8") as f:
+            data: dict = json.load(f)
+        for key, saved in data.items():
+            page = self.state.pages.get(key)
+            if page is None:
+                continue
+            hash_to_id = {t.duplicate_hash: t.id for t in page.tracks}
+            current_hashes = [t.duplicate_hash for t in page.tracks]
+            if current_hashes != saved.get("members", []):
+                continue
+            canon_hashes: list = saved.get("canon_hashes", [])
+            if len(canon_hashes) != len(page.tracks):
+                continue
+            restored: list[int | None] = []
+            for canon_hash in canon_hashes:
+                if canon_hash is None:
+                    restored.append(None)
+                else:
+                    resolved = hash_to_id.get(canon_hash)
+                    if resolved is None:
+                        break
+                    restored.append(resolved)
+            else:
+                page.chosen_canons = restored
+                page.confirmed = saved.get("confirmed", False)
+
     def _update(self, task_id):
         self.progress.update(task_id, completed=self.state.current_idx + 1)
 
@@ -233,6 +281,12 @@ class Deduplicator:
 
         self.feedback_text = Text()
         while True:
+            if self.state.current_idx >= total:
+                console.print("[green]All groups reviewed.[/green]")
+                if self.filepath is not None:
+                    self._dump(self.filepath)
+                return
+
             key, page = self.state.pages_iter[self.state.current_idx]
             self.render_page(key, page)
             entry = Prompt.ask("Write here")
@@ -257,6 +311,8 @@ class Deduplicator:
                 n = self.apply_changes()
                 self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
             elif action == "exit":
+                if self.filepath is not None:
+                    self._dump(self.filepath)
                 console.print("[green]Exited.[/green]")
                 return
 
@@ -295,6 +351,8 @@ class Deduplicator:
                     chosen_canons=[t.canon_id for t in tracks],
                 )
         self.state = DeduplicatorState(pages=pages, current_idx=0)
+        if self.filepath is not None:
+            self._load(self.filepath)
 
     def run(self):
         # fill the buffer with all the duplicate track groups

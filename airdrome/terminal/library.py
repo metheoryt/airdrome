@@ -57,7 +57,7 @@ def deduplicate_cli(reset: bool = typer.Option(False, "--reset", "-r")):
         if reset:
             session.exec(update(Track).values(canon_id=None))
             console.print("[yellow]duplicates data reset[/yellow]")
-        Deduplicator(session).run()
+        Deduplicator(session, filepath=settings.duplicates_filepath).run()
 
 
 @library_app.command()

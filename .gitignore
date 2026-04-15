@@ -3,6 +3,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 
-data/
-dist/
+/data/
+/dist/
+/navi/
 .env
