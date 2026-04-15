@@ -111,21 +111,29 @@ class Track(Base, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
 
+    # basic metadata
     title: str = Field()
     artist: str | None = Field(None)
     album_artist: str | None = Field(None)
     album: str | None = Field(None)
 
+    # anything we would need for other things
     track_n: int | None = Field(None)
     disc_n: int | None = Field(None)
     compilation: bool | None = Field(None)
+    year: int | None = Field(None)
+    duration: int | None = Field(None)
+    """Duration in seconds."""
+    date_added: AwareDatetimeDefNow
+    loved: bool | None = Field(None)
+    album_loved: bool | None = Field(None)
+    rating: int | None = Field(None)
+    album_rating: int | None = Field(None)
 
     title_norm: str = Field("")
     artist_norm: str = Field("")
     album_artist_norm: str = Field("")
     album_norm: str = Field("")
-
-    rating: int | None = Field(None)
 
     # duplicates
     canon_id: int | None = Field(None, foreign_key="track.id", index=True, ondelete="SET NULL")
@@ -135,6 +143,10 @@ class Track(Base, table=True):
     )
     twins: list["Track"] = Relationship(back_populates="canon")
 
+    # Other relations.
+    # The Track can have multiple Apple tracks,
+    #   but this is rare and doesn't have anything to do with duplicates.
+    # They tend to be the same tracks but with different apple IDs. We can pick first.
     apple_tracks: list["AppleTrack"] = Relationship(back_populates="track", cascade_delete=True)
     aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
     files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
@@ -149,7 +161,32 @@ class Track(Base, table=True):
 
     @property
     def duplicate_hash(self):
-        hash_fields = (self.title, self.artist, self.album_artist, self.album, self.track_n, self.disc_n)
+        """
+        Generates a hash string for identifying potential duplicate tracks.
+
+        Creates a composite hash by combining key metadata fields including title,
+        artist, album artist, album, track number, disc number, year, and a bucketed
+        duration value. The duration is rounded to the nearest 5-second interval to
+        allow for minor variations. Fields are joined with semicolons, with None
+        values represented as empty strings.
+
+        Returns
+        -------
+        str
+            A semicolon-delimited string containing the track's metadata fields,
+            suitable for duplicate detection by comparing hash values between tracks.
+        """
+        duration_bucket = round(self.duration / 5) * 5 if self.duration is not None else None
+        hash_fields = (
+            self.title,
+            self.artist,
+            self.album_artist,
+            self.album,
+            self.track_n,
+            self.disc_n,
+            self.year,
+            duration_bucket,
+        )
         return ";".join(str(v) if v is not None else "" for v in hash_fields)
 
     @property

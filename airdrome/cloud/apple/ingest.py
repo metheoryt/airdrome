@@ -49,6 +49,13 @@ def do_import_tracks(s: Session, tracks_data: dict, root_dir: Path) -> int:
                 track_n=apple_track.track_number,
                 disc_n=apple_track.disc_number,
                 compilation=apple_track.compilation,
+                year=apple_track.year,
+                duration=round(apple_track.total_time / 1000) if apple_track.total_time else None,
+                loved=apple_track.loved,
+                album_loved=apple_track.album_loved,
+                rating=apple_track.rating if not apple_track.rating_computed else None,
+                album_rating=apple_track.album_rating if not apple_track.album_rating_computed else None,
+                date_added=apple_track.date_added,
             ),
         )
         apple_track.track = track

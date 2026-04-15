@@ -102,11 +102,7 @@ class TrackSyncer:
         latest_play: datetime | None,
         first_play: datetime | None,
     ):
-        apple_track = track.apple_tracks[0] if track.apple_tracks else None
-
-        date_candidates = [mf.created_at, first_play]
-        if apple_track:
-            date_candidates.append(apple_track.date_added)
+        date_candidates = [mf.created_at, first_play, track.date_added]
         valid_dates = _normalize_dates(date_candidates)
         if valid_dates:
             earliest = min(valid_dates)
@@ -117,13 +113,12 @@ class TrackSyncer:
         track_ann.play_count = play_count
         track_ann.play_date = latest_play
 
-        if apple_track:
-            if apple_track.rating and not apple_track.rating_computed:
-                track_ann.rating = apple_track.rating
-                track_ann.rated_at = apple_track.date_added
-            if apple_track.loved:
-                track_ann.starred = True
-                track_ann.starred_at = apple_track.date_added
+        if track.rating:
+            track_ann.rating = track.rating
+            track_ann.rated_at = track.date_added
+        if track.loved:
+            track_ann.starred = True
+            track_ann.starred_at = track.date_added
 
     def update_album_annotation(
         self,
@@ -134,11 +129,7 @@ class TrackSyncer:
         latest_play: datetime | None,
         first_play: datetime | None,
     ):
-        apple_track = track.apple_tracks[0] if track.apple_tracks else None
-
-        date_candidates = [mf.album_model.created_at, first_play]
-        if apple_track:
-            date_candidates.append(apple_track.date_added)
+        date_candidates = [mf.album_model.created_at, first_play, track.date_added]
         valid_dates = _normalize_dates(date_candidates)
         if valid_dates:
             mf.album_model.created_at = min(valid_dates)
@@ -146,13 +137,12 @@ class TrackSyncer:
         album_ann, _ = self._goc_annotation(mf.album_id, Annotation.ItemType.ALBUM, nvs)
         self._add_play_count_date(album_ann, play_count, latest_play)
 
-        if apple_track:
-            if not album_ann.rating and apple_track.album_rating and not apple_track.album_rating_computed:
-                album_ann.rating = apple_track.album_rating
-                album_ann.rated_at = apple_track.date_added
-            if not album_ann.starred and apple_track.album_loved:
-                album_ann.starred = True
-                album_ann.rated_at = apple_track.date_added
+        if not album_ann.rating and track.album_rating:
+            album_ann.rating = track.album_rating
+            album_ann.rated_at = track.date_added
+        if not album_ann.starred and track.album_loved:
+            album_ann.starred = True
+            album_ann.rated_at = track.date_added
 
     def update_artist_annotations(
         self, mf: MediaFile, nvs: Session, play_count: int, latest_play: datetime | None
