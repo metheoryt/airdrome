@@ -149,9 +149,8 @@ class Track(Base, table=True):
 
     @property
     def duplicate_hash(self):
-        return ";".join(
-            str(v) if v is not None else "" for v in [self.title, self.artist, self.album_artist, self.album]
-        )
+        hash_fields = (self.title, self.artist, self.album_artist, self.album, self.track_n, self.disc_n)
+        return ";".join(str(v) if v is not None else "" for v in hash_fields)
 
     @property
     def main_file(self) -> Optional["TrackFile"]:

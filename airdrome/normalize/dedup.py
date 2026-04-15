@@ -124,7 +124,7 @@ class Deduplicator:
         [Track.album_norm, Track.title_norm],
     ]
 
-    def __init__(self, s: Session, filepath: Path | None = None):
+    def __init__(self, s: Session, filepath: Path):
         self.s = s
         self.filepath = filepath
         self.progress = Progress(
@@ -139,7 +139,16 @@ class Deduplicator:
         table = compose_table(key, page.tracks, page.chosen_canons)
         ui_group = Group(
             table,
-            Panel(self.feedback_text, title="Feedback", border_style="dim blue"),
+            Panel(
+                self.feedback_text
+                or (
+                    Text("confirmed", style="dim blue")
+                    if page.confirmed
+                    else Text("Unconfirmed", style="dim yellow")
+                ),
+                title="Feedback",
+                border_style="dim blue",
+            ),
             Panel(INSTRUCTION_TEXT, title="Instructions", style="dim"),
             self.progress,
         )
@@ -166,9 +175,7 @@ class Deduplicator:
         if cmd == "c":
             return "commit"
         if cmd == "r":
-            page.chosen_canons = list(page.canons)
-            self.feedback_text = Text("Choices reset", style="bold yellow")
-            return None
+            return "reset"
 
         members = [t.id for t in page.tracks]
         chosen = page.chosen_canons
@@ -203,6 +210,7 @@ class Deduplicator:
 
         for member_idx in member_idxs:
             page.chosen_canons[member_idx] = members[canon_idx]
+        page.confirmed = False
 
         return None
 
@@ -220,11 +228,14 @@ class Deduplicator:
                     changed += 1
         if changed:
             self.s.commit()
+            self._dump(self.filepath)
         return changed
 
     def _dump(self, path: Path) -> None:
         data: dict = {}
         for key, page in self.state.pages_iter:
+            if not page.confirmed:
+                continue
             id_to_hash = {t.id: t.duplicate_hash for t in page.tracks}
             data[key] = {
                 "members": [t.duplicate_hash for t in page.tracks],
@@ -232,7 +243,6 @@ class Deduplicator:
                     id_to_hash.get(canon_id) if canon_id is not None else None
                     for canon_id in page.chosen_canons
                 ],
-                "confirmed": page.confirmed,
             }
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
@@ -265,7 +275,7 @@ class Deduplicator:
                     restored.append(resolved)
             else:
                 page.chosen_canons = restored
-                page.confirmed = saved.get("confirmed", False)
+                page.confirmed = True
 
     def _update(self, task_id):
         self.progress.update(task_id, completed=self.state.current_idx + 1)
@@ -303,10 +313,17 @@ class Deduplicator:
                     self._update(task_id)
                     self.feedback_text = Text()
             elif action == "confirm":
-                page.confirmed = True
-                self.state.current_idx += 1
-                self._update(task_id)
+                if page.confirmed:
+                    self.state.current_idx += 1
+                    self._update(task_id)
+                    self.feedback_text = Text()
+                else:
+                    page.confirmed = True
+            elif action == "reset":
+                page.confirmed = False
+                page.chosen_canons = list(page.canons)
                 self.feedback_text = Text()
+
             elif action == "commit":
                 n = self.apply_changes()
                 self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
