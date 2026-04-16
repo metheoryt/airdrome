@@ -1,3 +1,5 @@
+import io
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -27,21 +29,36 @@ class ListenBrainzScrobble(BaseModel):
         )
 
 
-def get_lb_records(listens_dir_path: Path) -> Iterator[ListenBrainzScrobble]:
-    for listens_jsonl in listens_dir_path.rglob("*.jsonl"):
-        with open(listens_jsonl, "r", encoding="utf-8") as f:
-            for line in f:
-                yield ListenBrainzScrobble.model_validate_json(line)
+def _parse_jsonl_lines(lines: Iterator[str]) -> Iterator[ListenBrainzScrobble]:
+    for line in lines:
+        line = line.strip()
+        if line:
+            yield ListenBrainzScrobble.model_validate_json(line)
+
+
+def get_lb_records(path: Path) -> Iterator[ListenBrainzScrobble]:
+    if path.is_file():
+        with zipfile.ZipFile(path) as z:
+            for entry in sorted(z.namelist()):
+                if not entry.startswith("listens/") or not entry.endswith(".jsonl"):
+                    continue
+                with z.open(entry) as f:
+                    yield from _parse_jsonl_lines(io.TextIOWrapper(f, encoding="utf-8"))
+    else:
+        listens_dir = path / "listens" if (path / "listens").is_dir() else path
+        for jsonl_file in sorted(listens_dir.rglob("*.jsonl")):
+            with open(jsonl_file, encoding="utf-8") as f:
+                yield from _parse_jsonl_lines(f)
 
 
 class ListenBrainzScrobbleParser(ScrobbleParser):
     platform = Platform.LISTENBRAINZ
 
-    def __init__(self, listens_dir_path: Path):
-        self.listens_dir_path = listens_dir_path
+    def __init__(self, path: Path):
+        self.path = path
 
     def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
-        for record in get_lb_records(self.listens_dir_path):
+        for record in get_lb_records(self.path):
             yield (
                 TrackAlias(artist=record.artist_name, album=record.release_name, title=record.track_name),
                 record.listened_at,

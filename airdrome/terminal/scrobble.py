@@ -25,10 +25,17 @@ SCROBBLE_PARSERS = {
 }
 
 
-@scrobble_app.command("import")
+@scrobble_app.command(
+    "import",
+    help=(
+        "Import listens from the specified platform. "
+        "ListenBrainz is recommended. "
+        "You can setup LastFM/Spotify listen data import to it, and then have a data export."
+    ),
+)
 def scrobble_import(
     platform: Platform,
-    path: Path = typer.Argument(help="path to the scrobbles file/directory"),
+    path: Path = typer.Argument(help="path to the scrobbles zip file/directory"),
     recreate: bool = typer.Option(False, "--reset", "-r"),
 ):
     parser = SCROBBLE_PARSERS[platform](path)
