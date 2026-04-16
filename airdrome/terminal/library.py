@@ -8,7 +8,7 @@ from airdrome.console import console
 from airdrome.library.organize import organize_library
 from airdrome.library.scan import MusicScanner
 from airdrome.models import Track, engine
-from airdrome.normalize.dedup import Deduplicator
+from airdrome.normalize.dedup import Deduplicator, auto_deduplicate, compose_table
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
 
@@ -38,6 +38,44 @@ def deduplicate_cli(reset: bool = typer.Option(False, "--reset", "-r")):
             session.exec(update(Track).values(canon_id=None))
             console.print("[yellow]duplicates data reset[/yellow]")
         Deduplicator(session, filepath=settings.duplicates_filepath).run()
+
+
+@library_app.command("auto-deduplicate")
+def auto_deduplicate_cli(
+    no_artist: bool = typer.Option(False, "--no-artist", help="Exclude artist from matching."),
+    no_album_artist: bool = typer.Option(
+        False, "--no-album-artist", help="Exclude album artist from matching."
+    ),
+    no_album: bool = typer.Option(False, "--no-album", help="Exclude album from matching."),
+    no_track_n: bool = typer.Option(False, "--no-track-n", help="Exclude track number from matching."),
+    no_disc_n: bool = typer.Option(False, "--no-disc-n", help="Exclude disc number from matching."),
+    no_duration: bool = typer.Option(False, "--no-duration", help="Exclude duration bucket from matching."),
+    no_year: bool = typer.Option(False, "--no-year", help="Exclude year from matching."),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Report matches without applying changes."),
+):
+    with Session(engine) as session:
+        groups = auto_deduplicate(
+            session,
+            with_artist=not no_artist,
+            with_album_artist=not no_album_artist,
+            with_album=not no_album,
+            with_track_n=not no_track_n,
+            with_disc_n=not no_disc_n,
+            with_duration=not no_duration,
+            with_year=not no_year,
+            dry_run=dry_run,
+        )
+        twin_count = sum(len(g) - 1 for g in groups)
+        for group in groups:
+            canons = [None] + [group[0].id] * (len(group) - 1)
+            console.print(compose_table("auto-dedup", group, canons))
+    if dry_run:
+        console.print(
+            f"[yellow]{twin_count} track(s) / {len(groups)} group(s) "
+            f"would be marked as twins (dry run).[/yellow]"
+        )
+    else:
+        console.print(f"[green]{twin_count} track(s) / {len(groups)} group(s) auto-deduplicated.[/green]")
 
 
 @library_app.command()

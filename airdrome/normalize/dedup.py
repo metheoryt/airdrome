@@ -35,7 +35,7 @@ def get_table_row(t: Track) -> dict[str, str]:
         "Disc #": str(t.disc_n) if t.disc_n is not None else "",
         "Compilation": "yes" if t.compilation else "",
         "Year": str(t.year) or "",
-        "Duration": f"{t.duration // 60}:{t.duration % 60}" if t.duration else "",
+        "Duration": f"{t.duration // 60}:{t.duration % 60:02d}" if t.duration else "",
         "Date added": t.date_added.strftime("%Y-%m-%d %H:%M:%S"),
         "Loved": "yes" if t.loved else "",
         "Album loved": "yes" if t.album_loved else "",
@@ -348,3 +348,68 @@ class Deduplicator:
         self.fill_state()
         # run the selection UI
         self._serve()
+
+
+def auto_deduplicate(
+    session: Session,
+    with_artist: bool = True,
+    with_album_artist: bool = True,
+    with_album: bool = True,
+    with_year: bool = True,
+    with_track_n: bool = True,
+    with_disc_n: bool = True,
+    with_duration: bool = True,
+    dry_run: bool = False,
+) -> list[list[Track]]:
+    """Auto-mark twins for tracks with identical normalized metadata.
+
+    Only processes tracks where canon_id IS NULL (unreviewed). For each
+    matching group, the track with the lowest ID becomes the canonical one;
+    the rest are marked as twins. No metadata is written back to the canonical
+    track — aggregated values are derived from the group at use time.
+
+    Title and artist are always required. Album artist, album, track number,
+    disc number, and duration can each be excluded to loosen matching.
+
+    Returns the resolved groups (each group[0] is the canon). Pass dry_run=True
+    to compute the groups without writing to the database.
+    """
+    tracks = list(session.exec(select(Track).where(Track.canon_id.is_(None)).order_by(Track.id)))
+
+    def group_key(t: Track) -> tuple:
+        key: list = [t.title_norm]
+        if with_artist:
+            key.append(t.artist_norm)
+        if with_album_artist:
+            key.append(t.album_artist_norm)
+        if with_album:
+            key.append(t.album_norm)
+        if with_track_n:
+            key.append(t.track_n)
+        if with_disc_n:
+            key.append(t.disc_n)
+        if with_duration:
+            key.append(round(t.duration / 5) * 5 if t.duration is not None else None)
+        if with_year:
+            key.append(t.year)
+        return tuple(key)
+
+    bucketed: dict[tuple, list[Track]] = {}
+    for t in tracks:
+        bucketed.setdefault(group_key(t), []).append(t)
+
+    resolved: list[list[Track]] = []
+    for group_tracks in bucketed.values():
+        if len(group_tracks) < 2:
+            continue
+        resolved.append(group_tracks)  # already sorted by ID (ascending) from the query
+        if not dry_run:
+            canon = group_tracks[0]
+            for twin in group_tracks[1:]:
+                twin.canon_id = canon.id
+                session.add(twin)
+
+    if not dry_run and resolved:
+        session.commit()
+
+    return resolved
