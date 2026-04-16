@@ -1,9 +1,10 @@
 import plistlib
 from pathlib import Path
 
+from rich.progress import Progress, TaskID
 from sqlmodel import Session, delete, exists, select
 
-from airdrome.console import console
+from airdrome.console import console, make_import_progress, make_progress
 from airdrome.models import Track, TrackFile, engine
 
 from .models import ApplePlaylist, ApplePlaylistImport, ApplePlaylistTrack, AppleTrack
@@ -21,58 +22,81 @@ def get_track_full_paths(t: AppleTrack, root_dir: str) -> set[Path]:
     return paths
 
 
-def do_import_tracks(s: Session, tracks_data: dict, root_dir: Path) -> int:
+def do_import_tracks(
+    s: Session,
+    tracks_data: dict,
+    root_dir: Path,
+    *,
+    progress: Progress | None = None,
+    task_id: TaskID | None = None,
+) -> tuple[int, int]:
     """
-    Import Apple Music tracks into the database. Returns number of new tracks created.
+    Import Apple Music tracks into the database. Returns (created, updated) Track counts.
 
     Testable directly — no session creation, no progress output.
     """
-    created = 0
-    for track_id, data in tracks_data.items():
+    created = updated = 0
+    for data in tracks_data.values():
         at = AppleTrack(**data)
 
         apple_track = s.exec(
             select(AppleTrack).where(AppleTrack.apple_track_id == at.apple_track_id)
         ).one_or_none()
         if apple_track:
+            if progress is not None:
+                progress.advance(task_id)
             continue
 
         apple_track = at
 
-        track, _ = Track.get_or_create(
+        track_defaults = dict(
+            track_n=apple_track.track_number,
+            disc_n=apple_track.disc_number,
+            compilation=apple_track.compilation,
+            year=apple_track.year,
+            duration=round(apple_track.total_time / 1000) if apple_track.total_time else None,
+            loved=apple_track.loved if apple_track.loved else None,
+            album_loved=apple_track.album_loved if apple_track.album_loved else None,
+            rating=apple_track.rating if not apple_track.rating_computed else None,
+            album_rating=apple_track.album_rating if not apple_track.album_rating_computed else None,
+            date_added=apple_track.date_added,
+        )
+        track, track_created = Track.get_or_create(
             s,
             title=apple_track.name,
             artist=apple_track.artist,
             album=apple_track.album,
             album_artist=apple_track.album_artist,
-            defaults=dict(
-                track_n=apple_track.track_number,
-                disc_n=apple_track.disc_number,
-                compilation=apple_track.compilation,
-                year=apple_track.year,
-                duration=round(apple_track.total_time / 1000) if apple_track.total_time else None,
-                loved=apple_track.loved,
-                album_loved=apple_track.album_loved,
-                rating=apple_track.rating if not apple_track.rating_computed else None,
-                album_rating=apple_track.album_rating if not apple_track.album_rating_computed else None,
-                date_added=apple_track.date_added,
-            ),
+            defaults=track_defaults,
         )
+        if track_created:
+            created += 1
+        elif track.fill_nulls(track_defaults):
+            updated += 1
+
         apple_track.track = track
         s.add(apple_track)
         s.flush()
-        created += 1
 
         if not apple_track.apple_music:
             for tp in get_track_full_paths(apple_track, root_dir):
-                tf, _ = TrackFile.get_or_create(s, track_id=track.id, source_path=tp)
+                tf, _ = TrackFile.get_or_create(s, source_path=tp, defaults=dict(track_id=track.id))
                 tf.enrich()
         s.flush()
 
-    return created
+        if progress is not None:
+            progress.update(task_id, advance=1, created=created, updated=updated)
+
+    return created, updated
 
 
-def do_import_playlists(s: Session, playlists_data: list) -> int:
+def do_import_playlists(
+    s: Session,
+    playlists_data: list,
+    *,
+    progress: Progress | None = None,
+    task_id: TaskID | None = None,
+) -> int:
     """
     Import Apple Music playlists into the database. Returns number of new playlists created.
 
@@ -81,8 +105,13 @@ def do_import_playlists(s: Session, playlists_data: list) -> int:
     created = 0
     for pl in playlists_data:
         pl_import = ApplePlaylistImport(**pl)
+
+        if progress is not None:
+            progress.update(task_id, description=pl_import.name)
+
         if pl_import.smart_info:
-            console.print(f"[dim]skipping smart playlist: {pl_import.name}[/dim]")
+            if progress is not None:
+                progress.advance(task_id)
             continue
 
         pl_db = s.exec(
@@ -116,7 +145,9 @@ def do_import_playlists(s: Session, playlists_data: list) -> int:
                 s.add(apt)
             seen.add(pls_track.apple_track_id)
         s.flush()
-        console.print(f"  [cyan]{len(seen):>7}[/cyan]  {pl_import.name}")
+
+        if progress is not None:
+            progress.advance(task_id)
 
     return created
 
@@ -133,11 +164,17 @@ def import_apple_library(xml_filename: str, root_dir: str, reset: bool = False):
         plist = plistlib.load(f)
 
     with Session(engine) as s:
-        console.print(f"Importing [bold]{len(plist['Tracks'])}[/bold] tracks")
-        do_import_tracks(s, plist["Tracks"], root_dir)
+        tracks_data = plist["Tracks"]
+        with make_import_progress() as progress:
+            task = progress.add_task("Tracks", total=len(tracks_data), created=0, updated=0)
+            created, updated = do_import_tracks(s, tracks_data, root_dir, progress=progress, task_id=task)
+        console.print(f"Tracks: [green]{created} new[/green]  [yellow]{updated} updated[/yellow]")
 
-        console.print(f"Importing [bold]{len(plist['Playlists'])}[/bold] playlists")
-        do_import_playlists(s, plist["Playlists"])
+        playlists_data = plist["Playlists"]
+        with make_progress() as progress:
+            task = progress.add_task("Playlists", total=len(playlists_data))
+            n_playlists = do_import_playlists(s, playlists_data, progress=progress, task_id=task)
+        console.print(f"Playlists: [green]{n_playlists} new[/green]")
 
         s.commit()
 

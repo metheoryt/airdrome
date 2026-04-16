@@ -3,7 +3,8 @@ from pathlib import Path
 import typer
 from sqlmodel import Session, update
 
-from airdrome.cloud.apple.ingest import import_apple_library
+from airdrome.cloud.apple.media_services import import_apple_media_services
+from airdrome.cloud.apple.xml_library import import_apple_library
 from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.library.organize import organize_library
@@ -33,6 +34,30 @@ def library_import_apple(
         raise typer.Exit(code=1)
 
     import_apple_library(str(library_xml_path), str(library_dir_path), reset=reset)
+
+
+@library_app.command("import-apple-ms")
+def library_import_apple_ms(
+    activity_dir: str = typer.Option(
+        ...,
+        "--activity-dir",
+        "-a",
+        help="Path to 'Apple Music Activity' folder from Apple Media Services export",
+    ),
+    library_dir: str = typer.Option(..., "--dir", "-d", help="Path to Apple Music Library root directory"),
+    reset: bool = typer.Option(False, "--reset", "-r"),
+):
+    activity_path = Path(activity_dir)
+    if not activity_path.is_dir():
+        console.print(f"Activity directory not found: {activity_path}", style="bold red")
+        raise typer.Exit(code=1)
+
+    library_dir_path = Path(library_dir)
+    if not library_dir_path.is_dir():
+        console.print(f"Library path is not a directory: {library_dir_path}", style="bold red")
+        raise typer.Exit(code=1)
+
+    import_apple_media_services(str(activity_path), str(library_dir_path), reset=reset)
 
 
 @library_app.command("organize")

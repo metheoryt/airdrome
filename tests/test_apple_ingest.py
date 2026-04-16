@@ -3,8 +3,8 @@ from pathlib import Path
 
 from sqlmodel import select
 
-from airdrome.cloud.apple.ingest import do_import_playlists, do_import_tracks
 from airdrome.cloud.apple.models import ApplePlaylist, AppleTrack
+from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
 from airdrome.models import Track
 
 

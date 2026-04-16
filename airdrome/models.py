@@ -17,7 +17,7 @@ from .normalize.norm import normalize_name
 
 
 if TYPE_CHECKING:
-    from airdrome.cloud.apple.models import AppleTrack
+    from airdrome.cloud.apple.models import AppleMediaServicesTrack, AppleTrack
 
 
 T = TypeVar("T", bound="Base")
@@ -65,6 +65,15 @@ class Base(SQLModel):
         session.add(instance)
         session.flush([instance])
         return instance, True
+
+    def fill_nulls(self, data: dict[str, Any]) -> bool:
+        """Set any field in *data* where the current value is None. Returns True if any field changed."""
+        changed = False
+        for field, value in data.items():
+            if value is not None and getattr(self, field, None) is None:
+                setattr(self, field, value)
+                changed = True
+        return changed
 
     @classmethod
     def truncate_cascade(cls, session: Session):
@@ -148,6 +157,9 @@ class Track(Base, table=True):
     #   but this is rare and doesn't have anything to do with duplicates.
     # They tend to be the same tracks but with different apple IDs. We can pick first.
     apple_tracks: list["AppleTrack"] = Relationship(back_populates="track", cascade_delete=True)
+    apple_ms_tracks: list["AppleMediaServicesTrack"] = Relationship(
+        back_populates="track", cascade_delete=True
+    )
     aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
     files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
     plays: list["TrackPlay"] = Relationship(back_populates="track", cascade_delete=True)  # direct play events
