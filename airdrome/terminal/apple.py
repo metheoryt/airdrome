@@ -31,18 +31,18 @@ def apple_collect_xml(
 
 @apple_app.command("collect-media-services")
 def apple_collect_media_services(
-    activity_dir: str = typer.Option(
+    path: str = typer.Option(
         ...,
-        "--activity-dir",
-        "-a",
-        help="Path to 'Apple Music Activity' folder from Apple Media Services export",
+        "--path",
+        "-p",
+        help="Apple Media Services export: .zip file or extracted directory",
     ),
     library_dir: str = typer.Option(..., "--dir", "-d", help="Path to Apple Music Library root directory"),
     reset: bool = typer.Option(False, "--reset", "-r"),
 ):
-    activity_path = Path(activity_dir)
-    if not activity_path.is_dir():
-        console.print(f"Activity directory not found: {activity_path}", style="bold red")
+    p = Path(path)
+    if not p.exists():
+        console.print(f"Path not found: {p}", style="bold red")
         raise typer.Exit(code=1)
 
     library_dir_path = Path(library_dir)
@@ -50,4 +50,4 @@ def apple_collect_media_services(
         console.print(f"Library path is not a directory: {library_dir_path}", style="bold red")
         raise typer.Exit(code=1)
 
-    import_apple_media_services(str(activity_path), str(library_dir_path), reset=reset)
+    import_apple_media_services(str(p), str(library_dir_path), reset=reset)

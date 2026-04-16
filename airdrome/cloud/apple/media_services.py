@@ -1,5 +1,3 @@
-import json
-import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +8,7 @@ from airdrome.console import console, make_import_progress, make_progress
 from airdrome.models import Track, TrackFile, engine
 
 from .models import AppleMediaServicesPlaylist, AppleMediaServicesPlaylistTrack, AppleMediaServicesTrack
+from .package import AppleMediaServicesPackage
 
 
 _SKIP_PLAYLIST_TYPES = {"Smart Playlist", "Genius Mix", "Genius Playlist", "Folder"}
@@ -19,12 +18,6 @@ def _parse_dt(s: str | None) -> datetime | None:
     if not s:
         return None
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
-
-
-def _load_json_zip(zip_path: Path) -> list:
-    with zipfile.ZipFile(zip_path) as z:
-        with z.open(z.namelist()[0]) as f:
-            return json.load(f)
 
 
 def _get_track_full_paths(
@@ -207,8 +200,8 @@ def do_import_ms_playlists(
     return created
 
 
-def import_apple_media_services(activity_dir: str, root_dir: str, reset: bool = False):
-    activity_path = Path(activity_dir)
+def import_apple_media_services(path: str, root_dir: str, reset: bool = False):
+    package = AppleMediaServicesPackage(Path(path))
     root_path = Path(root_dir)
 
     if reset:
@@ -218,11 +211,8 @@ def import_apple_media_services(activity_dir: str, root_dir: str, reset: bool = 
             s.commit()
         console.print("[yellow]Apple Media Services data purged[/yellow]")
 
-    tracks_zip = activity_path / "Apple Music Library Tracks.json.zip"
-    playlists_zip = activity_path / "Apple Music Library Playlists.json.zip"
-
-    tracks_data = _load_json_zip(tracks_zip)
-    playlists_data = _load_json_zip(playlists_zip)
+    tracks_data = package.load_tracks()
+    playlists_data = package.load_playlists()
 
     with Session(engine) as s:
         with make_import_progress() as progress:
