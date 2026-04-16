@@ -24,77 +24,49 @@ INSTRUCTION_TEXT = Text.from_markup(
 )
 
 
-def get_table_rows(t: Track) -> list[list[str]]:
-    rows = []
-    base_row = [
-        str(t.id),
-        t.title,
-        t.artist or "",
-        t.album_artist or "",
-        t.album or "",
-        str(t.track_n) if t.track_n is not None else "",
-        str(t.disc_n) if t.disc_n is not None else "",
-        str(len(t.files)) if len(t.files) else "",
-    ]
-
-    if not t.apple_tracks:
-        rows.append(base_row)
-        return rows
-
-    for at in t.apple_tracks:
-        tt = ""
-        if at.total_time:
-            secs = at.total_time // 1000
-            tt = f"{secs // 60}:{secs % 60:02d}"
-        row = base_row.copy()
-        row.extend(
-            [
-                "cloud" if at.apple_music else "local",
-                str(at.apple_track_id),
-                str(at.year),
-                tt,
-                f"{at.size / 1024 / 1024:.2f} MB",
-                f"{at.bit_rate} kbps",
-                at.date_added.strftime("%Y-%m-%d %H:%M:%S"),
-            ]
-        )
-        rows.append(row)
-    return rows
+def get_table_row(t: Track) -> dict[str, str]:
+    row = {
+        "ID": str(t.id),
+        "Title": t.title,
+        "Artist": t.artist or "",
+        "Album artist": t.album_artist or "",
+        "Album": t.album or "",
+        "Track #": str(t.track_n) if t.track_n is not None else "",
+        "Disc #": str(t.disc_n) if t.disc_n is not None else "",
+        "Compilation": "yes" if t.compilation else "",
+        "Year": str(t.year) or "",
+        "Duration": f"{t.duration // 60}:{t.duration % 60}" if t.duration else "",
+        "Date added": t.date_added.strftime("%Y-%m-%d %H:%M:%S"),
+        "Loved": "yes" if t.loved else "",
+        "Album loved": "yes" if t.album_loved else "",
+        "Files": str(len(t.files)) if len(t.files) else "",
+        "XML": str(len(t.apple_tracks)) if t.apple_tracks else "",
+        "AMS": str(len(t.apple_ms_tracks)) if t.apple_ms_tracks else "",
+    }
+    return row
 
 
 def compose_table(key: str, tracks: list[Track], canons: list[int | None]):
     table = Table(title=f"Duplicates by {key}")
     table.add_column("Index", style="blue")
     table.add_column("Canon ID", style="blue")
-    table.add_column("ID", style="blue")
-    table.add_column("Title", style="orange4")
-    table.add_column("Artist", style="magenta")
-    table.add_column("Album Artist", style="green")
-    table.add_column("Album", style="yellow")
-    table.add_column("Track №", style="pink3")
-    table.add_column("Disc №", style="pink3")
-    table.add_column("Files", style="yellow")
 
-    if any(len(t.apple_tracks) for t in tracks):
-        # at least 1 track has apple data, add corresponding columns
-        table.add_column("Apple Cloud", style="red")
-        table.add_column("Apple Track ID", style="red")
-        table.add_column("Year", style="red")
-        table.add_column("Time", style="red")
-        table.add_column("Size", style="red")
-        table.add_column("Bit Rate", style="red")
-        table.add_column("Added", style="red")
+    for h in get_table_row(tracks[0]).keys():
+        style = "yellow"
+        if h in ("Date added", "Loved", "Album loved", "Files"):
+            style = "green"
+        if h in ("XML", "AMS"):
+            style = "red"
+        table.add_column(h, style=style)
 
     for i, t in enumerate(tracks):
-        rows = get_table_rows(t)
         row_kw = {}
         if t.twins:
             row_kw["style"] = "bold"
         if t.canon_id:
             row_kw["style"] = "dim"
-
-        for row in rows:
-            table.add_row(f"{i + 1}", f"{canons[i] or '-'}", *row, **row_kw)
+        row = get_table_row(t).values()
+        table.add_row(f"{i + 1}", f"{canons[i] or '-'}", *row, **row_kw)
 
     return table
 
