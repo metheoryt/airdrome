@@ -451,6 +451,9 @@ class TrackPlay(Base, table=True):
     track: Track = Relationship(back_populates="plays")
     played_at: AwareDatetime
     platform: Platform
+    source_scrobble_id: int | None = Field(
+        default=None, foreign_key="trackaliasscrobble.id", unique=True, ondelete="SET NULL"
+    )
 
 
 engine = create_engine(str(settings.db_dsn), echo=settings.db_echo)

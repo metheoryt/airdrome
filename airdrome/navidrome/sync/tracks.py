@@ -5,7 +5,7 @@ from rich.progress import TextColumn
 from sqlmodel import Session, delete, func, select
 
 from airdrome.console import console, make_progress
-from airdrome.models import Track, TrackAlias, TrackAliasScrobble, TrackFile, engine
+from airdrome.models import Track, TrackFile, TrackPlay, engine
 
 from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, get_nv_engine
 
@@ -69,8 +69,8 @@ class TrackSyncer:
     ) -> tuple[int, datetime | None, datetime | None]:
         user = self.get_user(nvs)
 
-        for scr in s.exec(select(TrackAliasScrobble).join(TrackAlias).where(TrackAlias.track_id == track.id)):
-            submission_time = int(scr.date.timestamp())
+        for play in s.exec(select(TrackPlay).where(TrackPlay.track_id == track.id)):
+            submission_time = int(play.played_at.timestamp())
             exists = nvs.exec(
                 select(Scrobbles).where(
                     Scrobbles.user_id == user.id,
@@ -169,17 +169,15 @@ class TrackSyncer:
 
     def sync_all(self, s: Session, nvs: Session):
         if self.reset:
-            latest_scrobble = s.exec(
-                select(TrackAliasScrobble).order_by(TrackAliasScrobble.date.desc())
-            ).first()
-            if latest_scrobble:
+            latest_play = s.exec(select(TrackPlay).order_by(TrackPlay.played_at.desc())).first()
+            if latest_play:
                 res = nvs.exec(
-                    delete(Scrobbles).where(Scrobbles.submission_time < latest_scrobble.date.timestamp())
+                    delete(Scrobbles).where(Scrobbles.submission_time < latest_play.played_at.timestamp())
                 )
                 nvs.commit()
                 console.print(
                     f"[yellow]deleted {res.rowcount} scrobbles older than "
-                    f"{latest_scrobble.date.isoformat()}[/yellow]"
+                    f"{latest_play.played_at.isoformat()}[/yellow]"
                 )
 
         stmt = (

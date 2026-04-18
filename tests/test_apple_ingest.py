@@ -83,8 +83,8 @@ def test_import_tracks_idempotent(session):
     first = do_import_tracks(session, tracks, root_dir=Path("/nonexistent"))
     second = do_import_tracks(session, tracks, root_dir=Path("/nonexistent"))
 
-    assert first == 1
-    assert second == 0
+    assert first == (1, 0)
+    assert second == (0, 0)
 
     count = len(session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).all())
     assert count == 1
