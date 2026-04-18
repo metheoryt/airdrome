@@ -3,6 +3,7 @@ import string
 from datetime import datetime, timezone
 from enum import StrEnum
 
+from sqlalchemy import text
 from sqlalchemy.orm import registry
 from sqlmodel import Field, Relationship, SQLModel, create_engine
 
@@ -23,6 +24,15 @@ def get_nv_engine():
             raise RuntimeError("NAVIDROME_DB_DSN is not configured in .env")
         _engine = create_engine(settings.navidrome_db_dsn, echo=False)
     return _engine
+
+
+def checkpoint_wal():
+    """Fold any pending WAL pages into the main DB file before writing.
+
+    Must be called after confirming Navidrome is stopped.
+    """
+    with get_nv_engine().connect() as conn:
+        conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
 
 
 # these are existing Navidrome tables, only declare columns that are needed

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # navidrome
     navidrome_db_dsn: str | None = None
     navidrome_user: str | None = None
+    navidrome_port: int = 4533
 
 
 settings = Settings()
