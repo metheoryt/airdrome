@@ -368,6 +368,7 @@ class Deduplicator:
     def get_track_groups(self, cols: list[Column]) -> list[tuple[str, list[Track]]]:
         combinations = self.s.exec(
             select(*cols, func.count(Track.id).label("count"))
+            # do not exclude them, since they can appear in a broader group
             # .where(Track.canon_id.is_(None))  # exclude tracks already marked as twins
             .group_by(*cols)
             .having(func.count(Track.id) > 1)
