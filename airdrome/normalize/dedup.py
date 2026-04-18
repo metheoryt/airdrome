@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 from rich.console import Group
@@ -17,11 +18,22 @@ from airdrome.models import Track
 INSTRUCTION_TEXT = Text.from_markup(
     "[bold]1[/bold] - mark 1 as canon, others as twins\n"
     "[bold]1 2 3[/bold] - mark 1 as canon of 2 and 3\n"
+    "[bold]Enter[/bold] - confirm current group\n"
     "[bold]r[/bold] - reset choices for this group\n"
     "[bold]a[/bold] / [bold]d[/bold] - previous / next group\n"
+    "[bold]m[/bold] - cycle mode: resolved / auto-resolved\n"
     "[bold]c[/bold] - commit changes\n"
     "[bold]q[/bold] - exit\n"
 )
+
+
+class FilterMode(Enum):
+    RESOLVED = "resolved"
+    AUTO_RESOLVED = "auto-resolved"
+
+    def next(self) -> "FilterMode":
+        members = list(FilterMode)
+        return members[(members.index(self) + 1) % len(members)]
 
 
 def get_table_row(t: Track) -> dict[str, str]:
@@ -76,7 +88,8 @@ class Page:
     tracks: list[Track]
     canons: list[int | None]
     chosen_canons: list[int | None] = field(default_factory=list)
-    confirmed: bool = False  # whether the user confirmed the choices
+    confirmed: bool = False
+    auto_resolved: bool = False  # canon_ids already set in DB by auto-dedup
 
 
 @dataclass
@@ -106,21 +119,42 @@ class Deduplicator:
         )
         self.state: DeduplicatorState = DeduplicatorState()  # empty, filled by fill_state()
         self.feedback_text = Text()
+        self.filter_mode: FilterMode = FilterMode.RESOLVED
+        self._mode_idx: dict[FilterMode, int] = {m: 0 for m in FilterMode}
 
-    def render_page(self, key: str, page: Page):
+    def _filtered_pages(self) -> list[tuple[str, Page]]:
+        match self.filter_mode:
+            case FilterMode.RESOLVED:
+                return [(k, p) for k, p in self.state.pages_iter if not p.auto_resolved]
+            case FilterMode.AUTO_RESOLVED:
+                return [(k, p) for k, p in self.state.pages_iter if p.auto_resolved and not p.confirmed]
+
+    def _switch_mode(self):
+        self._mode_idx[self.filter_mode] = self.state.current_idx
+        self.filter_mode = self.filter_mode.next()
+        new_total = len(self._filtered_pages())
+        saved = self._mode_idx[self.filter_mode]
+        self.state.current_idx = min(saved, new_total - 1) if new_total > 0 else 0
+        self.feedback_text = Text()
+
+    def render_page(self, key: str, page: Page, filtered_total: int):
         table = compose_table(key, page.tracks, page.chosen_canons)
+
+        if page.confirmed:
+            status_text = Text("confirmed", style="dim blue")
+        elif page.auto_resolved:
+            status_text = Text("auto-resolved", style="dim yellow")
+        else:
+            status_text = Text("unconfirmed", style="dim red")
+
+        header = Text(f"[{self.filter_mode.value}] {self.state.current_idx + 1}/{filtered_total}  ")
+        header.append_text(status_text)
+
+        feedback_content = Group(header, self.feedback_text) if self.feedback_text else header
+
         ui_group = Group(
             table,
-            Panel(
-                self.feedback_text
-                or (
-                    Text("confirmed", style="dim blue")
-                    if page.confirmed
-                    else Text("Unconfirmed", style="dim yellow")
-                ),
-                title="Feedback",
-                border_style="dim blue",
-            ),
+            Panel(feedback_content, title="Feedback", border_style="dim blue"),
             Panel(INSTRUCTION_TEXT, title="Instructions", style="dim"),
             self.progress,
         )
@@ -131,12 +165,11 @@ class Deduplicator:
         """Process one input entry against the given page.
 
         Mutates page.chosen_canons in place.
-        Returns (feedback_text, action) where the action is "next", "prev", "commit", or None (stay).
+        Returns an action string: "next", "prev", "commit", "mode", "exit", "confirm", "reset", or None.
         """
         self.feedback_text = Text()
         cmd = entry.strip().lower()
         if cmd == "":
-            # confirm the group setup, even if no changes were made
             return "confirm"
         if cmd == "q":
             return "exit"
@@ -148,6 +181,8 @@ class Deduplicator:
             return "commit"
         if cmd == "r":
             return "reset"
+        if cmd == "m":
+            return "mode"
 
         members = [t.id for t in page.tracks]
         chosen = page.chosen_canons
@@ -190,7 +225,6 @@ class Deduplicator:
         changed = 0
         for key, page in self.state.pages_iter:
             if not page.confirmed:
-                # do not commit unconfirmed changes
                 continue
             for i, track in enumerate(page.tracks):
                 new_canon = page.chosen_canons[i]
@@ -200,7 +234,7 @@ class Deduplicator:
                     changed += 1
         if changed:
             self.s.commit()
-            self._dump(self.filepath)
+        self._dump(self.filepath)
         return changed
 
     def _dump(self, path: Path) -> None:
@@ -248,57 +282,83 @@ class Deduplicator:
             else:
                 page.chosen_canons = restored
                 page.confirmed = True
+                page.auto_resolved = False  # human-confirmed overrides auto-resolved status
 
-    def _update(self, task_id):
-        self.progress.update(task_id, completed=self.state.current_idx + 1)
+    def _update(self, task_id, total: int):
+        self.progress.update(
+            task_id,
+            description=f"[bold blue]{self.filter_mode.value}",
+            total=max(total, 1),
+            completed=min(self.state.current_idx + 1, total),
+        )
 
     def _serve(self):
         if not self.state.pages_iter:
             console.print("[green]No duplicates found.[/green]")
             return
 
-        total = len(self.state.pages_iter)
-        task_id = self.progress.add_task("Deduplicating", total=total)
-        self._update(task_id)
-
+        task_id = self.progress.add_task(self.filter_mode.value, total=1)
         self.feedback_text = Text()
-        while True:
-            if self.state.current_idx >= total:
-                console.print("[green]All groups reviewed.[/green]")
-                if self.filepath is not None:
-                    self._dump(self.filepath)
-                return
 
-            key, page = self.state.pages_iter[self.state.current_idx]
-            self.render_page(key, page)
+        while True:
+            filtered = self._filtered_pages()
+            total = len(filtered)
+
+            # clamp index to valid range for current mode
+            if total > 0 and self.state.current_idx >= total:
+                self.state.current_idx = total - 1
+
+            self._update(task_id, total)
+
+            if total == 0:
+                console.clear()
+                empty_msg = Text(f"No groups in [{self.filter_mode.value}] mode.", style="dim")
+                console.print(Panel(empty_msg, title="Feedback", border_style="dim blue"))
+                console.print(self.progress)
+                entry = Prompt.ask("Write here")
+                cmd = entry.strip().lower()
+                if cmd == "q":
+                    if self.filepath is not None:
+                        self._dump(self.filepath)
+                    console.print("[green]Exited.[/green]")
+                    return
+                elif cmd == "m":
+                    self._switch_mode()
+                elif cmd == "c":
+                    n = self.apply_changes()
+                    self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
+                continue
+
+            key, page = filtered[self.state.current_idx]
+            self.render_page(key, page, total)
             entry = Prompt.ask("Write here")
             action = self.handle_input(entry, page)
 
             if action == "next":
                 if self.state.current_idx < total - 1:
                     self.state.current_idx += 1
-                    self._update(task_id)
                     self.feedback_text = Text()
             elif action == "prev":
                 if self.state.current_idx > 0:
                     self.state.current_idx -= 1
-                    self._update(task_id)
                     self.feedback_text = Text()
             elif action == "confirm":
                 if page.confirmed:
                     self.state.current_idx += 1
-                    self._update(task_id)
                     self.feedback_text = Text()
                 else:
                     page.confirmed = True
+                    page.auto_resolved = False
             elif action == "reset":
                 page.confirmed = False
-                page.chosen_canons = list(page.canons)
+                page.auto_resolved = False
+                page.chosen_canons = [None] * len(page.tracks)
                 self.feedback_text = Text()
-
             elif action == "commit":
                 n = self.apply_changes()
                 self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
+            elif action == "mode":
+                self._switch_mode()
             elif action == "exit":
                 if self.filepath is not None:
                     self._dump(self.filepath)
@@ -334,19 +394,21 @@ class Deduplicator:
         pages = {}
         for cols in self.COLUMN_SETS:
             for key, tracks in self.get_track_groups(cols):
+                canons = [t.canon_id for t in tracks]
                 pages[key] = Page(
                     tracks=tracks,
-                    canons=[t.canon_id for t in tracks],
-                    chosen_canons=[t.canon_id for t in tracks],
+                    canons=canons,
+                    chosen_canons=list(canons),
+                    auto_resolved=any(c is not None for c in canons),
                 )
         self.state = DeduplicatorState(pages=pages, current_idx=0)
         if self.filepath is not None:
             self._load(self.filepath)
 
     def run(self):
-        # fill the buffer with all the duplicate track groups
         self.fill_state()
-        # run the selection UI
+        resolved = self._filtered_pages()
+        self.state.current_idx = next((i for i, (_, p) in enumerate(resolved) if not p.confirmed), 0)
         self._serve()
 
 
