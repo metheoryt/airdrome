@@ -32,12 +32,19 @@ def scan_folder(
 
 
 @library_app.command("deduplicate")
-def deduplicate_cli(reset: bool = typer.Option(False, "--reset", "-r")):
+def deduplicate_cli(
+    match: str = typer.Option("", "--match", help="Filter by a substring"),
+    reset: bool = typer.Option(False, "--reset", "-r"),
+):
     with Session(engine) as session:
         if reset:
             session.exec(update(Track).values(canon_id=None))
             console.print("[yellow]duplicates data reset[/yellow]")
-        Deduplicator(session, filepath=settings.duplicates_filepath).run()
+        Deduplicator(
+            session,
+            filepath=settings.duplicates_filepath,
+            partial_match=match,
+        ).run()
 
 
 @library_app.command("auto-deduplicate")

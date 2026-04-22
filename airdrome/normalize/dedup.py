@@ -109,9 +109,10 @@ class Deduplicator:
         [Track.album_norm, Track.title_norm],
     ]
 
-    def __init__(self, s: Session, filepath: Path):
+    def __init__(self, s: Session, filepath: Path, partial_match: str = ""):
         self.s = s
         self.filepath = filepath
+        self.partial_match = partial_match
         self.progress = Progress(
             TextColumn("[bold blue]{task.description}"),
             BarColumn(),
@@ -123,11 +124,24 @@ class Deduplicator:
         self._mode_idx: dict[FilterMode, int] = {m: 0 for m in FilterMode}
 
     def _filtered_pages(self) -> list[tuple[str, Page]]:
+        pages = self.state.pages_iter
+        if self.partial_match:
+            pages = [
+                (k, p)
+                for k, p in pages
+                if any(
+                    [
+                        self.partial_match in v
+                        for t in p.tracks
+                        for v in (t.title_norm, t.artist_norm, t.album_artist_norm, t.album_norm)
+                    ]
+                )
+            ]
         match self.filter_mode:
             case FilterMode.RESOLVED:
-                return [(k, p) for k, p in self.state.pages_iter if not p.auto_resolved]
+                return [(k, p) for k, p in pages if not p.auto_resolved]
             case FilterMode.AUTO_RESOLVED:
-                return [(k, p) for k, p in self.state.pages_iter if p.auto_resolved and not p.confirmed]
+                return [(k, p) for k, p in pages if p.auto_resolved and not p.confirmed]
 
     def _switch_mode(self):
         self._mode_idx[self.filter_mode] = self.state.current_idx
@@ -149,6 +163,8 @@ class Deduplicator:
 
         header = Text(f"[{self.filter_mode.value}] {self.state.current_idx + 1}/{filtered_total}  ")
         header.append_text(status_text)
+        if self.partial_match:
+            header.append_text(Text(f" / partial match: {self.partial_match}"))
 
         feedback_content = Group(header, self.feedback_text) if self.feedback_text else header
 
@@ -393,8 +409,15 @@ class Deduplicator:
 
     def fill_state(self):
         pages = {}
+        track_ids_set = set()
         for cols in self.COLUMN_SETS:
             for key, tracks in self.get_track_groups(cols):
+                # deduplicate groups themselves
+                track_ids = tuple([t.id for t in tracks])
+                if track_ids in track_ids_set:
+                    continue
+                track_ids_set.add(track_ids)
+
                 canons = [t.canon_id for t in tracks]
                 pages[key] = Page(
                     tracks=tracks,
