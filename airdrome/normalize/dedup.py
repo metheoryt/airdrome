@@ -36,105 +36,68 @@ class FilterMode(Enum):
         return members[(members.index(self) + 1) % len(members)]
 
 
-def get_table_row(t: Track) -> dict[str, str]:
-    row = {
-        "ID": str(t.id),
-        "Title": t.title,
-        "Artist": t.artist or "",
-        "Album artist": t.album_artist or "",
-        "Album": t.album or "",
-        "Track #": str(t.track_n) if t.track_n is not None else "",
-        "Disc #": str(t.disc_n) if t.disc_n is not None else "",
-        "Compilation": "yes" if t.compilation else "",
-        "Year": str(t.year) or "",
-        "Duration": f"{t.duration // 60}:{t.duration % 60:02d}" if t.duration else "",
-        "Date added": t.date_added.strftime("%Y-%m-%d %H:%M:%S"),
-        "Loved": "yes" if t.loved else "",
-        "Album loved": "yes" if t.album_loved else "",
-        "Files": str(len(t.files)) if len(t.files) else "",
-        "XML": str(len(t.apple_tracks)) if t.apple_tracks else "",
-        "AMS": str(len(t.apple_ms_tracks)) if t.apple_ms_tracks else "",
-    }
-    return row
-
-
-def compose_table(key: str, tracks: list[Track], canons: list[int | None]):
-    table = Table(title=f"Duplicates by {key}")
-    table.add_column("Index", style="blue")
-    table.add_column("Canon ID", style="blue")
-
-    for h in get_table_row(tracks[0]).keys():
-        style = "yellow"
-        if h in ("Date added", "Loved", "Album loved", "Files"):
-            style = "green"
-        if h in ("XML", "AMS"):
-            style = "red"
-        table.add_column(h, style=style)
-
-    for i, t in enumerate(tracks):
-        row_kw = {}
-        if t.twins:
-            row_kw["style"] = "bold"
-        if t.canon_id:
-            row_kw["style"] = "dim"
-        row = get_table_row(t).values()
-        table.add_row(f"{i + 1}", f"{canons[i] or '-'}", *row, **row_kw)
-
-    return table
-
-
 @dataclass
 class Page:
     tracks: list[Track]
-    canons: list[int | None]
+    canons: list[int | None] = field(default_factory=list)
     chosen_canons: list[int | None] = field(default_factory=list)
     confirmed: bool = False
     auto_resolved: bool = False  # canon_ids already set in DB by auto-dedup
+
+    def __post_init__(self):
+        self.canons = [t.canon_id for t in self.tracks]
+        self.chosen_canons = list(self.canons)
+        self.auto_resolved = any(c is not None for c in self.canons)
+
+    def confirm(self) -> None:
+        self.confirmed = True
+        self.auto_resolved = False
+
+    def reset(self) -> None:
+        self.confirmed = False
+        self.auto_resolved = False
+        self.chosen_canons = [None] * len(self.tracks)
+
+    def set_canon(self, canon_idx: int, member_idxs: list[int]) -> None:
+        members = [t.id for t in self.tracks]
+        for idx in (canon_idx, *member_idxs):
+            if idx not in range(len(members)):
+                raise ValueError(f"Index out of range: {idx + 1}")
+        for member_idx in member_idxs:
+            if canon_idx == member_idx:
+                raise ValueError(f"Can't mark track as canon of itself: {canon_idx + 1}")
+            if members[member_idx] in self.chosen_canons:
+                raise ValueError(f"Already chosen as a canon: {member_idx + 1}")
+            if self.chosen_canons[canon_idx]:
+                raise ValueError(f"Already has a canon: {canon_idx + 1}")
+        for member_idx in member_idxs:
+            self.chosen_canons[member_idx] = members[canon_idx]
+        self.confirmed = False
 
 
 @dataclass
 class DeduplicatorState:
     pages: dict[str, Page] = field(default_factory=dict)
-    current_idx: int = field(default=0)
-    pages_iter: list[tuple[str, Page]] = field(default_factory=list)
+    current_idx: int = 0
+    filter_mode: FilterMode = FilterMode.RESOLVED
+    partial_match: str = ""
+    pages_iter: list[tuple[str, Page]] = field(default_factory=list, init=False)
+    _mode_idx: dict = field(default_factory=lambda: {m: 0 for m in FilterMode}, init=False)
 
     def __post_init__(self):
         self.pages_iter = list(self.pages.items())
 
-
-class Deduplicator:
-    COLUMN_SETS = [
-        [Track.artist_norm, Track.title_norm],
-        [Track.album_artist_norm, Track.title_norm],
-        [Track.album_norm, Track.title_norm],
-    ]
-
-    def __init__(self, s: Session, filepath: Path, partial_match: str = ""):
-        self.s = s
-        self.filepath = filepath
-        self.partial_match = partial_match
-        self.progress = Progress(
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-        )
-        self.state: DeduplicatorState = DeduplicatorState()  # empty, filled by fill_state()
-        self.feedback_text = Text()
-        self.filter_mode: FilterMode = FilterMode.RESOLVED
-        self._mode_idx: dict[FilterMode, int] = {m: 0 for m in FilterMode}
-
-    def _filtered_pages(self) -> list[tuple[str, Page]]:
-        pages = self.state.pages_iter
+    def filtered_pages(self) -> list[tuple[str, Page]]:
+        pages = self.pages_iter
         if self.partial_match:
             pages = [
                 (k, p)
                 for k, p in pages
                 if any(
-                    [
-                        self.partial_match in v
-                        for t in p.tracks
-                        for v in (t.title_norm, t.artist_norm, t.album_artist_norm, t.album_norm)
-                    ]
+                    self.partial_match in v
+                    for t in p.tracks
+                    for v in (t.title_norm, t.artist_norm, t.album_artist_norm, t.album_norm)
+                    if v is not None
                 )
             ]
         match self.filter_mode:
@@ -143,119 +106,40 @@ class Deduplicator:
             case FilterMode.AUTO_RESOLVED:
                 return [(k, p) for k, p in pages if p.auto_resolved and not p.confirmed]
 
-    def _switch_mode(self):
-        self._mode_idx[self.filter_mode] = self.state.current_idx
+    def switch_mode(self) -> None:
+        self._mode_idx[self.filter_mode] = self.current_idx
         self.filter_mode = self.filter_mode.next()
-        new_total = len(self._filtered_pages())
+        new_total = len(self.filtered_pages())
         saved = self._mode_idx[self.filter_mode]
-        self.state.current_idx = min(saved, new_total - 1) if new_total > 0 else 0
-        self.feedback_text = Text()
+        self.current_idx = min(saved, new_total - 1) if new_total > 0 else 0
 
-    def render_page(self, key: str, page: Page, filtered_total: int):
-        table = compose_table(key, page.tracks, page.chosen_canons)
-
-        if page.confirmed:
-            status_text = Text("confirmed", style="dim blue")
-        elif page.auto_resolved:
-            status_text = Text("auto-resolved", style="dim yellow")
-        else:
-            status_text = Text("unconfirmed", style="dim red")
-
-        header = Text(f"[{self.filter_mode.value}] {self.state.current_idx + 1}/{filtered_total}  ")
-        header.append_text(status_text)
-        if self.partial_match:
-            header.append_text(Text(f" / partial match: {self.partial_match}"))
-
-        feedback_content = Group(header, self.feedback_text) if self.feedback_text else header
-
-        ui_group = Group(
-            table,
-            Panel(feedback_content, title="Feedback", border_style="dim blue"),
-            Panel(INSTRUCTION_TEXT, title="Instructions", style="dim"),
-            self.progress,
-        )
-        console.clear()
-        console.print(ui_group)
-
-    def handle_input(self, entry: str, page: Page) -> str | None:
-        """Process one input entry against the given page.
-
-        Mutates page.chosen_canons in place.
-        Returns an action string: "next", "prev", "commit", "mode", "exit", "confirm", "reset", or None.
-        """
-        self.feedback_text = Text()
-        cmd = entry.strip().lower()
-        if cmd == "":
-            return "confirm"
-        if cmd == "q":
-            return "exit"
-        if cmd == "a":
-            return "prev"
-        if cmd == "d":
-            return "next"
-        if cmd == "c":
-            return "commit"
-        if cmd == "r":
-            return "reset"
-        if cmd == "m":
-            return "mode"
-
-        members = [t.id for t in page.tracks]
-        chosen = page.chosen_canons
-
-        if entry.strip().isdigit():
-            canon_idx = int(entry.strip()) - 1
-            member_idxs = [i for i in range(len(members)) if i != canon_idx]
-        else:
-            try:
-                canon_idx, *member_idxs = [int(v) - 1 for v in entry.split()]
-            except ValueError:
-                feedback = Text("Can't parse:", style="bold red")
-                feedback.append(" use format ")
-                feedback.append("canon_idx[ twin_idx]", style="bold")
-                self.feedback_text = feedback
-                return None
-
-        try:
-            for idx in (canon_idx, *member_idxs):
-                if idx not in range(len(members)):
-                    raise ValueError(f"Index out of range: {idx + 1}")
-            for member_idx in member_idxs:
-                if canon_idx == member_idx:
-                    raise ValueError(f"Can't mark track as canon of itself: {canon_idx + 1}")
-                if members[member_idx] in chosen:
-                    raise ValueError(f"Already chosen as a canon: {member_idx + 1}")
-                if chosen[canon_idx]:
-                    raise ValueError(f"Already has a canon: {canon_idx + 1}")
-        except ValueError as e:
-            self.feedback_text = Text(f"{e}", style="bold red")
+    def current_page(self) -> tuple[str, Page] | None:
+        filtered = self.filtered_pages()
+        if not filtered:
             return None
+        return filtered[self.current_idx]
 
-        for member_idx in member_idxs:
-            page.chosen_canons[member_idx] = members[canon_idx]
-        page.confirmed = False
+    def clamp(self) -> None:
+        total = len(self.filtered_pages())
+        if total > 0 and self.current_idx >= total:
+            self.current_idx = total - 1
 
-        return None
+    def go_next(self) -> bool:
+        total = len(self.filtered_pages())
+        if self.current_idx < total - 1:
+            self.current_idx += 1
+            return True
+        return False
 
-    def apply_changes(self) -> int:
-        changed = 0
-        for key, page in self.state.pages_iter:
-            if not page.confirmed:
-                continue
-            for i, track in enumerate(page.tracks):
-                new_canon = page.chosen_canons[i]
-                if new_canon != page.canons[i]:
-                    track.canon_id = new_canon
-                    self.s.add(track)
-                    changed += 1
-        if changed:
-            self.s.commit()
-        self._dump(self.filepath)
-        return changed
+    def go_prev(self) -> bool:
+        if self.current_idx > 0:
+            self.current_idx -= 1
+            return True
+        return False
 
-    def _dump(self, path: Path) -> None:
+    def dump(self, path: Path) -> None:
         data: dict = {}
-        for key, page in self.state.pages_iter:
+        for key, page in self.pages_iter:
             if not page.confirmed:
                 continue
             id_to_hash = {t.id: t.duplicate_hash for t in page.tracks}
@@ -270,13 +154,13 @@ class Deduplicator:
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def _load(self, path: Path) -> None:
+    def load(self, path: Path) -> None:
         if not path.exists():
             return
         with path.open("r", encoding="utf-8") as f:
             data: dict = json.load(f)
         for key, saved in data.items():
-            page = self.state.pages.get(key)
+            page = self.pages.get(key)
             if page is None:
                 continue
             hash_to_id = {t.duplicate_hash: t.id for t in page.tracks}
@@ -300,48 +184,167 @@ class Deduplicator:
                 page.confirmed = True
                 page.auto_resolved = False  # human-confirmed overrides auto-resolved status
 
-    def _update(self, task_id, total: int):
+
+class DeduplicatorUI:
+    def __init__(self, deduplicator: "Deduplicator"):
+        self.dedup = deduplicator
+        self.state = deduplicator.state
+        self.feedback_text = Text()
+        self.progress = Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+        )
+
+    @staticmethod
+    def _get_table_row(t: Track) -> dict[str, str]:
+        return {
+            "ID": str(t.id),
+            "Title": t.title,
+            "Artist": t.artist or "",
+            "Album artist": t.album_artist or "",
+            "Album": t.album or "",
+            "Track #": str(t.track_n) if t.track_n is not None else "",
+            "Disc #": str(t.disc_n) if t.disc_n is not None else "",
+            "Compilation": "yes" if t.compilation else "",
+            "Year": str(t.year) or "",
+            "Duration": f"{t.duration // 60}:{t.duration % 60:02d}" if t.duration else "",
+            "Date added": t.date_added.strftime("%Y-%m-%d %H:%M:%S"),
+            "Loved": "yes" if t.loved else "",
+            "Album loved": "yes" if t.album_loved else "",
+            "Files": str(len(t.files)) if len(t.files) else "",
+            "XML": str(len(t.apple_tracks)) if t.apple_tracks else "",
+            "AMS": str(len(t.apple_ms_tracks)) if t.apple_ms_tracks else "",
+        }
+
+    @staticmethod
+    def compose_table(key: str, tracks: list[Track], canons: list[int | None]) -> Table:
+        table = Table(title=f"Duplicates by {key}")
+        table.add_column("Index", style="blue")
+        table.add_column("Canon ID", style="blue")
+
+        for h in DeduplicatorUI._get_table_row(tracks[0]).keys():
+            style = "yellow"
+            if h in ("Date added", "Loved", "Album loved", "Files"):
+                style = "green"
+            if h in ("XML", "AMS"):
+                style = "red"
+            table.add_column(h, style=style)
+
+        for i, t in enumerate(tracks):
+            row_kw = {}
+            if t.twins:
+                row_kw["style"] = "bold"
+            if t.canon_id:
+                row_kw["style"] = "dim"
+            row = DeduplicatorUI._get_table_row(t).values()
+            table.add_row(f"{i + 1}", f"{canons[i] or '-'}", *row, **row_kw)
+
+        return table
+
+    def render_page(self, key: str, page: Page, filtered_total: int) -> None:
+        table = self.compose_table(key, page.tracks, page.chosen_canons)
+
+        if page.confirmed:
+            status_text = Text("confirmed", style="dim blue")
+        elif page.auto_resolved:
+            status_text = Text("auto-resolved", style="dim yellow")
+        else:
+            status_text = Text("unconfirmed", style="dim red")
+
+        header = Text(f"[{self.state.filter_mode.value}] {self.state.current_idx + 1}/{filtered_total}  ")
+        header.append_text(status_text)
+        if self.state.partial_match:
+            header.append_text(Text(f" / partial match: {self.state.partial_match}"))
+
+        feedback_content = Group(header, self.feedback_text) if self.feedback_text else header
+
+        ui_group = Group(
+            table,
+            Panel(feedback_content, title="Feedback", border_style="dim blue"),
+            Panel(INSTRUCTION_TEXT, title="Instructions", style="dim"),
+            self.progress,
+        )
+        console.clear()
+        console.print(ui_group)
+
+    def handle_input(self, entry: str, page: Page) -> str | None:
+        """Process one input entry. Returns an action string or None."""
+        self.feedback_text = Text()
+        cmd = entry.strip().lower()
+        if cmd == "":
+            return "confirm"
+        if cmd == "q":
+            return "exit"
+        if cmd == "a":
+            return "prev"
+        if cmd == "d":
+            return "next"
+        if cmd == "c":
+            return "commit"
+        if cmd == "r":
+            return "reset"
+        if cmd == "m":
+            return "mode"
+
+        if entry.strip().isdigit():
+            canon_idx = int(entry.strip()) - 1
+            member_idxs = [i for i in range(len(page.tracks)) if i != canon_idx]
+        else:
+            try:
+                canon_idx, *member_idxs = [int(v) - 1 for v in entry.split()]
+            except ValueError:
+                feedback = Text("Can't parse:", style="bold red")
+                feedback.append(" use format ")
+                feedback.append("canon_idx[ twin_idx]", style="bold")
+                self.feedback_text = feedback
+                return None
+
+        try:
+            page.set_canon(canon_idx, member_idxs)
+        except ValueError as e:
+            self.feedback_text = Text(f"{e}", style="bold red")
+
+        return None
+
+    def _update(self, task_id, total: int) -> None:
         self.progress.update(
             task_id,
-            description=f"[bold blue]{self.filter_mode.value}",
+            description=f"[bold blue]{self.state.filter_mode.value}",
             total=max(total, 1),
             completed=min(self.state.current_idx + 1, total),
         )
 
-    def _serve(self):
+    def serve(self) -> None:
         if not self.state.pages_iter:
             console.print("[green]No duplicates found.[/green]")
             return
 
-        task_id = self.progress.add_task(self.filter_mode.value, total=1)
+        task_id = self.progress.add_task(self.state.filter_mode.value, total=1)
         self.feedback_text = Text()
 
         while True:
-            filtered = self._filtered_pages()
+            filtered = self.state.filtered_pages()
             total = len(filtered)
 
-            # clamp index to valid range for current mode
-            if total > 0 and self.state.current_idx >= total:
-                self.state.current_idx = total - 1
-
+            self.state.clamp()
             self._update(task_id, total)
 
             if total == 0:
                 console.clear()
-                empty_msg = Text(f"No groups in [{self.filter_mode.value}] mode.", style="dim")
+                empty_msg = Text(f"No groups in [{self.state.filter_mode.value}] mode.", style="dim")
                 console.print(Panel(empty_msg, title="Feedback", border_style="dim blue"))
                 console.print(self.progress)
                 entry = Prompt.ask("Write here")
                 cmd = entry.strip().lower()
                 if cmd == "q":
-                    if self.filepath is not None:
-                        self._dump(self.filepath)
+                    self.state.dump(self.dedup.filepath)
                     console.print("[green]Exited.[/green]")
                     return
                 elif cmd == "m":
-                    self._switch_mode()
+                    self.state.switch_mode()
                 elif cmd == "c":
-                    n = self.apply_changes()
+                    n = self.dedup.apply_changes()
                     self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
                 continue
 
@@ -351,35 +354,43 @@ class Deduplicator:
             action = self.handle_input(entry, page)
 
             if action == "next":
-                if self.state.current_idx < total - 1:
-                    self.state.current_idx += 1
-                    self.feedback_text = Text()
+                self.state.go_next()
+                self.feedback_text = Text()
             elif action == "prev":
-                if self.state.current_idx > 0:
-                    self.state.current_idx -= 1
-                    self.feedback_text = Text()
+                self.state.go_prev()
+                self.feedback_text = Text()
             elif action == "confirm":
                 if page.confirmed:
-                    self.state.current_idx += 1
+                    self.state.go_next()
                     self.feedback_text = Text()
                 else:
-                    page.confirmed = True
-                    page.auto_resolved = False
+                    page.confirm()
             elif action == "reset":
-                page.confirmed = False
-                page.auto_resolved = False
-                page.chosen_canons = [None] * len(page.tracks)
+                page.reset()
                 self.feedback_text = Text()
             elif action == "commit":
-                n = self.apply_changes()
+                n = self.dedup.apply_changes()
                 self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
             elif action == "mode":
-                self._switch_mode()
+                self.state.switch_mode()
+                self.feedback_text = Text()
             elif action == "exit":
-                if self.filepath is not None:
-                    self._dump(self.filepath)
+                self.state.dump(self.dedup.filepath)
                 console.print("[green]Exited.[/green]")
                 return
+
+
+class Deduplicator:
+    COLUMN_SETS = [
+        [Track.artist_norm, Track.title_norm],
+        [Track.album_artist_norm, Track.title_norm],
+        [Track.album_norm, Track.title_norm],
+    ]
+
+    def __init__(self, s: Session, filepath: Path, partial_match: str = ""):
+        self.s = s
+        self.filepath = filepath
+        self.state = DeduplicatorState(partial_match=partial_match)
 
     def get_track_groups(self, cols: list[Column]) -> list[tuple[str, list[Track]]]:
         combinations = self.s.exec(
@@ -407,33 +418,70 @@ class Deduplicator:
             groups.append((key, track_group))
         return groups
 
-    def fill_state(self):
-        pages = {}
-        track_ids_set = set()
+    def dedup_pages(self, groups: list[tuple[str, list[Track]]]) -> list[tuple[str, list[Track]]]:
+        """
+        Deduplicate track pages:
+            remove duplicate groups or smaller subgroups,
+            produced by different column sets.
+        Leave the biggest group.
+        """
+        id_tups = [tuple(sorted([t.id for t in tracks if t.id is not None])) for _, tracks in groups]
+        id_tups.sort(key=len, reverse=True)
+        seen = set()
+        for id_tup in id_tups:
+            # starting from the longest sets
+            # 1. same group check
+            if id_tup in seen:
+                continue
+            id_set = set(id_tup)
+            # 2. subgroup check
+            if any([id_set.issubset(set(v)) for v in seen]):
+                continue
+
+            seen.add(id_tup)
+
+        # construct groups back from seen, keep original order
+        new_groups = []
+        for key, tracks in groups:
+            id_tup = tuple(sorted([t.id for t in tracks if t.id is not None]))
+            if id_tup in seen:
+                new_groups.append((key, tracks))
+                seen.remove(id_tup)
+        return new_groups
+
+    def fill_state(self) -> None:
+        groups = []
         for cols in self.COLUMN_SETS:
             for key, tracks in self.get_track_groups(cols):
-                # deduplicate groups themselves
-                track_ids = tuple([t.id for t in tracks])
-                if track_ids in track_ids_set:
-                    continue
-                track_ids_set.add(track_ids)
+                groups.append((key, tracks))
+        groups = self.dedup_pages(groups)
+        pages = {key: Page(tracks=tracks) for key, tracks in groups}
+        self.state = DeduplicatorState(pages=pages, current_idx=0, partial_match=self.state.partial_match)
+        self.state.load(self.filepath)
 
-                canons = [t.canon_id for t in tracks]
-                pages[key] = Page(
-                    tracks=tracks,
-                    canons=canons,
-                    chosen_canons=list(canons),
-                    auto_resolved=any(c is not None for c in canons),
-                )
-        self.state = DeduplicatorState(pages=pages, current_idx=0)
-        if self.filepath is not None:
-            self._load(self.filepath)
+    def apply_changes(self) -> int:
+        changed = 0
+        for key, page in self.state.pages_iter:
+            if not page.confirmed:
+                continue
+            for i, track in enumerate(page.tracks):
+                new_canon = page.chosen_canons[i]
+                if new_canon != page.canons[i]:
+                    track.canon_id = new_canon
+                    self.s.add(track)
+                    changed += 1
+        if changed:
+            self.s.commit()
+        self.state.dump(self.filepath)
+        return changed
 
-    def run(self):
+    def run(self) -> None:
+        print("loading...", end="\r")
         self.fill_state()
-        resolved = self._filtered_pages()
-        self.state.current_idx = next((i for i, (_, p) in enumerate(resolved) if not p.confirmed), 0)
-        self._serve()
+        filtered = self.state.filtered_pages()
+        self.state.current_idx = next((i for i, (_, p) in enumerate(filtered) if not p.confirmed), 0)
+        print(" done!", end="\r")
+        DeduplicatorUI(self).serve()
 
 
 def auto_deduplicate(

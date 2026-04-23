@@ -8,7 +8,7 @@ from airdrome.console import console
 from airdrome.library.organize import organize_library
 from airdrome.library.scan import MusicScanner
 from airdrome.models import Track, engine
-from airdrome.normalize.dedup import Deduplicator, auto_deduplicate, compose_table
+from airdrome.normalize.dedup import Deduplicator, DeduplicatorUI, auto_deduplicate
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
 
@@ -75,7 +75,7 @@ def auto_deduplicate_cli(
         twin_count = sum(len(g) - 1 for g in groups)
         for group in groups:
             canons = [None] + [group[0].id] * (len(group) - 1)
-            console.print(compose_table("auto-dedup", group, canons))
+            console.print(DeduplicatorUI.compose_table("auto-dedup", group, canons))
     if dry_run:
         console.print(
             f"[yellow]{twin_count} track(s) / {len(groups)} group(s) "
