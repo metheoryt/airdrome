@@ -206,13 +206,13 @@ class DeduplicatorUI:
             "Album": t.album or "",
             "Track #": str(t.track_n) if t.track_n is not None else "",
             "Disc #": str(t.disc_n) if t.disc_n is not None else "",
-            "Compilation": "yes" if t.compilation else "",
+            "Comp": "✅" if t.compilation else "",
             "Year": str(t.year) or "",
-            "Duration": f"{t.duration // 60}:{t.duration % 60:02d}" if t.duration else "",
-            "Date added": t.date_added.strftime("%Y-%m-%d %H:%M:%S"),
-            "Loved": "yes" if t.loved else "",
-            "Album loved": "yes" if t.album_loved else "",
-            "Files": str(len(t.files)) if len(t.files) else "",
+            "Time": f"{t.duration // 60}:{t.duration % 60:02d}" if t.duration else "",
+            "Files": "\n".join([f.duration_str or "--:--" for f in t.files]) if len(t.files) else "",
+            "Date added": t.date_added.strftime("%Y-%m-%d"),
+            "❤️": "yes" if t.loved else "",
+            "Album ❤️": "yes" if t.album_loved else "",
             "XML": str(len(t.apple_tracks)) if t.apple_tracks else "",
             "AMS": str(len(t.apple_ms_tracks)) if t.apple_ms_tracks else "",
         }
@@ -225,7 +225,7 @@ class DeduplicatorUI:
 
         for h in DeduplicatorUI._get_table_row(tracks[0]).keys():
             style = "yellow"
-            if h in ("Date added", "Loved", "Album loved", "Files"):
+            if h in ("Date added", "❤️", "Album ❤️", "Files"):
                 style = "green"
             if h in ("XML", "AMS"):
                 style = "red"

@@ -323,6 +323,13 @@ class TrackFile(Base, table=True):
         return None
 
     @property
+    def duration_str(self):
+        if self.duration is None:
+            return ""
+        d = int(self.duration)
+        return f"{d // 60:02d}:{d % 60:02d}"
+
+    @property
     def absolute_path(self) -> Path:
         """
         Returns the current usable absolute path of the file.
