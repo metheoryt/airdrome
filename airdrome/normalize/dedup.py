@@ -205,7 +205,7 @@ class DeduplicatorUI:
             "Album artist": t.album_artist or "",
             "Album": t.album or "",
             "Track #": str(t.track_n) if t.track_n is not None else "",
-            "Disc #": str(t.disc_n) if t.disc_n is not None else "",
+            "Disc #": str(t.disc_n) if t.disc_n else "",
             "Comp": "✅" if t.compilation else "",
             "Year": str(t.year) or "",
             "Time": f"{t.duration // 60}:{t.duration % 60:02d}" if t.duration else "",
