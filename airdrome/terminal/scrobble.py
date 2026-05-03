@@ -11,6 +11,7 @@ from airdrome.console import console
 from airdrome.enums import Platform
 from airdrome.models import TrackAlias, engine
 from airdrome.scrobbles.augment_aliases import augment_aliases
+from airdrome.scrobbles.copy_plays import copy_plays
 from airdrome.scrobbles.match_aliases import match_aliases
 
 
@@ -69,3 +70,11 @@ def scrobble_match(
     threshold: float = typer.Option(0.4, "--threshold", "-t"),
 ):
     match_aliases(reset=reset, dry_run=dry_run, threshold=threshold)
+
+
+@scrobble_app.command("copy-plays", help="Copy scrobbles to TrackPlay rows for all matched aliases.")
+def scrobble_copy_plays(
+    reset: bool = typer.Option(False, "--reset", "-r"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-d"),
+):
+    copy_plays(reset=reset, dry_run=dry_run)

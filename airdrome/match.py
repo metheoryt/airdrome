@@ -1,8 +1,8 @@
+from collections.abc import Callable
 from typing import Any
 
 from sqlmodel import Session, func, select
 
-from .console import console
 from .models import Track
 
 
@@ -39,7 +39,12 @@ def build_match_score(artist_norm, album_norm):
 
 
 def find_best_track(
-    session: Session, title_norm, artist_norm, album_norm, threshold: float = 0.4
+    session: Session,
+    title_norm,
+    artist_norm,
+    album_norm,
+    threshold: float = 0.4,
+    log: Callable[[str], None] | None = None,
 ) -> Track | None:
 
     if not artist_norm and not album_norm:
@@ -70,7 +75,7 @@ def find_best_track(
 
     if score_val < threshold:
         return None
-    if score_val < threshold + 0.1:
+    if score_val < threshold + 0.1 and log:
         alias_l = f"{title_norm[:25]:<25} | {album_norm[:40]:<40} | {artist_norm[:25]:<25}"
         track_l = (
             f"{track.title_norm[:25]:<25} | "
@@ -78,8 +83,8 @@ def find_best_track(
             f"{track.artist_norm[:25]:<25} | "
             f"{track.album_artist_norm[:25]:<25}"
         )
-        console.print(f"[dim]low confidence {score_val:.03f}[/dim]")
-        console.print(f"[dim]  alias: {alias_l}[/dim]")
-        console.print(f"[dim]  track: {track_l}[/dim]")
+        log(f"[dim]low confidence {score_val:.03f}[/dim]")
+        log(f"[dim]  alias: {alias_l}[/dim]")
+        log(f"[dim]  track: {track_l}[/dim]")
 
     return track

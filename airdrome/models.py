@@ -451,7 +451,12 @@ class TrackAliasScrobble(Base, table=True):
 class TrackPlay(Base, table=True):
     """A play event linked directly to a canonical Track (no alias matching required)."""
 
-    __table_args__ = (UniqueConstraint("track_id", "played_at"),)
+    __table_args__ = (
+        UniqueConstraint("track_id", "played_at"),
+        UniqueConstraint(
+            "source_scrobble_id",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
@@ -459,7 +464,7 @@ class TrackPlay(Base, table=True):
     played_at: AwareDatetime
     platform: Platform
     source_scrobble_id: int | None = Field(
-        default=None, foreign_key="trackaliasscrobble.id", unique=True, ondelete="SET NULL"
+        default=None, foreign_key="trackaliasscrobble.id", ondelete="SET NULL"
     )
 
 

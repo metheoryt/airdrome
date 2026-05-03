@@ -1,11 +1,11 @@
 from collections.abc import Callable
 
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-from sqlmodel import Session, delete, func, select, update
+from sqlmodel import Session, func, select, update
 
 from airdrome.console import console
 from airdrome.match import find_best_track
-from airdrome.models import TrackAlias, TrackPlay, engine
+from airdrome.models import TrackAlias, engine
 
 
 def do_match_aliases(
@@ -14,16 +14,16 @@ def do_match_aliases(
     dry_run: bool = False,
     threshold: float = 0.4,
     on_progress: Callable[[int, int], None] | None = None,
+    log: Callable[[str], None] | None = None,
 ) -> tuple[int, int]:
     """
-    Core alias-matching logic. Returns (matched, unmatched).
+    Sets TrackAlias.track_id for unmatched aliases. Returns (matched, unmatched).
 
     on_progress(matched, unmatched) is called after each alias is processed.
     Testable directly — no session creation, no progress output.
     """
     if reset:
         s.exec(update(TrackAlias).values(track_id=None))
-        s.exec(delete(TrackPlay).where(TrackPlay.source_scrobble_id.is_not(None)))
         s.flush()
 
     aliases = s.exec(select(TrackAlias).where(TrackAlias.track_id.is_(None))).all()
@@ -32,25 +32,12 @@ def do_match_aliases(
     sp = s.begin_nested() if dry_run else None
 
     for alias in aliases:
-        track = find_best_track(s, alias.title_norm, alias.artist_norm, alias.album_norm, threshold=threshold)
+        track = find_best_track(
+            s, alias.title_norm, alias.artist_norm, alias.album_norm, threshold=threshold, log=log
+        )
         if track:
             matched += 1
             alias.track = track
-            for scrobble in alias.scrobbles:
-                existing = s.exec(
-                    select(TrackPlay).where(TrackPlay.source_scrobble_id == scrobble.id)
-                ).one_or_none()
-                if existing:
-                    existing.track_id = track.id
-                else:
-                    s.add(
-                        TrackPlay(
-                            track_id=track.id,
-                            played_at=scrobble.date,
-                            platform=scrobble.platform,
-                            source_scrobble_id=scrobble.id,
-                        )
-                    )
             if matched % 100 == 0:
                 s.flush()
         else:
@@ -98,6 +85,7 @@ def match_aliases(reset: bool = False, dry_run: bool = False, threshold: float =
                 dry_run=dry_run,
                 threshold=threshold,
                 on_progress=_on_progress,
+                log=progress.console.print,
             )
 
         if dry_run:
