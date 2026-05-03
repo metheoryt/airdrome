@@ -4,7 +4,9 @@ import typer
 
 from airdrome.conf import settings
 from airdrome.console import console
-from airdrome.navidrome import checkpoint_wal, sync_apple_playlists_to_navi, sync_tracks_plays_to_navi
+from airdrome.navidrome import checkpoint_wal, sync_playlists_to_navi, sync_tracks_plays_to_navi
+
+from .state import AppState
 
 
 navidrome_app = typer.Typer(help="Navidrome sync")
@@ -44,17 +46,19 @@ _YES_OPT = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped c
 
 
 @push_app.command("playlists")
-def push_playlists(yes: bool = _YES_OPT):
+def push_playlists(ctx: typer.Context, yes: bool = _YES_OPT):
     username = _require_user()
     _guard_navidrome_stopped(yes)
     checkpoint_wal()
     console.print("[bold green]Pushing playlists to Navidrome[/bold green]")
-    sync_apple_playlists_to_navi(username)
+    state: AppState = ctx.obj
+    sync_playlists_to_navi(state.session, username)
     console.print("[bold green]Done[/bold green]")
 
 
 @push_app.command("tracks")
 def push_tracks(
+    ctx: typer.Context,
     reset: bool = typer.Option(False, "--reset", "-r"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped confirmation"),
 ):
@@ -62,19 +66,20 @@ def push_tracks(
     _guard_navidrome_stopped(yes)
     checkpoint_wal()
     console.print("[bold green]Pushing tracks and scrobbles to Navidrome[/bold green]")
-    sync_tracks_plays_to_navi(username, reset)
+    state: AppState = ctx.obj
+    sync_tracks_plays_to_navi(state.session, username, reset)
     console.print("[bold green]Done[/bold green]")
 
 
 @pull_app.command("plays")
-def pull_plays(reset: bool = typer.Option(False, "--reset", "-r")):
+def pull_plays(ctx: typer.Context, reset: bool = typer.Option(False, "--reset", "-r")):
     _require_user()
     console.print("[yellow]navidrome pull plays: not yet implemented[/yellow]")
     raise typer.Exit(code=1)
 
 
 @pull_app.command("ratings")
-def pull_ratings(reset: bool = typer.Option(False, "--reset", "-r")):
+def pull_ratings(ctx: typer.Context, reset: bool = typer.Option(False, "--reset", "-r")):
     _require_user()
     console.print("[yellow]navidrome pull ratings: not yet implemented[/yellow]")
     raise typer.Exit(code=1)

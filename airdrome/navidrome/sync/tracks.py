@@ -5,13 +5,13 @@ from rich.progress import TextColumn
 from sqlmodel import Session, delete, func, select
 
 from airdrome.console import console, make_progress
-from airdrome.models import Track, TrackFile, TrackPlay, engine
+from airdrome.models import Track, TrackFile, TrackPlay
 
 from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, get_nv_engine
 
 
-def sync_tracks_plays_to_navi(username: str, reset: bool):
-    with Session(engine) as s, Session(get_nv_engine()) as nvs:
+def sync_tracks_plays_to_navi(s: Session, username: str, reset: bool):
+    with Session(get_nv_engine()) as nvs:
         TrackSyncer(username, reset).sync_all(s, nvs)
 
 

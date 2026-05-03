@@ -6,7 +6,7 @@ from sqlmodel import Session, func, select, update
 
 from airdrome.console import console, make_progress
 from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
-from airdrome.models import Track, TrackFile, engine
+from airdrome.models import Track, TrackFile
 
 
 class FileOrganizer:
@@ -151,29 +151,30 @@ class FileOrganizer:
             if _on_item:
                 _on_item(i)
 
-        s.commit()
+        s.flush()
         return i
 
 
 def organize_library(
+    s: Session,
     dst_dir: Path,
     copy: bool = False,
     reset: bool = False,
 ):
     mover = FileOrganizer(dst_dir=dst_dir, copy=copy)
     verb = "copied" if copy else "moved"
-    with Session(engine) as s:
-        if reset:
-            console.print("[yellow]library paths reset[/yellow]")
 
-        pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
-        total = s.exec(select(func.count()).select_from(pending_stmt.subquery())).one()
-        if not total and not reset:
-            console.print("[dim]Nothing to do.[/dim]")
-            return
+    if reset:
+        console.print("[yellow]library paths reset[/yellow]")
 
-        with make_progress() as progress:
-            task = progress.add_task(f"Organizing library ({verb})", total=total)
-            i = mover.organize(s, reset=reset, _on_item=lambda _: progress.advance(task))
+    pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
+    total = s.exec(select(func.count()).select_from(pending_stmt.subquery())).one()
+    if not total and not reset:
+        console.print("[dim]Nothing to do.[/dim]")
+        return
+
+    with make_progress() as progress:
+        task = progress.add_task(f"Organizing library ({verb})", total=total)
+        i = mover.organize(s, reset=reset, _on_item=lambda _: progress.advance(task))
 
     console.print(f"[green]{i} tracks {verb}[/green]")

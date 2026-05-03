@@ -64,17 +64,6 @@ def test_reset_clears_existing_matches(session):
     assert unmatched == 0
 
 
-def test_dry_run_does_not_commit(session):
-    _make_track(session, "Stairway to Heaven", "Led Zeppelin")
-    alias = _make_alias(session, "Stairway to Heaven", "Led Zeppelin")
-
-    do_match_aliases(session, dry_run=True)
-
-    # after rollback, alias should have no track_id
-    session.refresh(alias)
-    assert alias.track_id is None
-
-
 def test_returns_counts(session):
     _make_track(session, "Song A", "Artist A")
     _make_track(session, "Song B", "Artist B")

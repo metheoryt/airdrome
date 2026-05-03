@@ -1,11 +1,11 @@
 from datetime import UTC, datetime
-from pathlib import Path
 
 from sqlmodel import select
 
 from airdrome.cloud.apple.models import ApplePlaylist, AppleTrack
+from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
 from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
-from airdrome.models import Track
+from airdrome.models import Playlist, PlaylistTrack, Track
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -59,20 +59,10 @@ def test_import_tracks_creates_apple_track(session):
     data = _track_data(name="My Song")
     track_id = data["Track ID"]
 
-    do_import_tracks(session, {str(track_id): data}, root_dir=Path("/nonexistent"))
+    do_import_tracks(session, {str(track_id): data})
 
     apple_track = session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).one()
     assert apple_track.name == "My Song"
-
-
-def test_import_tracks_creates_linked_track(session):
-    data = _track_data(name="My Song", artist="My Artist")
-    track_id = data["Track ID"]
-
-    do_import_tracks(session, {str(track_id): data}, root_dir=Path("/nonexistent"))
-
-    track = session.exec(select(Track).where(Track.title == "My Song")).one()
-    assert track.artist == "My Artist"
 
 
 def test_import_tracks_idempotent(session):
@@ -80,26 +70,66 @@ def test_import_tracks_idempotent(session):
     track_id = data["Track ID"]
     tracks = {str(track_id): data}
 
-    first = do_import_tracks(session, tracks, root_dir=Path("/nonexistent"))
-    second = do_import_tracks(session, tracks, root_dir=Path("/nonexistent"))
+    first = do_import_tracks(session, tracks)
+    second = do_import_tracks(session, tracks)
 
-    assert first == (1, 0)
-    assert second == (0, 0)
-
-    count = len(session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).all())
-    assert count == 1
+    assert first == 1
+    assert second == 0
+    assert len(session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).all()) == 1
 
 
-def test_import_tracks_reuses_existing_track(session):
-    """Two Apple tracks with same title/artist should link to the same Track."""
+def test_import_tracks_no_track_id_before_unify(session):
+    data = _track_data()
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    apple_track = session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])).one()
+    assert apple_track.track_id is None
+
+
+# ── unify tests ───────────────────────────────────────────────────────────────
+
+
+def test_unify_creates_track(session):
+    data = _track_data(name="My Song", artist="My Artist")
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    unify_apple_tracks(session)
+
+    track = session.exec(select(Track).where(Track.title == "My Song")).one()
+    assert track.artist == "My Artist"
+
+
+def test_unify_links_apple_track(session):
+    data = _track_data(name="My Song")
+    do_import_tracks(session, {str(data["Track ID"]): data})
+    unify_apple_tracks(session)
+
+    apple_track = session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])).one()
+    assert apple_track.track_id is not None
+
+
+def test_unify_reuses_existing_track(session):
+    """Two Apple tracks with same title/artist should link to the same canonical Track."""
     d1 = _track_data(name="Same Song", artist="Same Artist")
     d2 = _track_data(name="Same Song", artist="Same Artist")
-    tracks = {str(d1["Track ID"]): d1, str(d2["Track ID"]): d2}
+    do_import_tracks(session, {str(d1["Track ID"]): d1, str(d2["Track ID"]): d2})
 
-    do_import_tracks(session, tracks, root_dir=Path("/nonexistent"))
+    unify_apple_tracks(session)
 
     tracks_in_db = session.exec(select(Track).where(Track.title == "Same Song")).all()
     assert len(tracks_in_db) == 1
+
+
+def test_unify_idempotent(session):
+    data = _track_data()
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    first_created, _ = unify_apple_tracks(session)
+    session.flush()
+    second_created, _ = unify_apple_tracks(session)
+
+    assert first_created == 1
+    assert second_created == 0
 
 
 # ── playlist import tests ─────────────────────────────────────────────────────
@@ -107,7 +137,7 @@ def test_import_tracks_reuses_existing_track(session):
 
 def test_import_playlists_creates_playlist(session):
     track_data = _track_data()
-    do_import_tracks(session, {str(track_data["Track ID"]): track_data}, root_dir=Path("/nonexistent"))
+    do_import_tracks(session, {str(track_data["Track ID"]): track_data})
 
     pl = _playlist_data(name="My Playlist", track_ids=[track_data["Track ID"]])
     created = do_import_playlists(session, [pl])
@@ -129,7 +159,7 @@ def test_import_playlists_skips_smart_playlists(session):
 
 def test_import_playlists_idempotent(session):
     track_data = _track_data()
-    do_import_tracks(session, {str(track_data["Track ID"]): track_data}, root_dir=Path("/nonexistent"))
+    do_import_tracks(session, {str(track_data["Track ID"]): track_data})
 
     pl = _playlist_data(track_ids=[track_data["Track ID"]])
     first = do_import_playlists(session, [pl])
@@ -137,3 +167,41 @@ def test_import_playlists_idempotent(session):
 
     assert first == 1
     assert second == 0
+
+
+# ── playlist unify tests ──────────────────────────────────────────────────────
+
+
+def test_unify_playlists_creates_canonical_playlist(session):
+    track_data = _track_data()
+    do_import_tracks(session, {str(track_data["Track ID"]): track_data})
+    unify_apple_tracks(session)
+
+    pl = _playlist_data(name="Unified Playlist", track_ids=[track_data["Track ID"]])
+    do_import_playlists(session, [pl])
+
+    pl_created, tr_linked = unify_apple_playlists(session)
+
+    assert pl_created == 1
+    assert tr_linked == 1
+    playlist = session.exec(select(Playlist).where(Playlist.name == "Unified Playlist")).one()
+    assert playlist is not None
+    pt = session.exec(select(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist.id)).all()
+    assert len(pt) == 1
+
+
+def test_unify_playlists_idempotent(session):
+    track_data = _track_data()
+    do_import_tracks(session, {str(track_data["Track ID"]): track_data})
+    unify_apple_tracks(session)
+
+    pl = _playlist_data(track_ids=[track_data["Track ID"]])
+    do_import_playlists(session, [pl])
+
+    first_pl, first_tr = unify_apple_playlists(session)
+    session.flush()
+    second_pl, second_tr = unify_apple_playlists(session)
+
+    assert first_pl == 1
+    assert second_pl == 0
+    assert second_tr == 0

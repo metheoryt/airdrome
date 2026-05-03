@@ -163,6 +163,7 @@ class Track(Base, table=True):
     aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
     files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
     plays: list["TrackPlay"] = Relationship(back_populates="track", cascade_delete=True)  # direct play events
+    playlist_memberships: list["PlaylistTrack"] = Relationship(back_populates="track", cascade_delete=True)
 
     def __repr__(self):
         return f"<Track {self.title} by {self.artist} on {self.album}>"
@@ -466,6 +467,29 @@ class TrackPlay(Base, table=True):
     source_scrobble_id: int | None = Field(
         default=None, foreign_key="trackaliasscrobble.id", ondelete="SET NULL"
     )
+
+
+class Playlist(Base, table=True):
+    __table_args__ = (UniqueConstraint("platform", "source_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    platform: Platform
+    source_id: str
+    description: str | None = Field(None)
+
+    tracks: list["PlaylistTrack"] = Relationship(back_populates="playlist", cascade_delete=True)
+
+
+class PlaylistTrack(Base, table=True):
+    __table_args__ = (UniqueConstraint("playlist_id", "track_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    playlist_id: int = Field(foreign_key="playlist.id", index=True, ondelete="CASCADE")
+    playlist: Playlist = Relationship(back_populates="tracks")
+    track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
+    track: Track = Relationship(back_populates="playlist_memberships")
+    position: int = Field(index=True)
 
 
 engine = create_engine(str(settings.db_dsn), echo=settings.db_echo)

@@ -4,13 +4,12 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from sqlmodel import Session, delete, func, select
 
 from airdrome.console import console
-from airdrome.models import TrackAlias, TrackPlay, engine
+from airdrome.models import TrackAlias, TrackPlay
 
 
 def do_copy_plays(
     s: Session,
     reset: bool = False,
-    dry_run: bool = False,
     on_progress: Callable[[int], None] | None = None,
 ) -> int:
     """
@@ -25,8 +24,6 @@ def do_copy_plays(
 
     aliases = s.exec(select(TrackAlias).where(TrackAlias.track_id.is_not(None))).all()
     total = 0
-
-    sp = s.begin_nested() if dry_run else None
 
     for i, alias in enumerate(aliases):
         for scrobble in alias.scrobbles:
@@ -52,37 +49,28 @@ def do_copy_plays(
         if on_progress:
             on_progress(i + 1)
 
-    if dry_run:
-        sp.rollback()
-    else:
-        s.commit()
-
     return total
 
 
-def copy_plays(reset: bool = False, dry_run: bool = False):
+def copy_plays(s: Session, reset: bool = False):
     progress = Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TextColumn("{task.completed}/{task.total} aliases  "),
         TimeElapsedColumn(),
     )
-    with Session(engine) as s:
-        if reset:
-            console.print("[yellow]dropping all scrobble-derived plays[/yellow]")
 
-        total = s.exec(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_not(None))).one()
-        label = f"Copying plays from {total} matched aliases{' [dry run]' if dry_run else ''}"
+    if reset:
+        console.print("[yellow]dropping all scrobble-derived plays[/yellow]")
 
-        with progress:
-            task = progress.add_task(label, total=total)
+    total = s.exec(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_not(None))).one()
 
-            def _on_progress(aliases_done: int):
-                progress.update(task, completed=aliases_done)
+    with progress:
+        task = progress.add_task(f"Copying plays from {total} matched aliases", total=total)
 
-            plays = do_copy_plays(s, reset=reset, dry_run=dry_run, on_progress=_on_progress)
+        def _on_progress(aliases_done: int):
+            progress.update(task, completed=aliases_done)
 
-        if dry_run:
-            console.print("[dim]dry run — no changes saved[/dim]")
-        else:
-            console.print(f"[green]plays copied: {plays}[/green]")
+        plays = do_copy_plays(s, reset=reset, on_progress=_on_progress)
+
+    console.print(f"[green]plays copied: {plays}[/green]")
