@@ -38,9 +38,11 @@ class PathType(TypeDecorator):
     impl = sa.String
     cache_ok = True
 
-    def process_bind_param(self, value: Path | None, dialect):
+    def process_bind_param(self, value: Path | str | None, dialect):
         if value is None:
             return None
+        if isinstance(value, str):
+            return value
         return value.as_posix()
 
     def process_result_value(self, value: str, dialect):

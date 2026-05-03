@@ -1,3 +1,4 @@
+from rich.progress import Progress, TaskID
 from sqlmodel import Session, select
 
 from airdrome.enums import Platform
@@ -23,8 +24,8 @@ def _bind_track_files(apple_track: AppleFSDiscoverable, s: Session) -> list[Trac
     return tfs
 
 
-def _unify_xml_tracks(s: Session) -> tuple[int, int]:
-    created = updated = 0
+def _unify_xml_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
+    created = updated = files_bound = 0
     for apple_track in s.exec(select(AppleTrack).where(AppleTrack.track_id.is_(None))):
         track_defaults = {
             "track_n": apple_track.track_number,
@@ -57,15 +58,18 @@ def _unify_xml_tracks(s: Session) -> tuple[int, int]:
             tfs = _bind_track_files(apple_track, s)
             for tf in tfs:
                 track.files.append(tf)
+            files_bound += len(tfs)
 
         s.flush()
+        progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
 
-    return created, updated
+    return created, updated, files_bound
 
 
-def _unify_ms_tracks(s: Session) -> tuple[int, int]:
-    created = updated = 0
+def _unify_ms_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
+    created = updated = files_bound = 0
     for ms_track in s.exec(select(AppleMediaServicesTrack)):
+        ms_track: AppleMediaServicesTrack
         duration_ms = ms_track.duration
         track_defaults = {
             "track_n": ms_track.track_number,
@@ -95,24 +99,26 @@ def _unify_ms_tracks(s: Session) -> tuple[int, int]:
             tfs = _bind_track_files(ms_track, s)
             for tf in tfs:
                 track.files.append(tf)
+            files_bound += len(tfs)
 
         s.flush()
+        progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
 
-    return created, updated
+    return created, updated, files_bound
 
 
-def unify_apple_tracks(s: Session) -> tuple[int, int]:
+def unify_apple_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
     """
     Create canonical Track records from AppleTrack and AppleMediaServicesTrack data,
     then bind matching TrackFile records via possible_locations() DB lookup.
-    Returns (created, updated) Track counts.
+    Returns (created, updated, files_bound) Track counts.
     """
-    xml_created, xml_updated = _unify_xml_tracks(s)
-    ms_created, ms_updated = _unify_ms_tracks(s)
-    return xml_created + ms_created, xml_updated + ms_updated
+    xml_created, xml_updated, xml_files = _unify_xml_tracks(s, progress, task)
+    ms_created, ms_updated, ms_files = _unify_ms_tracks(s, progress, task)
+    return xml_created + ms_created, xml_updated + ms_updated, xml_files + ms_files
 
 
-def _unify_xml_playlists(s: Session) -> tuple[int, int]:
+def _unify_xml_playlists(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
     playlists_created = tracks_linked = 0
 
     stmt = select(ApplePlaylist).where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
@@ -140,11 +146,12 @@ def _unify_xml_playlists(s: Session) -> tuple[int, int]:
             tracks_linked += 1
 
         s.flush()
+        progress.update(task, advance=1, pl_created=playlists_created, tr_linked=tracks_linked)
 
     return playlists_created, tracks_linked
 
 
-def _unify_ms_playlists(s: Session) -> tuple[int, int]:
+def _unify_ms_playlists(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
     playlists_created = tracks_linked = 0
 
     for pl in s.exec(select(AppleMediaServicesPlaylist)):
@@ -171,15 +178,16 @@ def _unify_ms_playlists(s: Session) -> tuple[int, int]:
             tracks_linked += 1
 
         s.flush()
+        progress.update(task, advance=1, pl_created=playlists_created, tr_linked=tracks_linked)
 
     return playlists_created, tracks_linked
 
 
-def unify_apple_playlists(s: Session) -> tuple[int, int]:
+def unify_apple_playlists(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
     """
     Create canonical Playlist and PlaylistTrack records from Apple platform data.
     Returns (playlists_created, tracks_linked) counts.
     """
-    xml_pl, xml_tr = _unify_xml_playlists(s)
-    ms_pl, ms_tr = _unify_ms_playlists(s)
+    xml_pl, xml_tr = _unify_xml_playlists(s, progress, task)
+    ms_pl, ms_tr = _unify_ms_playlists(s, progress, task)
     return xml_pl + ms_pl, xml_tr + ms_tr

@@ -5,7 +5,7 @@ from sqlmodel import Field, Relationship
 
 from airdrome.models import AwareDatetime, Base, Track
 
-from . import AppleFSDiscoverable
+from .mixins import AppleFSDiscoverable
 
 
 class AppleMediaServicesTrack(Base, AppleFSDiscoverable, table=True):
