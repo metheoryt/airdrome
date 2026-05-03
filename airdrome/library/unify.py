@@ -1,4 +1,4 @@
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 from sqlmodel import Session, func, select
 
 from airdrome.cloud.apple.models import (
@@ -9,6 +9,41 @@ from airdrome.cloud.apple.models import (
 )
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
 from airdrome.console import console
+from airdrome.models import Track, TrackFile
+
+
+def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
+    created = updated = 0
+    stmt = select(TrackFile).where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))
+    for tf in s.exec(stmt):
+        year = None
+        if tf.date:
+            try:
+                year = int(tf.date[:4])
+            except ValueError, IndexError:
+                pass
+        track_defaults = {
+            "duration": round(tf.duration) if tf.duration else None,
+            "year": year,
+        }
+        track, track_created = Track.get_or_create(
+            s,
+            title=tf.title,
+            artist=tf.artist,
+            album=tf.album,
+            album_artist=tf.album_artist,
+            defaults=track_defaults,
+        )
+        if track_created:
+            created += 1
+        elif track.fill_nulls(track_defaults):
+            updated += 1
+
+        tf.track = track
+        s.flush()
+        progress.update(task, advance=1, created=created, updated=updated)
+
+    return created, updated
 
 
 def do_unify(s: Session):
@@ -22,6 +57,11 @@ def do_unify(s: Session):
         .where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
     ).one()
     ms_pl_count = s.exec(select(func.count()).select_from(AppleMediaServicesPlaylist)).one()
+    orphan_count = s.exec(
+        select(func.count())
+        .select_from(TrackFile)
+        .where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))
+    ).one()
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -63,8 +103,22 @@ def do_unify(s: Session):
         )
         pl_created, tr_linked = unify_apple_playlists(s, progress, task)
 
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn(
+            "[green]{task.fields[created]} new[/green]  [yellow]{task.fields[updated]} updated[/yellow]"
+        ),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Orphan files", total=orphan_count, created=0, updated=0)
+        orphan_created, orphan_updated = _unify_orphan_files(s, progress, task)
+
     console.print(
         f"  Tracks: [green]{created} new[/green]  [yellow]{updated} updated[/yellow]  "
         f"[cyan]{files_bound} files bound[/cyan]\n"
-        f"  Playlists: [magenta]{pl_created} new[/magenta]  [blue]{tr_linked} tracks linked[/blue]"
+        f"  Playlists: [magenta]{pl_created} new[/magenta]  [blue]{tr_linked} tracks linked[/blue]\n"
+        f"  Orphan files: [green]{orphan_created} new[/green]  [yellow]{orphan_updated} updated[/yellow]"
     )
