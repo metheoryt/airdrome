@@ -53,6 +53,7 @@ class AppleMediaServicesPlaylist(Base, table=True):
     container_type: str
     parent_folder_identifier: int | None = Field(None, sa_column=sa.Column(sa.BIGINT, nullable=True))
     date_added: AwareDatetime | None = None
+    items_modified_date: AwareDatetime | None = None
 
     members: list["AppleMediaServicesPlaylistTrack"] = Relationship(back_populates="playlist")
 

@@ -123,11 +123,18 @@ def _unify_xml_playlists(s: Session, progress: Progress, task: TaskID) -> tuple[
 
     stmt = select(ApplePlaylist).where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
     for pl in s.exec(stmt):
+        track_dates = [m.track.date_added for m in pl.members if m.track.date_added is not None]
+        defaults = {
+            "name": pl.name,
+            "description": pl.description or None,
+            "date_added": min(track_dates) if track_dates else None,
+            "date_modified": max(track_dates) if track_dates else None,
+        }
         playlist, pl_created = Playlist.get_or_create(
             s,
             platform=Platform.APPLE,
             source_id=pl.persistent_id,
-            defaults={"name": pl.name, "description": pl.description or None},
+            defaults=defaults,
         )
         if pl_created:
             playlists_created += 1
@@ -159,7 +166,11 @@ def _unify_ms_playlists(s: Session, progress: Progress, task: TaskID) -> tuple[i
             s,
             platform=Platform.APPLE,
             source_id=str(pl.container_identifier),
-            defaults={"name": pl.title},
+            defaults={
+                "name": pl.title,
+                "date_added": pl.date_added,
+                "date_modified": pl.items_modified_date,
+            },
         )
         if pl_created:
             playlists_created += 1

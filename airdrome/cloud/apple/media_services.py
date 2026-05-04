@@ -82,6 +82,7 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
             container_type=container_type,
             parent_folder_identifier=pl.get("Parent Folder Identifier"),
             date_added=_parse_dt(pl.get("Added Date")),
+            items_modified_date=_parse_dt(pl.get("Playlist Items Modified Date")),
         )
         s.add(pl_db)
         s.flush()

@@ -479,6 +479,8 @@ class Playlist(Base, table=True):
     platform: Platform
     source_id: str
     description: str | None = Field(None)
+    date_added: AwareDatetime | None = Field(None)
+    date_modified: AwareDatetime | None = Field(None)
 
     tracks: list["PlaylistTrack"] = Relationship(back_populates="playlist", cascade_delete=True)
 
