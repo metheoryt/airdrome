@@ -46,13 +46,22 @@ _YES_OPT = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped c
 
 
 @push_app.command("playlists")
-def push_playlists(ctx: typer.Context, yes: bool = _YES_OPT):
+def push_playlists(
+    ctx: typer.Context,
+    reset: bool = typer.Option(
+        False, "--reset", "-r", help="Drop existing airdrome playlists before pushing"
+    ),
+    yes: bool = _YES_OPT,
+):
     username = _require_user()
     _guard_navidrome_stopped(yes)
     checkpoint_wal()
     console.print("[bold green]Pushing playlists to Navidrome[/bold green]")
     state: AppState = ctx.obj
-    NVPlaylistSyncer(state.session, username)
+    syncer = NVPlaylistSyncer(state.session, username)
+    if reset:
+        syncer.drop_navi_playlists()
+    syncer.push_navi_playlists()
     console.print("[bold green]Done[/bold green]")
 
 
