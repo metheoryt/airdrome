@@ -4,7 +4,7 @@ import typer
 
 from airdrome.conf import settings
 from airdrome.console import console
-from airdrome.navidrome import checkpoint_wal, sync_playlists_to_navi, sync_tracks_plays_to_navi
+from airdrome.navidrome import NVPlaylistSyncer, checkpoint_wal, sync_tracks_plays_to_navi
 
 from .state import AppState
 
@@ -52,7 +52,7 @@ def push_playlists(ctx: typer.Context, yes: bool = _YES_OPT):
     checkpoint_wal()
     console.print("[bold green]Pushing playlists to Navidrome[/bold green]")
     state: AppState = ctx.obj
-    sync_playlists_to_navi(state.session, username)
+    NVPlaylistSyncer(state.session, username)
     console.print("[bold green]Done[/bold green]")
 
 
