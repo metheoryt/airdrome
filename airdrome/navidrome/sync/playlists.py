@@ -1,5 +1,3 @@
-from itertools import groupby
-
 from sqlmodel import Session, delete, func, select
 
 from airdrome.console import console
@@ -33,77 +31,46 @@ class NVPlaylistSyncer:
                 nvs.commit()
                 console.print(f"[yellow]Dropped {len(ids)} existing playlists[/yellow]")
 
-    def push_navi_playlists(self):
-        """
-        For every canonical Playlist, get or create a Navidrome playlist and populate its tracks.
-        Playlists with different names but identical track sets are skipped (first imported wins).
-        Safe to rerun — existing entries are not duplicated.
-        """
+    def push_playlists(self):
+        """Push every canonical Playlist 1:1 to Navidrome. Safe to rerun."""
         with Session(get_nv_engine()) as nvs:
-            imported_track_sets: set[frozenset[str]] = set()
-            names_with_additions: set[str] = set()
-
             all_playlists = list(self.s.exec(select(Playlist).order_by(Playlist.name)))
-            for name, group_iter in groupby(all_playlists, key=lambda p: p.name):
-                group = list(group_iter)
-
-                first_track_set = self._resolve_track_set(group[0], nvs)
-                if first_track_set and first_track_set in imported_track_sets:
-                    console.print(f"  [dim]{'skipped':<14}[/dim]  {name}")
-                    continue
-                if first_track_set:
-                    imported_track_sets.add(first_track_set)
-                _, first_added, first_total = self._sync_playlist(group[0], nvs)
-
-                additional_added = 0
-                for playlist in group[1:]:
-                    track_set = self._resolve_track_set(playlist, nvs)
-                    if track_set and track_set in imported_track_sets:
-                        continue
-                    if track_set:
-                        imported_track_sets.add(track_set)
-                    _, added, _ = self._sync_playlist(playlist, nvs)
-                    additional_added += added
-
-                base = f"{first_added}/{first_total}"
-                suffix = f"(+{additional_added})" if additional_added > 0 else ""
-                console.print(f"  [cyan]{base:<8}{suffix:<6}[/cyan]  {name}")
-                if first_added + additional_added > 0:
-                    names_with_additions.add(name)
-
+            synced = 0
+            for playlist in all_playlists:
+                _, added, total = self._push_playlist(playlist, nvs)
+                console.print(f"  [cyan]{added}/{total}[/cyan]  {playlist.name}")
+                if added > 0:
+                    synced += 1
             nvs.commit()
-            console.print(f"[green]{len(names_with_additions)} playlists synced[/green]")
+            console.print(f"[green]{synced} playlists with new tracks[/green]")
 
     def _get_user(self, nvs: Session) -> User:
         return nvs.exec(select(User).where(User.user_name == self.username)).one()
 
-    def _resolve_track_set(self, playlist: Playlist, nvs: Session) -> frozenset[str]:
-        """Returns frozenset of Navidrome media_file_ids for this playlist's matched tracks."""
-        tracks_stmt = (
-            select(PlaylistTrack)
-            .where(PlaylistTrack.playlist_id == playlist.id)
-            .order_by(PlaylistTrack.position)
-        )
-        ids: set[str] = set()
-        for pt in self.s.exec(tracks_stmt):
-            if not pt.track.main_file:
-                continue
-            media_file = nvs.exec(
-                select(MediaFile).where(MediaFile.path == pt.track.main_file.navidrome_path)
-            ).one_or_none()
-            if media_file:
-                ids.add(media_file.id)
-        return frozenset(ids)
+    def _push_playlist(self, playlist: Playlist, nvs: Session) -> tuple[NVPlaylist, int, int]:
+        nv_playlist: NVPlaylist | None = nvs.exec(
+            select(NVPlaylist).where(NVPlaylist.name == playlist.name)
+        ).one_or_none()
 
-    def _sync_playlist(self, playlist: Playlist, nvs: Session) -> tuple[NVPlaylist, int, int]:
-        nv_playlist = nvs.exec(select(NVPlaylist).where(NVPlaylist.name == playlist.name)).one_or_none()
         if not nv_playlist:
             nv_playlist = NVPlaylist(
                 name=playlist.name,
-                comment=playlist.description,
                 owner_id=self._get_user(nvs).id,
+                comment=playlist.comment,
+                created_at=playlist.date_added,
+                updated_at=playlist.date_modified,
             )
             nvs.add(nv_playlist)
+            nvs.flush()
+
+        elif nv_playlist.updated_at > playlist.date_modified:
+            # Navidrome playlist is newer or the same, skip
+            return nv_playlist, 0, 0
+
+        else:
+            # Navidrome playlist is older, update
+            nv_playlist.comment = playlist.comment
+            nv_playlist.updated_at = playlist.date_modified
             nvs.flush()
 
         tracks_stmt = (
@@ -143,14 +110,17 @@ class NVPlaylistSyncer:
     def _make_nv_playlist_track(
         self, track: Track, nv_playlist: NVPlaylist, nvs: Session
     ) -> PlaylistTracks | None:
-        if not track.main_file:
+        effective_track = track.canon if track.canon_id else track
+        if not effective_track or not effective_track.main_file:
             return None
 
         media_file = nvs.exec(
-            select(MediaFile).where(MediaFile.path == track.main_file.navidrome_path)
+            select(MediaFile).where(MediaFile.path == effective_track.main_file.navidrome_path)
         ).one_or_none()
         if not media_file:
-            console.print(f"[yellow]not found in Navidrome: {track.main_file.navidrome_path}[/yellow]")
+            console.print(
+                f"[yellow]not found in Navidrome: {effective_track.main_file.navidrome_path}[/yellow]"
+            )
             return None
 
         existing = nvs.exec(

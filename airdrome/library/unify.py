@@ -1,5 +1,5 @@
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
-from sqlmodel import Session, func, select
+from sqlmodel import Session, delete, func, select
 
 from airdrome.cloud.apple.models import (
     AppleMediaServicesPlaylist,
@@ -9,7 +9,7 @@ from airdrome.cloud.apple.models import (
 )
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
 from airdrome.console import console
-from airdrome.models import Track, TrackFile
+from airdrome.models import Playlist, Track, TrackFile
 
 
 def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
@@ -46,7 +46,12 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
     return created, updated
 
 
-def do_unify(s: Session):
+def do_unify(s: Session, reset_playlists: bool = False):
+    if reset_playlists:
+        s.exec(delete(Playlist))
+        s.flush()
+        console.print("[yellow]Canonical playlists reset[/yellow]")
+
     xml_track_count = s.exec(
         select(func.count()).select_from(AppleTrack).where(AppleTrack.track_id.is_(None))
     ).one()

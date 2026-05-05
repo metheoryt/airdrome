@@ -472,17 +472,26 @@ class TrackPlay(Base, table=True):
 
 
 class Playlist(Base, table=True):
-    __table_args__ = (UniqueConstraint("platform", "source_id"),)
+    __table_args__ = (UniqueConstraint("name"),)
 
     id: int | None = Field(default=None, primary_key=True)
     name: str
     platform: Platform
-    source_id: str
+    source_id: str | None = Field(None)
     description: str | None = Field(None)
     date_added: AwareDatetime | None = Field(None)
     date_modified: AwareDatetime | None = Field(None)
 
     tracks: list["PlaylistTrack"] = Relationship(back_populates="playlist", cascade_delete=True)
+
+    @property
+    def comment(self):
+        c = self.platform.name
+        if self.source_id:
+            c += f" #{self.source_id}"
+        if self.description:
+            c += f"\n{self.description}"
+        return c
 
 
 class PlaylistTrack(Base, table=True):

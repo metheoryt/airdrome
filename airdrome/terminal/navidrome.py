@@ -61,7 +61,7 @@ def push_playlists(
     syncer = NVPlaylistSyncer(state.session, username)
     if reset:
         syncer.drop_navi_playlists()
-    syncer.push_navi_playlists()
+    syncer.push_playlists()
     console.print("[bold green]Done[/bold green]")
 
 

@@ -102,11 +102,15 @@ def auto_deduplicate_cli(
 
 
 @library_app.command("unify")
-def library_unify(ctx: typer.Context, dry_run: bool = _DRY_RUN):
+def library_unify(
+    ctx: typer.Context,
+    reset: bool = typer.Option(False, "--reset", "-r", help="Delete and rebuild all canonical playlists."),
+    dry_run: bool = _DRY_RUN,
+):
     """Create canonical Track and Playlist records from all imported platform data."""
     state: AppState = ctx.obj
     state.dry_run = dry_run
-    do_unify(state.session)
+    do_unify(state.session, reset_playlists=reset)
     console.print("[bold green]Unify complete[/bold green]")
 
 
