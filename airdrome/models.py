@@ -505,4 +505,16 @@ class PlaylistTrack(Base, table=True):
     position: int = Field(index=True)
 
 
+class PlaylistSyncState(Base, table=True):
+    """Snapshot of the merged track list at the time of last Navidrome sync."""
+
+    __tablename__ = "playlistsyncstate"
+
+    id: int | None = Field(default=None, primary_key=True)
+    playlist_id: int = Field(foreign_key="playlist.id", unique=True, ondelete="CASCADE")
+    nv_playlist_id: str
+    synced_track_ids: list[int] = Field(sa_column=sa.Column(sa.JSON, nullable=False))
+    synced_at: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+
+
 engine = create_engine(str(settings.db_dsn), echo=settings.db_echo)

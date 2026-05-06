@@ -80,6 +80,26 @@ def push_tracks(
     console.print("[bold green]Done[/bold green]")
 
 
+@pull_app.command("playlists")
+def pull_playlists(
+    ctx: typer.Context,
+    reset: bool = typer.Option(
+        False, "--reset", "-r", help="Drop existing airdrome playlists before syncing"
+    ),
+    yes: bool = _YES_OPT,
+):
+    username = _require_user()
+    _guard_navidrome_stopped(yes)
+    checkpoint_wal()
+    console.print("[bold green]Pulling playlists from Navidrome[/bold green]")
+    state: AppState = ctx.obj
+    syncer = NVPlaylistSyncer(state.session, username)
+    if reset:
+        syncer.drop_navi_playlists()
+    syncer.pull_playlists()
+    console.print("[bold green]Done[/bold green]")
+
+
 @pull_app.command("plays")
 def pull_plays(ctx: typer.Context, reset: bool = typer.Option(False, "--reset", "-r")):
     _require_user()
