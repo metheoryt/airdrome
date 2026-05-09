@@ -4,17 +4,19 @@ import typer
 
 from airdrome.conf import settings
 from airdrome.console import console
-from airdrome.navidrome import NVPlaylistSyncer, checkpoint_wal, sync_tracks_plays_to_navi
+from airdrome.navidrome import checkpoint_wal, sync_tracks_plays_to_navi
+from airdrome.navidrome.adapter import NavidromeAdapter
+from airdrome.playlists import sync as sync_playlists
 
 from .state import AppState
 
 
 navidrome_app = typer.Typer(help="Navidrome sync")
-push_app = typer.Typer(help="Push data from Airdrome to Navidrome")
-pull_app = typer.Typer(help="Pull data from Navidrome into Airdrome")
+sync_app = typer.Typer(help="Bidirectional sync between Airdrome and Navidrome")
+push_app = typer.Typer(help="Push data from Airdrome to Navidrome (one-way)")
 
+navidrome_app.add_typer(sync_app, name="sync")
 navidrome_app.add_typer(push_app, name="push")
-navidrome_app.add_typer(pull_app, name="pull")
 
 
 def _require_user() -> str:
@@ -45,23 +47,16 @@ def _guard_navidrome_stopped(yes: bool):
 _YES_OPT = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped confirmation")
 
 
-@push_app.command("playlists")
-def push_playlists(
-    ctx: typer.Context,
-    reset: bool = typer.Option(
-        False, "--reset", "-r", help="Drop existing airdrome playlists before pushing"
-    ),
-    yes: bool = _YES_OPT,
-):
+@sync_app.command("playlists")
+def sync_playlists_cmd(ctx: typer.Context, yes: bool = _YES_OPT):
+    """3-way merge every playlist between Airdrome and Navidrome."""
     username = _require_user()
     _guard_navidrome_stopped(yes)
     checkpoint_wal()
-    console.print("[bold green]Pushing playlists to Navidrome[/bold green]")
+    console.print("[bold green]Syncing playlists with Navidrome[/bold green]")
     state: AppState = ctx.obj
-    syncer = NVPlaylistSyncer(state.session, username)
-    if reset:
-        syncer.drop_navi_playlists()
-    syncer.push_playlists()
+    with NavidromeAdapter(state.session, username) as adapter:
+        sync_playlists(state.session, adapter)
     console.print("[bold green]Done[/bold green]")
 
 
@@ -78,37 +73,3 @@ def push_tracks(
     state: AppState = ctx.obj
     sync_tracks_plays_to_navi(state.session, username, reset)
     console.print("[bold green]Done[/bold green]")
-
-
-@pull_app.command("playlists")
-def pull_playlists(
-    ctx: typer.Context,
-    reset: bool = typer.Option(
-        False, "--reset", "-r", help="Drop existing airdrome playlists before syncing"
-    ),
-    yes: bool = _YES_OPT,
-):
-    username = _require_user()
-    _guard_navidrome_stopped(yes)
-    checkpoint_wal()
-    console.print("[bold green]Pulling playlists from Navidrome[/bold green]")
-    state: AppState = ctx.obj
-    syncer = NVPlaylistSyncer(state.session, username)
-    if reset:
-        syncer.drop_navi_playlists()
-    syncer.pull_playlists()
-    console.print("[bold green]Done[/bold green]")
-
-
-@pull_app.command("plays")
-def pull_plays(ctx: typer.Context, reset: bool = typer.Option(False, "--reset", "-r")):
-    _require_user()
-    console.print("[yellow]navidrome pull plays: not yet implemented[/yellow]")
-    raise typer.Exit(code=1)
-
-
-@pull_app.command("ratings")
-def pull_ratings(ctx: typer.Context, reset: bool = typer.Option(False, "--reset", "-r")):
-    _require_user()
-    console.print("[yellow]navidrome pull ratings: not yet implemented[/yellow]")
-    raise typer.Exit(code=1)

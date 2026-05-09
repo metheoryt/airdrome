@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional, Type, TypeVar
 
@@ -14,6 +15,15 @@ from .conf import settings
 from .enums import Platform
 from .library import MAIN_SUBDIR
 from .normalize.norm import normalize_name
+
+
+class Backend(StrEnum):
+    """Music server backends Airdrome can mirror playlists to."""
+
+    NAVIDROME = "navidrome"
+    # JELLYFIN = "jellyfin"
+    # PLEX = "plex"
+    # SUBSONIC = "subsonic"
 
 
 if TYPE_CHECKING:
@@ -503,14 +513,28 @@ class PlaylistTrack(Base, table=True):
     position: int = Field(index=True)
 
 
-class PlaylistSyncState(Base, table=True):
-    """Snapshot of the merged track list at the time of last Navidrome sync."""
+class PlaylistLink(Base, table=True):
+    """Mirror of a canonical Airdrome `Playlist` on an external server backend.
 
-    __tablename__ = "playlistsyncstate"
+    One row per (Airdrome playlist, backend) pair. `synced_track_ids` is the
+    snapshot of canonical track IDs that were reconciled on both sides at the
+    last sync — used as the merge base for the next 3-way merge. Tracks that
+    Airdrome holds but the backend can't represent (no `TrackFile` / no
+    `MediaFile`) and tracks the backend holds that Airdrome can't resolve
+    (no matching local file) are deliberately excluded from this snapshot
+    so they read as steady-state rather than as one-sided deletions.
+    """
+
+    __tablename__ = "playlistlink"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "backend"),
+        UniqueConstraint("backend", "external_id"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
-    playlist_id: int = Field(foreign_key="playlist.id", unique=True, ondelete="CASCADE")
-    nv_playlist_id: str
+    playlist_id: int = Field(foreign_key="playlist.id", index=True, ondelete="CASCADE")
+    backend: Backend
+    external_id: str
     synced_track_ids: list[int] = Field(sa_column=sa.Column(sa.JSON, nullable=False))
     synced_at: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
 
