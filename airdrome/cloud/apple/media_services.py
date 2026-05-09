@@ -5,7 +5,7 @@ from sqlmodel import Session, delete, select
 
 from airdrome.console import console, make_import_progress, make_progress
 
-from .models import AppleMediaServicesPlaylist, AppleMediaServicesPlaylistTrack, AppleMediaServicesTrack
+from .models import AppleMSPlaylist, AppleMSPlaylistTrack, AppleMSTrack
 from .package import AppleMediaServicesPackage
 
 
@@ -19,15 +19,13 @@ def _parse_dt(s: str | None) -> datetime | None:
 
 
 def import_ms_track(s: Session, item: dict) -> bool:
-    """Import Apple Media Services tracks. Yields whether an AppleMediaServicesTrack record was created."""
+    """Import Apple Media Services tracks. Yields whether an AppleMSTrack record was created."""
     track_identifier = item["Track Identifier"]
 
-    if s.exec(
-        select(AppleMediaServicesTrack).where(AppleMediaServicesTrack.track_identifier == track_identifier)
-    ).one_or_none():
+    if s.exec(select(AppleMSTrack).where(AppleMSTrack.track_identifier == track_identifier)).one_or_none():
         return False
 
-    ms_track = AppleMediaServicesTrack(
+    ms_track = AppleMSTrack(
         track_identifier=track_identifier,
         title=item["Title"],
         artist=item.get("Artist"),
@@ -70,13 +68,11 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
         return created
 
     pl_db = s.exec(
-        select(AppleMediaServicesPlaylist).where(
-            AppleMediaServicesPlaylist.container_identifier == container_id
-        )
+        select(AppleMSPlaylist).where(AppleMSPlaylist.container_identifier == container_id)
     ).one_or_none()
 
     if not pl_db:
-        pl_db = AppleMediaServicesPlaylist(
+        pl_db = AppleMSPlaylist(
             container_identifier=container_id,
             title=title,
             container_type=container_type,
@@ -90,15 +86,9 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
 
     if not created:
         # clear all playlist members to insert again
-        s.exec(
-            delete(AppleMediaServicesPlaylistTrack).where(
-                AppleMediaServicesPlaylistTrack.playlist_id == pl_db.id
-            )
-        )
+        s.exec(delete(AppleMSPlaylistTrack).where(AppleMSPlaylistTrack.playlist_id == pl_db.id))
 
-    ms_tracks = s.exec(
-        select(AppleMediaServicesTrack).where(AppleMediaServicesTrack.track_identifier.in_(item_identifiers))
-    )
+    ms_tracks = s.exec(select(AppleMSTrack).where(AppleMSTrack.track_identifier.in_(item_identifiers)))
     ms_tracks_by_identifier = {t.track_identifier: t for t in ms_tracks}
 
     pos = 0
@@ -108,7 +98,7 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
             continue
 
         pos += 1
-        s.add(AppleMediaServicesPlaylistTrack(track=ms_track, playlist=pl_db, position=pos))
+        s.add(AppleMSPlaylistTrack(track=ms_track, playlist=pl_db, position=pos))
 
     s.flush()
 
@@ -121,8 +111,8 @@ def import_apple_media_services(s: Session, path: str, reset: bool = False):
     playlist_items = package.load_playlists()
 
     if reset:
-        s.exec(delete(AppleMediaServicesPlaylist))
-        s.exec(delete(AppleMediaServicesTrack))
+        s.exec(delete(AppleMSPlaylist))
+        s.exec(delete(AppleMSTrack))
         s.flush()
         console.print("[yellow]Apple Media Services data purged[/yellow]")
 

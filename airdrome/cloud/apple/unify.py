@@ -6,13 +6,7 @@ from sqlmodel import Session, select
 from airdrome.enums import Platform
 from airdrome.models import AwareDatetime, Playlist, PlaylistTrack, Track, TrackFile
 
-from .models import (
-    AppleFSDiscoverable,
-    AppleMediaServicesPlaylist,
-    AppleMediaServicesTrack,
-    ApplePlaylist,
-    AppleTrack,
-)
+from .models import AppleFSDiscoverable, AppleMSPlaylist, AppleMSTrack, ApplePlaylist, AppleTrack
 
 
 def _bind_track_files(apple_track: AppleFSDiscoverable, s: Session) -> list[TrackFile]:
@@ -70,8 +64,8 @@ def _unify_xml_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int
 
 def _unify_ms_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
     created = updated = files_bound = 0
-    for ms_track in s.exec(select(AppleMediaServicesTrack)):
-        ms_track: AppleMediaServicesTrack
+    for ms_track in s.exec(select(AppleMSTrack)):
+        ms_track: AppleMSTrack
         duration_ms = ms_track.duration
         track_defaults = {
             "track_n": ms_track.track_number,
@@ -111,7 +105,7 @@ def _unify_ms_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int,
 
 def unify_apple_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
     """
-    Create canonical Track records from AppleTrack and AppleMediaServicesTrack data,
+    Create canonical Track records from AppleTrack and AppleMSTrack data,
     then bind matching TrackFile records via possible_locations() DB lookup.
     Returns (created, updated, files_bound) Track counts.
     """
@@ -157,7 +151,7 @@ def _gather_xml_source_playlists(s: Session) -> list[_SourcePlaylist]:
 
 def _gather_ms_source_playlists(s: Session) -> list[_SourcePlaylist]:
     result = []
-    for pl in s.exec(select(AppleMediaServicesPlaylist)):
+    for pl in s.exec(select(AppleMSPlaylist)):
         track_ids = [
             m.track.track_id
             for m in sorted(pl.members, key=lambda m: m.position)

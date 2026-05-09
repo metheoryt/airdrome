@@ -17,7 +17,7 @@ from .normalize.norm import normalize_name
 
 
 if TYPE_CHECKING:
-    from airdrome.cloud.apple.models import AppleMediaServicesTrack, AppleTrack
+    from airdrome.cloud.apple.models import AppleMSTrack, AppleTrack
 
 
 T = TypeVar("T", bound="Base")
@@ -159,9 +159,7 @@ class Track(Base, table=True):
     #   but this is rare and doesn't have anything to do with duplicates.
     # They tend to be the same tracks but with different apple IDs. We can pick first.
     apple_tracks: list["AppleTrack"] = Relationship(back_populates="track", cascade_delete=True)
-    apple_ms_tracks: list["AppleMediaServicesTrack"] = Relationship(
-        back_populates="track", cascade_delete=True
-    )
+    apple_ms_tracks: list["AppleMSTrack"] = Relationship(back_populates="track", cascade_delete=True)
     aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
     files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
     plays: list["TrackPlay"] = Relationship(back_populates="track", cascade_delete=True)  # direct play events

@@ -1,8 +1,4 @@
-from .media_services import (
-    AppleMediaServicesPlaylist,
-    AppleMediaServicesPlaylistTrack,
-    AppleMediaServicesTrack,
-)
+from .media_services import AppleMSPlaylist, AppleMSPlaylistTrack, AppleMSTrack
 from .mixins import AppleFSDiscoverable
 from .xml_library import ApplePlaylist, ApplePlaylistBase, ApplePlaylistTrack, AppleTrack
 
@@ -13,7 +9,7 @@ __all__ = [
     "ApplePlaylist",
     "ApplePlaylistBase",
     "ApplePlaylistTrack",
-    "AppleMediaServicesTrack",
-    "AppleMediaServicesPlaylist",
-    "AppleMediaServicesPlaylistTrack",
+    "AppleMSTrack",
+    "AppleMSPlaylist",
+    "AppleMSPlaylistTrack",
 ]

@@ -8,7 +8,7 @@ from airdrome.models import AwareDatetime, Base, Track
 from .mixins import AppleFSDiscoverable
 
 
-class AppleMediaServicesTrack(Base, AppleFSDiscoverable, table=True):
+class AppleMSTrack(Base, AppleFSDiscoverable, table=True):
     __tablename__ = "apple_ms_track"
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -17,7 +17,7 @@ class AppleMediaServicesTrack(Base, AppleFSDiscoverable, table=True):
     track_id: int | None = Field(None, foreign_key="track.id", ondelete="CASCADE")
     track: Track | None = Relationship(back_populates="apple_ms_tracks")
 
-    playlist_memberships: list["AppleMediaServicesPlaylistTrack"] = Relationship(back_populates="track")
+    playlist_memberships: list["AppleMSPlaylistTrack"] = Relationship(back_populates="track")
 
     track_identifier: int = Field(sa_column=sa.Column(sa.BIGINT, unique=True, nullable=False))
     title: str
@@ -43,7 +43,7 @@ class AppleMediaServicesTrack(Base, AppleFSDiscoverable, table=True):
     audio_matched_track_identifier: int | None = Field(None, sa_column=sa.Column(sa.BIGINT, nullable=True))
 
 
-class AppleMediaServicesPlaylist(Base, table=True):
+class AppleMSPlaylist(Base, table=True):
     __tablename__ = "apple_ms_playlist"
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -55,19 +55,19 @@ class AppleMediaServicesPlaylist(Base, table=True):
     date_added: AwareDatetime | None = None
     items_modified_date: AwareDatetime | None = None
 
-    members: list["AppleMediaServicesPlaylistTrack"] = Relationship(back_populates="playlist")
+    members: list["AppleMSPlaylistTrack"] = Relationship(back_populates="playlist")
 
 
-class AppleMediaServicesPlaylistTrack(Base, table=True):
+class AppleMSPlaylistTrack(Base, table=True):
     __tablename__ = "apple_ms_playlist_track"
     __table_args__ = (UniqueConstraint("track_id", "playlist_id", name="uq_apple_ms_playlist_track"),)
 
     id: int | None = Field(default=None, primary_key=True)
 
     playlist_id: int = Field(foreign_key="apple_ms_playlist.id", index=True, ondelete="CASCADE")
-    playlist: AppleMediaServicesPlaylist = Relationship(back_populates="members")
+    playlist: AppleMSPlaylist = Relationship(back_populates="members")
 
     track_id: int = Field(foreign_key="apple_ms_track.id", index=True, ondelete="CASCADE")
-    track: AppleMediaServicesTrack = Relationship(back_populates="playlist_memberships")
+    track: AppleMSTrack = Relationship(back_populates="playlist_memberships")
 
     position: int = Field(index=True)

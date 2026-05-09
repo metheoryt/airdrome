@@ -1,12 +1,7 @@
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 from sqlmodel import Session, delete, func, select
 
-from airdrome.cloud.apple.models import (
-    AppleMediaServicesPlaylist,
-    AppleMediaServicesTrack,
-    ApplePlaylist,
-    AppleTrack,
-)
+from airdrome.cloud.apple.models import AppleMSPlaylist, AppleMSTrack, ApplePlaylist, AppleTrack
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
 from airdrome.console import console
 from airdrome.models import Playlist, Track, TrackFile
@@ -55,13 +50,13 @@ def do_unify(s: Session, reset_playlists: bool = False):
     xml_track_count = s.exec(
         select(func.count()).select_from(AppleTrack).where(AppleTrack.track_id.is_(None))
     ).one()
-    ms_track_count = s.exec(select(func.count()).select_from(AppleMediaServicesTrack)).one()
+    ms_track_count = s.exec(select(func.count()).select_from(AppleMSTrack)).one()
     xml_pl_count = s.exec(
         select(func.count())
         .select_from(ApplePlaylist)
         .where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
     ).one()
-    ms_pl_count = s.exec(select(func.count()).select_from(AppleMediaServicesPlaylist)).one()
+    ms_pl_count = s.exec(select(func.count()).select_from(AppleMSPlaylist)).one()
     orphan_count = s.exec(
         select(func.count())
         .select_from(TrackFile)
