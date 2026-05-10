@@ -2,7 +2,8 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from rich.progress import TextColumn
-from sqlmodel import Session, delete, func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_progress
 from airdrome.models import Track, TrackFile, TrackPlay
@@ -29,7 +30,7 @@ class TrackSyncer:
 
     def get_user(self, nvs: Session) -> User:
         if self._user is None:
-            self._user = nvs.exec(select(User).where(User.user_name == self.username)).one()
+            self._user = nvs.scalars(select(User).where(User.user_name == self.username)).one()
         return self._user
 
     @staticmethod
@@ -37,13 +38,13 @@ class TrackSyncer:
         mf = track.main_file
         if not mf or not mf.navidrome_path:
             return None
-        return nvs.exec(select(MediaFile).where(MediaFile.path == mf.navidrome_path)).one_or_none()
+        return nvs.scalars(select(MediaFile).where(MediaFile.path == mf.navidrome_path)).one_or_none()
 
     def _goc_annotation(
         self, item_id: str, item_type: Annotation.ItemType, nvs: Session
     ) -> tuple[Annotation, bool]:
         user = self.get_user(nvs)
-        ann = nvs.exec(
+        ann = nvs.scalars(
             select(Annotation).where(
                 Annotation.item_id == item_id,
                 Annotation.item_type == item_type,
@@ -69,9 +70,9 @@ class TrackSyncer:
     ) -> tuple[int, datetime | None, datetime | None]:
         user = self.get_user(nvs)
 
-        for play in s.exec(select(TrackPlay).where(TrackPlay.track_id == track.id)):
+        for play in s.scalars(select(TrackPlay).where(TrackPlay.track_id == track.id)):
             submission_time = int(play.played_at.timestamp())
-            exists = nvs.exec(
+            exists = nvs.scalars(
                 select(Scrobbles).where(
                     Scrobbles.user_id == user.id,
                     Scrobbles.media_file_id == mf.id,
@@ -83,7 +84,7 @@ class TrackSyncer:
 
         nvs.flush()
 
-        cnt, latest_time, first_time = nvs.exec(
+        cnt, latest_time, first_time = nvs.execute(
             select(
                 func.count(), func.max(Scrobbles.submission_time), func.min(Scrobbles.submission_time)
             ).where(Scrobbles.user_id == user.id, Scrobbles.media_file_id == mf.id)
@@ -151,7 +152,7 @@ class TrackSyncer:
             AlbumArtist.album_id == mf.album_id,
             AlbumArtist.role.in_(["albumartist", "artist"]),
         )
-        for artist_id in nvs.exec(stmt):
+        for artist_id in nvs.scalars(stmt):
             artist_ann, _ = self._goc_annotation(artist_id, Annotation.ItemType.ARTIST, nvs)
             self._add_play_count_date(artist_ann, play_count, latest_play)
 
@@ -169,9 +170,9 @@ class TrackSyncer:
 
     def sync_all(self, s: Session, nvs: Session):
         if self.reset:
-            latest_play = s.exec(select(TrackPlay).order_by(TrackPlay.played_at.desc())).first()
+            latest_play = s.scalars(select(TrackPlay).order_by(TrackPlay.played_at.desc())).first()
             if latest_play:
-                res = nvs.exec(
+                res = nvs.execute(
                     delete(Scrobbles).where(Scrobbles.submission_time < latest_play.played_at.timestamp())
                 )
                 nvs.commit()
@@ -185,12 +186,12 @@ class TrackSyncer:
             .join(TrackFile, (TrackFile.track_id == Track.id) & (TrackFile.is_main.is_(True)))
             .where(TrackFile.library_path.is_not(None))
         )
-        total = s.exec(select(func.count()).select_from(stmt.subquery())).one()
+        total = s.scalars(select(func.count()).select_from(stmt.subquery())).one()
 
         i = pc = 0
         with make_progress(TextColumn("  [cyan]{task.fields[plays]}[/cyan] plays")) as progress:
             task = progress.add_task("Syncing tracks to Navidrome", total=total, plays=0)
-            for track in s.exec(stmt):
+            for track in s.scalars(stmt):
                 i += 1
                 pc += self.update_track(track, s, nvs)
                 progress.update(task, advance=1, plays=pc)

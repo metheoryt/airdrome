@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlmodel import select
+from sqlalchemy import select
 
 from airdrome.cloud.apple.models import ApplePlaylist, AppleTrack
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
@@ -61,7 +61,7 @@ def test_import_tracks_creates_apple_track(session):
 
     do_import_tracks(session, {str(track_id): data})
 
-    apple_track = session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).one()
+    apple_track = session.scalars(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).one()
     assert apple_track.name == "My Song"
 
 
@@ -75,14 +75,16 @@ def test_import_tracks_idempotent(session):
 
     assert first == 1
     assert second == 0
-    assert len(session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).all()) == 1
+    assert len(session.scalars(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).all()) == 1
 
 
 def test_import_tracks_no_track_id_before_unify(session):
     data = _track_data()
     do_import_tracks(session, {str(data["Track ID"]): data})
 
-    apple_track = session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])).one()
+    apple_track = session.scalars(
+        select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])
+    ).one()
     assert apple_track.track_id is None
 
 
@@ -95,7 +97,7 @@ def test_unify_creates_track(session):
 
     unify_apple_tracks(session)
 
-    track = session.exec(select(Track).where(Track.title == "My Song")).one()
+    track = session.scalars(select(Track).where(Track.title == "My Song")).one()
     assert track.artist == "My Artist"
 
 
@@ -104,7 +106,9 @@ def test_unify_links_apple_track(session):
     do_import_tracks(session, {str(data["Track ID"]): data})
     unify_apple_tracks(session)
 
-    apple_track = session.exec(select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])).one()
+    apple_track = session.scalars(
+        select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])
+    ).one()
     assert apple_track.track_id is not None
 
 
@@ -116,7 +120,7 @@ def test_unify_reuses_existing_track(session):
 
     unify_apple_tracks(session)
 
-    tracks_in_db = session.exec(select(Track).where(Track.title == "Same Song")).all()
+    tracks_in_db = session.scalars(select(Track).where(Track.title == "Same Song")).all()
     assert len(tracks_in_db) == 1
 
 
@@ -124,9 +128,9 @@ def test_unify_idempotent(session):
     data = _track_data()
     do_import_tracks(session, {str(data["Track ID"]): data})
 
-    first_created, _ = unify_apple_tracks(session)
+    first_created, *_ = unify_apple_tracks(session)
     session.flush()
-    second_created, _ = unify_apple_tracks(session)
+    second_created, *_ = unify_apple_tracks(session)
 
     assert first_created == 1
     assert second_created == 0
@@ -143,7 +147,7 @@ def test_import_playlists_creates_playlist(session):
     created = do_import_playlists(session, [pl])
 
     assert created == 1
-    pl_db = session.exec(select(ApplePlaylist).where(ApplePlaylist.playlist_id == pl["Playlist ID"])).one()
+    pl_db = session.scalars(select(ApplePlaylist).where(ApplePlaylist.playlist_id == pl["Playlist ID"])).one()
     assert pl_db.name == "My Playlist"
 
 
@@ -154,7 +158,7 @@ def test_import_playlists_skips_smart_playlists(session):
     created = do_import_playlists(session, [pl])
 
     assert created == 0
-    assert len(session.exec(select(ApplePlaylist)).all()) == 0
+    assert len(session.scalars(select(ApplePlaylist)).all()) == 0
 
 
 def test_import_playlists_idempotent(session):
@@ -184,9 +188,9 @@ def test_unify_playlists_creates_canonical_playlist(session):
 
     assert pl_created == 1
     assert tr_linked == 1
-    playlist = session.exec(select(Playlist).where(Playlist.name == "Unified Playlist")).one()
+    playlist = session.scalars(select(Playlist).where(Playlist.name == "Unified Playlist")).one()
     assert playlist is not None
-    pt = session.exec(select(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist.id)).all()
+    pt = session.scalars(select(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist.id)).all()
     assert len(pt) == 1
 
 

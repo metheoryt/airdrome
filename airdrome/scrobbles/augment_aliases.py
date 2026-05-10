@@ -1,5 +1,6 @@
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-from sqlmodel import Session, or_, select
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
 
 from airdrome.models import TrackAlias
 
@@ -22,7 +23,7 @@ def maybe_complete_alias(alias: TrackAlias, s: Session):
     if or_wheres:
         wheres.append(or_(*or_wheres))
 
-    matched_aliases = s.exec(select(TrackAlias).where(*wheres)).all()
+    matched_aliases = s.scalars(select(TrackAlias).where(*wheres)).all()
     matched_artist = matched_album = None
     if not len(matched_aliases):
         # no matches
@@ -56,7 +57,7 @@ def maybe_complete_alias(alias: TrackAlias, s: Session):
 
 
 def augment_aliases(s: Session):
-    aliases = s.exec(
+    aliases = s.scalars(
         select(TrackAlias).where(or_(TrackAlias.album_norm == "", TrackAlias.artist_norm == ""))
     ).all()
     progress = Progress(

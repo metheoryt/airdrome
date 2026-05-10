@@ -9,7 +9,8 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
-from sqlmodel import Column, Session, func, select
+from sqlalchemy import Column, func, select
+from sqlalchemy.orm import Session
 
 from airdrome.console import console
 from airdrome.models import Track
@@ -393,7 +394,7 @@ class Deduplicator:
         self.state = DeduplicatorState(partial_match=partial_match)
 
     def get_track_groups(self, cols: list[Column]) -> list[tuple[str, list[Track]]]:
-        combinations = self.s.exec(
+        combinations = self.s.execute(
             select(*cols, func.count(Track.id).label("count"))
             # do not exclude them, since they can appear in a broader group
             # .where(Track.canon_id.is_(None))  # exclude tracks already marked as twins
@@ -406,7 +407,7 @@ class Deduplicator:
             col_to_val = list(zip(cols, col_vals))
             key = ",".join(f"{c.name}={v}" for c, v in col_to_val)
             track_group = list(
-                self.s.exec(
+                self.s.scalars(
                     select(Track)
                     .where(
                         # Track.canon_id.is_(None),
@@ -508,7 +509,7 @@ def auto_deduplicate(
     Returns the resolved groups (each group[0] is the canon). Pass dry_run=True
     to compute the groups without writing to the database.
     """
-    tracks = list(session.exec(select(Track).where(Track.canon_id.is_(None)).order_by(Track.id)))
+    tracks = list(session.scalars(select(Track).where(Track.canon_id.is_(None)).order_by(Track.id)))
 
     def group_key(t: Track) -> tuple:
         key: list = [t.title_norm]

@@ -1,1 +1,1 @@
-from .scrobble import ListenBrainzScrobbleParser
+from .scrobble import ListenBrainzScrobbleParser as ListenBrainzScrobbleParser

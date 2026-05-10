@@ -1,1 +1,1 @@
-from .scrobbles import LastFMScrobbleParser
+from .scrobbles import LastFMScrobbleParser as LastFMScrobbleParser

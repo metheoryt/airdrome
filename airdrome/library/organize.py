@@ -2,7 +2,8 @@ import shutil
 from pathlib import Path
 from typing import Callable
 
-from sqlmodel import Session, func, select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_progress
 from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
@@ -137,12 +138,12 @@ class FileOrganizer:
         Testable directly — no session creation, no progress output.
         """
         if reset:
-            s.exec(update(TrackFile).values(library_path=None, is_main=False))
+            s.execute(update(TrackFile).values(library_path=None, is_main=False))
             s.flush()
 
         pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
         i = 0
-        for track in s.exec(pending_stmt.order_by(Track.artist_norm, Track.album_norm, Track.title_norm)):
+        for track in s.scalars(pending_stmt.order_by(Track.artist_norm, Track.album_norm, Track.title_norm)):
             new_path = self.transfer_track(track)
             if new_path:
                 i += 1
@@ -168,7 +169,7 @@ def organize_library(
         console.print("[yellow]library paths reset[/yellow]")
 
     pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
-    total = s.exec(select(func.count()).select_from(pending_stmt.subquery())).one()
+    total = s.scalars(select(func.count()).select_from(pending_stmt.subquery())).one()
     if not total and not reset:
         console.print("[dim]Nothing to do.[/dim]")
         return

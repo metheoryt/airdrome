@@ -8,7 +8,8 @@ go through this adapter; the merge engine never touches `MediaFile` or
 from datetime import datetime, timezone
 from typing import Iterable
 
-from sqlmodel import Session, delete, func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from airdrome.console import console
 from airdrome.library import MAIN_SUBDIR
@@ -36,7 +37,7 @@ class NavidromeAdapter(PlaylistAdapter):
 
     def __enter__(self) -> "NavidromeAdapter":
         self._nvs = Session(get_nv_engine())
-        user = self.nvs.exec(select(User).where(User.user_name == self._username)).one()
+        user = self.nvs.scalars(select(User).where(User.user_name == self._username)).one()
         self._user_id = user.id
         return self
 
@@ -63,7 +64,7 @@ class NavidromeAdapter(PlaylistAdapter):
     # ── playlist CRUD ────────────────────────────────────────────────────────
 
     def list_playlists(self) -> Iterable[ExternalPlaylist]:
-        rows = self.nvs.exec(select(NVPlaylist).where(NVPlaylist.owner_id == self._user_id)).all()
+        rows = self.nvs.scalars(select(NVPlaylist).where(NVPlaylist.owner_id == self._user_id)).all()
         return [_to_external(p) for p in rows]
 
     def get(self, external_id: str) -> ExternalPlaylist | None:
@@ -89,7 +90,7 @@ class NavidromeAdapter(PlaylistAdapter):
     # ── track operations ─────────────────────────────────────────────────────
 
     def get_track_refs(self, external_id: str) -> list[ExternalTrackRef]:
-        rows = self.nvs.exec(
+        rows = self.nvs.scalars(
             select(PlaylistTracks)
             .where(PlaylistTracks.playlist_id == external_id)
             .order_by(PlaylistTracks.id)
@@ -98,7 +99,7 @@ class NavidromeAdapter(PlaylistAdapter):
 
     def add_track(self, external_id: str, ref: ExternalTrackRef) -> None:
         next_id = (
-            self.nvs.exec(
+            self.nvs.scalars(
                 select(func.coalesce(func.max(PlaylistTracks.id), 0)).where(
                     PlaylistTracks.playlist_id == external_id
                 )
@@ -110,7 +111,7 @@ class NavidromeAdapter(PlaylistAdapter):
         self._dirty_playlists.add(external_id)
 
     def remove_track(self, external_id: str, ref: ExternalTrackRef) -> None:
-        self.nvs.exec(
+        self.nvs.execute(
             delete(PlaylistTracks).where(
                 PlaylistTracks.playlist_id == external_id,
                 PlaylistTracks.media_file_id == ref.id,
@@ -125,7 +126,7 @@ class NavidromeAdapter(PlaylistAdapter):
         media_file = self.nvs.get(MediaFile, ref.id)
         if media_file is None:
             return None
-        tf = self._s.exec(
+        tf = self._s.scalars(
             select(TrackFile).where(TrackFile.library_path == f"{MAIN_SUBDIR}/{media_file.path}")
         ).one_or_none()
         if tf is None or tf.track_id is None:
@@ -139,7 +140,7 @@ class NavidromeAdapter(PlaylistAdapter):
         track = self._s.get(Track, track_id)
         if track is None or track.main_file is None or track.main_file.navidrome_path is None:
             return None
-        media_file = self.nvs.exec(
+        media_file = self.nvs.scalars(
             select(MediaFile).where(MediaFile.path == track.main_file.navidrome_path)
         ).one_or_none()
         if media_file is None:
@@ -150,7 +151,7 @@ class NavidromeAdapter(PlaylistAdapter):
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _recompute_totals(self, nv_pl_id: str) -> None:
-        count, duration, size = self.nvs.exec(
+        count, duration, size = self.nvs.execute(
             select(
                 func.count(),
                 func.coalesce(func.sum(MediaFile.duration), 0),

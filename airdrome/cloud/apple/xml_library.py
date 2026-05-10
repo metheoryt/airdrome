@@ -1,7 +1,8 @@
 import plistlib
 
 from rich.progress import Progress, TaskID
-from sqlmodel import Session, delete, select
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_import_progress, make_progress
 
@@ -23,9 +24,9 @@ def do_import_tracks(
     """
     created = 0
     for data in tracks_data.values():
-        at = AppleTrack(**data)
+        at = AppleTrack.from_raw(data)
 
-        if s.exec(select(AppleTrack).where(AppleTrack.apple_track_id == at.apple_track_id)).one_or_none():
+        if s.scalars(select(AppleTrack).where(AppleTrack.apple_track_id == at.apple_track_id)).one_or_none():
             if progress is not None:
                 progress.advance(task_id)
             continue
@@ -64,24 +65,26 @@ def do_import_playlists(
                 progress.advance(task_id)
             continue
 
-        pl_db = s.exec(
+        pl_db = s.scalars(
             select(ApplePlaylist).where(ApplePlaylist.playlist_id == pl_import.playlist_id)
         ).one_or_none()
         if not pl_db:
-            pl_db = ApplePlaylist.model_validate(pl_import)
+            pl_db = ApplePlaylist(**pl_import.model_dump(exclude={"smart_info", "smart_criteria", "items"}))
             s.add(pl_db)
             s.flush()
             created += 1
 
         existing_track_ids = {
             link.track_id
-            for link in s.exec(select(ApplePlaylistTrack).where(ApplePlaylistTrack.playlist_id == pl_db.id))
+            for link in s.scalars(
+                select(ApplePlaylistTrack).where(ApplePlaylistTrack.playlist_id == pl_db.id)
+            )
         }
         seen = set()
         pl_track_ids = [v.apple_track_id for v in pl_import.items]
         pl_tracks = {
             t.apple_track_id: t
-            for t in s.exec(select(AppleTrack).where(AppleTrack.apple_track_id.in_(pl_track_ids)))
+            for t in s.scalars(select(AppleTrack).where(AppleTrack.apple_track_id.in_(pl_track_ids)))
         }
         pos = 0
         for pls_track in pl_import.items:
@@ -106,8 +109,8 @@ def do_import_playlists(
 
 def import_apple_library(s: Session, xml_filename: str, reset: bool = False):
     if reset:
-        s.exec(delete(ApplePlaylist))
-        s.exec(delete(AppleTrack))
+        s.execute(delete(ApplePlaylist))
+        s.execute(delete(AppleTrack))
         s.flush()
         console.print("[yellow]Apple library purged[/yellow]")
 

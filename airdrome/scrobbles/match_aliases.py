@@ -1,7 +1,8 @@
 from collections.abc import Callable
 
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-from sqlmodel import Session, func, select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
 
 from airdrome.console import console
 from airdrome.match import find_best_track
@@ -22,10 +23,10 @@ def do_match_aliases(
     Testable directly — no session creation, no progress output.
     """
     if reset:
-        s.exec(update(TrackAlias).values(track_id=None))
+        s.execute(update(TrackAlias).values(track_id=None))
         s.flush()
 
-    aliases = s.exec(select(TrackAlias).where(TrackAlias.track_id.is_(None))).all()
+    aliases = s.scalars(select(TrackAlias).where(TrackAlias.track_id.is_(None))).all()
     matched = unmatched = 0
 
     for alias in aliases:
@@ -62,7 +63,7 @@ def match_aliases(s: Session, reset: bool = False, threshold: float = 0.4):
     count_stmt = select(func.count(TrackAlias.id))
     if not reset:
         count_stmt = count_stmt.where(TrackAlias.track_id.is_(None))
-    total = s.exec(count_stmt).one()
+    total = s.scalars(count_stmt).one()
 
     with progress:
         task = progress.add_task(f"Matching {total} aliases", total=total, match=0, mismatch=0)

@@ -5,10 +5,9 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional, Type, TypeVar
 
 import sqlalchemy as sa
 from mutagen import File
-from pydantic import ConfigDict, model_validator
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import ForeignKey, Index, UniqueConstraint, create_engine, select, text
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, validates
 from sqlalchemy.types import TypeDecorator
-from sqlmodel import Field, Index, Relationship, Session, SQLModel, create_engine, select, text
 
 from .cloud.apple.utils import generate_path
 from .conf import settings
@@ -33,14 +32,11 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound="Base")
 
 
-AwareDatetime = Annotated[datetime, Field(sa_column=sa.Column(sa.DateTime(timezone=True)))]
+AwareDatetime = Annotated[datetime, mapped_column(sa.DateTime(timezone=True))]
 
 AwareDatetimeDefNow = Annotated[
     datetime,
-    Field(
-        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False),
-        default_factory=lambda: datetime.now(timezone.utc),
-    ),
+    mapped_column(sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)),
 ]
 
 
@@ -61,19 +57,24 @@ class PathType(TypeDecorator):
         return Path(value)
 
 
-class Base(SQLModel):
+class AirdromeBase(DeclarativeBase):
+    pass
+
+
+class Base(AirdromeBase):
+    __abstract__ = True
+
     @classmethod
     def get_or_create(
         cls: Type[T], session: Session, defaults: dict[str, Any] | None = None, **lookups: Any
     ) -> tuple[T, bool]:
-        statement = select(cls).filter_by(**lookups)
-        instance = session.exec(statement).one_or_none()
+        instance = session.scalars(select(cls).filter_by(**lookups)).one_or_none()
 
         if instance:
             return instance, False
 
         params = {**lookups, **(defaults or {})}
-        instance = cls.model_validate(params)  # to trigger model validation
+        instance = cls(**params)
         session.add(instance)
         session.flush([instance])
         return instance, True
@@ -89,13 +90,14 @@ class Base(SQLModel):
 
     @classmethod
     def truncate_cascade(cls, session: Session):
-        session.exec(text(f"TRUNCATE TABLE {cls.__tablename__} RESTART IDENTITY CASCADE;"))
+        session.execute(text(f"TRUNCATE TABLE {cls.__tablename__} RESTART IDENTITY CASCADE;"))
         session.commit()
 
 
-class Track(Base, table=True):
+class Track(Base):
     """A representation of a single track in a library."""
 
+    __tablename__ = "track"
     __table_args__ = (
         UniqueConstraint("title", "artist", "album", "album_artist"),
         # trigram indexes for matching
@@ -128,55 +130,70 @@ class Track(Base, table=True):
         ),
     )
 
-    model_config = ConfigDict(validate_assignment=True)  # rerun validation on field assignment
-
-    id: int | None = Field(default=None, primary_key=True)
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
 
     # basic metadata
-    title: str = Field()
-    artist: str | None = Field(None)
-    album_artist: str | None = Field(None)
-    album: str | None = Field(None)
+    title: Mapped[str]
+    artist: Mapped[Optional[str]]
+    album_artist: Mapped[Optional[str]]
+    album: Mapped[Optional[str]]
 
     # anything we would need for other things
-    track_n: int | None = Field(None)
-    disc_n: int | None = Field(None)
-    compilation: bool | None = Field(None)
-    year: int | None = Field(None)
-    duration: int | None = Field(None)
+    track_n: Mapped[Optional[int]]
+    disc_n: Mapped[Optional[int]]
+    compilation: Mapped[Optional[bool]]
+    year: Mapped[Optional[int]]
+    duration: Mapped[Optional[int]]
     """Duration in seconds."""
-    date_added: AwareDatetimeDefNow
-    loved: bool | None = Field(None)
-    album_loved: bool | None = Field(None)
-    rating: int | None = Field(None)
-    album_rating: int | None = Field(None)
+    date_added: Mapped[AwareDatetimeDefNow]
+    loved: Mapped[Optional[bool]]
+    album_loved: Mapped[Optional[bool]]
+    rating: Mapped[Optional[int]]
+    album_rating: Mapped[Optional[int]]
 
-    title_norm: str = Field("")
-    artist_norm: str = Field("")
-    album_artist_norm: str = Field("")
-    album_norm: str = Field("")
+    title_norm: Mapped[str] = mapped_column(default="")
+    artist_norm: Mapped[str] = mapped_column(default="")
+    album_artist_norm: Mapped[str] = mapped_column(default="")
+    album_norm: Mapped[str] = mapped_column(default="")
 
     # duplicates
-    canon_id: int | None = Field(None, foreign_key="track.id", index=True, ondelete="SET NULL")
-    canon: Optional["Track"] = Relationship(
+    canon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("track.id", ondelete="SET NULL"), index=True)
+    canon: Mapped[Optional["Track"]] = relationship(
+        "Track",
+        foreign_keys=[canon_id],
         back_populates="twins",
-        sa_relationship_kwargs={"remote_side": "Track.id"},
+        remote_side=[id],
     )
-    twins: list["Track"] = Relationship(back_populates="canon")
+    twins: Mapped[list["Track"]] = relationship(
+        "Track",
+        foreign_keys=[canon_id],
+        back_populates="canon",
+    )
 
     # Other relations.
     # The Track can have multiple Apple tracks,
     #   but this is rare and doesn't have anything to do with duplicates.
     # They tend to be the same tracks but with different apple IDs. We can pick first.
-    apple_tracks: list["AppleTrack"] = Relationship(back_populates="track", cascade_delete=True)
-    apple_ms_tracks: list["AppleMSTrack"] = Relationship(back_populates="track", cascade_delete=True)
-    aliases: list["TrackAlias"] = Relationship(back_populates="track", cascade_delete=True)
-    files: list["TrackFile"] = Relationship(back_populates="track", cascade_delete=True)
-    plays: list["TrackPlay"] = Relationship(back_populates="track", cascade_delete=True)  # direct play events
-    playlist_memberships: list["PlaylistTrack"] = Relationship(back_populates="track", cascade_delete=True)
+    apple_tracks: Mapped[list["AppleTrack"]] = relationship(
+        back_populates="track", cascade="all, delete-orphan"
+    )
+    apple_ms_tracks: Mapped[list["AppleMSTrack"]] = relationship(
+        back_populates="track", cascade="all, delete-orphan"
+    )
+    aliases: Mapped[list["TrackAlias"]] = relationship(back_populates="track", cascade="all, delete-orphan")
+    files: Mapped[list["TrackFile"]] = relationship(back_populates="track", cascade="all, delete-orphan")
+    plays: Mapped[list["TrackPlay"]] = relationship(back_populates="track", cascade="all, delete-orphan")
+    playlist_memberships: Mapped[list["PlaylistTrack"]] = relationship(
+        back_populates="track", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Track {self.title} by {self.artist} on {self.album}>"
+
+    @validates("title", "artist", "album_artist", "album")
+    def _populate_norm(self, key: str, value: Any) -> Any:
+        setattr(self, f"{key}_norm", normalize_name(value))
+        return value
 
     @property
     def table_row(self) -> tuple[str, str | None, str | None, str | None]:
@@ -216,29 +233,6 @@ class Track(Base, table=True):
     def main_file(self) -> Optional["TrackFile"]:
         return next((t for t in self.files if t.is_main), None)
 
-    @model_validator(mode="before")
-    @classmethod
-    def _populate_normalized_fields(cls, data: Any):
-        field_map = (
-            ("title", "title_norm"),
-            ("artist", "artist_norm"),
-            ("album_artist", "album_artist_norm"),
-            ("album", "album_norm"),
-        )
-        if isinstance(data, dict):
-            # raw data
-            for f, nf in field_map:
-                if f in data:
-                    data[nf] = normalize_name(data[f])
-        elif isinstance(data, cls):
-            # existing SQLModel instance
-            for f, nf in field_map:
-                val = getattr(data, f, None)
-                setattr(data, nf, normalize_name(val))
-        else:
-            raise ValueError("Unexpected type:", type(data))
-        return data
-
     @property
     def path_artist(self):
         if self.compilation:
@@ -267,9 +261,8 @@ class Track(Base, table=True):
         )
 
 
-class TrackFile(Base, table=True):
-    model_config = ConfigDict(validate_assignment=True)
-
+class TrackFile(Base):
+    __tablename__ = "trackfile"
     __table_args__ = (
         # trigram indexes for matching
         Index(
@@ -301,30 +294,35 @@ class TrackFile(Base, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
 
     # absolute path of the original file
-    source_path: Path = Field(sa_column=sa.Column(PathType(), nullable=False, unique=True))
+    source_path: Mapped[Path] = mapped_column(PathType(), nullable=False, unique=True)
     # relative path of the file in the library (after organizing)
-    library_path: Path | None = Field(None, sa_column=sa.Column(PathType(), nullable=True, unique=True))
-    is_main: bool = Field(False, nullable=False)
+    library_path: Mapped[Optional[Path]] = mapped_column(PathType(), nullable=True, unique=True)
+    is_main: Mapped[bool] = mapped_column(default=False)
 
-    track_id: int | None = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
-    track: Track | None = Relationship(back_populates="files")
+    track_id: Mapped[Optional[int]] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
+    track: Mapped[Optional[Track]] = relationship(back_populates="files")
 
-    duration: float | None = Field(None)
-    bitrate: int | None = Field(None)
-    date: str | None = Field(None)
+    duration: Mapped[Optional[float]]
+    bitrate: Mapped[Optional[int]]
+    date: Mapped[Optional[str]]
 
-    title: str | None = Field(None)
-    artist: str | None = Field(None)
-    album_artist: str | None = Field(None)
-    album: str | None = Field(None)
+    title: Mapped[Optional[str]]
+    artist: Mapped[Optional[str]]
+    album_artist: Mapped[Optional[str]]
+    album: Mapped[Optional[str]]
 
-    title_norm: str = Field("")
-    artist_norm: str = Field("")
-    album_artist_norm: str = Field("")
-    album_norm: str = Field("")
+    title_norm: Mapped[str] = mapped_column(default="")
+    artist_norm: Mapped[str] = mapped_column(default="")
+    album_artist_norm: Mapped[str] = mapped_column(default="")
+    album_norm: Mapped[str] = mapped_column(default="")
+
+    @validates("title", "artist", "album_artist", "album")
+    def _populate_norm(self, key: str, value: Any) -> Any:
+        setattr(self, f"{key}_norm", normalize_name(value))
+        return value
 
     @property
     def navidrome_path(self) -> str | None:
@@ -365,25 +363,16 @@ class TrackFile(Base, table=True):
             return None
 
         self.artist = get("TPE1", "©ART")
-        self.artist_norm = normalize_name(self.artist)
-
         self.album = get("TALB", "©alb")
-        self.album_norm = normalize_name(self.album)
-
         self.album_artist = get("TPE2", "aART")
-        self.album_artist_norm = normalize_name(self.album_artist)
-
         self.title = get("TIT2", "©nam")
-        self.title_norm = normalize_name(self.title)
-
         self.date = get("TDRC", "TDOR", "©day")
         self.duration = getattr(audio.info, "length")
         self.bitrate = getattr(audio.info, "bitrate", 0)
 
 
-class TrackAlias(Base, table=True):
-    model_config = ConfigDict(validate_assignment=True)
-
+class TrackAlias(Base):
+    __tablename__ = "trackalias"
     __table_args__ = (
         UniqueConstraint("title", "album", "artist"),
         # trigram indexes for matching
@@ -409,59 +398,47 @@ class TrackAlias(Base, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
 
-    artist: str | None = Field(None)
-    title: str | None = Field(None)
-    album: str | None = Field(None)
+    artist: Mapped[Optional[str]]
+    title: Mapped[Optional[str]]
+    album: Mapped[Optional[str]]
 
-    artist_norm: str = Field("")
-    title_norm: str = Field("")
-    album_norm: str = Field("")
+    artist_norm: Mapped[str] = mapped_column(default="")
+    title_norm: Mapped[str] = mapped_column(default="")
+    album_norm: Mapped[str] = mapped_column(default="")
 
-    track_id: int | None = Field(None, foreign_key="track.id", index=True)
-    track: Track | None = Relationship(back_populates="aliases")
+    track_id: Mapped[Optional[int]] = mapped_column(ForeignKey("track.id"), index=True)
+    track: Mapped[Optional[Track]] = relationship(back_populates="aliases")
 
-    scrobbles: list["TrackAliasScrobble"] = Relationship(back_populates="alias", cascade_delete=True)
+    scrobbles: Mapped[list["TrackAliasScrobble"]] = relationship(
+        back_populates="alias", cascade="all, delete-orphan"
+    )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _populate_normalized_fields(cls, data: Any):
-        field_map = (
-            ("title", "title_norm"),
-            ("artist", "artist_norm"),
-            ("album", "album_norm"),
-        )
-        if isinstance(data, dict):
-            # raw data
-            for f, nf in field_map:
-                if f in data:
-                    data[nf] = normalize_name(data[f])
-        elif isinstance(data, cls):
-            # existing SQLModel instance
-            for f, nf in field_map:
-                val = getattr(data, f, None)
-                setattr(data, nf, normalize_name(val))
-        else:
-            raise ValueError("Unexpected type:", type(data))
-        return data
+    @validates("title", "artist", "album")
+    def _populate_norm(self, key: str, value: Any) -> Any:
+        setattr(self, f"{key}_norm", normalize_name(value))
+        return value
 
     @property
     def repr(self):
         return f"[{self.title} / {self.artist or ''} / {self.album or ''}]"
 
 
-class TrackAliasScrobble(Base, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    alias_id: int = Field(foreign_key="trackalias.id", index=True, ondelete="CASCADE")
-    alias: TrackAlias = Relationship(back_populates="scrobbles")
-    date: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), unique=True))
-    platform: Platform
+class TrackAliasScrobble(Base):
+    __tablename__ = "trackaliasscrobble"
+
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    alias_id: Mapped[int] = mapped_column(ForeignKey("trackalias.id", ondelete="CASCADE"), index=True)
+    alias: Mapped[TrackAlias] = relationship(back_populates="scrobbles")
+    date: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), unique=True)
+    platform: Mapped[Platform]
 
 
-class TrackPlay(Base, table=True):
+class TrackPlay(Base):
     """A play event linked directly to a canonical Track (no alias matching required)."""
 
+    __tablename__ = "trackplay"
     __table_args__ = (
         UniqueConstraint("track_id", "played_at"),
         UniqueConstraint(
@@ -469,28 +446,31 @@ class TrackPlay(Base, table=True):
         ),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
-    track: Track = Relationship(back_populates="plays")
-    played_at: AwareDatetime
-    platform: Platform
-    source_scrobble_id: int | None = Field(
-        default=None, foreign_key="trackaliasscrobble.id", ondelete="SET NULL"
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
+    track: Mapped[Track] = relationship(back_populates="plays")
+    played_at: Mapped[AwareDatetime]
+    platform: Mapped[Platform]
+    source_scrobble_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("trackaliasscrobble.id", ondelete="SET NULL")
     )
 
 
-class Playlist(Base, table=True):
+class Playlist(Base):
+    __tablename__ = "playlist"
     __table_args__ = (UniqueConstraint("name"),)
 
-    id: int | None = Field(default=None, primary_key=True)
-    name: str
-    platform: Platform
-    source_id: str | None = Field(None)
-    description: str | None = Field(None)
-    date_added: AwareDatetime | None = Field(None)
-    date_modified: AwareDatetime | None = Field(None)
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    platform: Mapped[Platform]
+    source_id: Mapped[Optional[str]]
+    description: Mapped[Optional[str]]
+    date_added: Mapped[Optional[AwareDatetime]]
+    date_modified: Mapped[Optional[AwareDatetime]]
 
-    tracks: list["PlaylistTrack"] = Relationship(back_populates="playlist", cascade_delete=True)
+    tracks: Mapped[list["PlaylistTrack"]] = relationship(
+        back_populates="playlist", cascade="all, delete-orphan"
+    )
 
     @property
     def comment(self):
@@ -502,18 +482,19 @@ class Playlist(Base, table=True):
         return c
 
 
-class PlaylistTrack(Base, table=True):
+class PlaylistTrack(Base):
+    __tablename__ = "playlisttrack"
     __table_args__ = (UniqueConstraint("playlist_id", "track_id"),)
 
-    id: int | None = Field(default=None, primary_key=True)
-    playlist_id: int = Field(foreign_key="playlist.id", index=True, ondelete="CASCADE")
-    playlist: Playlist = Relationship(back_populates="tracks")
-    track_id: int = Field(foreign_key="track.id", index=True, ondelete="CASCADE")
-    track: Track = Relationship(back_populates="playlist_memberships")
-    position: int = Field(index=True)
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(ForeignKey("playlist.id", ondelete="CASCADE"), index=True)
+    playlist: Mapped[Playlist] = relationship(back_populates="tracks")
+    track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
+    track: Mapped[Track] = relationship(back_populates="playlist_memberships")
+    position: Mapped[int] = mapped_column(index=True)
 
 
-class PlaylistLink(Base, table=True):
+class PlaylistLink(Base):
     """Mirror of a canonical Airdrome `Playlist` on an external server backend.
 
     One row per (Airdrome playlist, backend) pair. `synced_track_ids` is the
@@ -531,12 +512,12 @@ class PlaylistLink(Base, table=True):
         UniqueConstraint("backend", "external_id"),
     )
 
-    id: int | None = Field(default=None, primary_key=True)
-    playlist_id: int = Field(foreign_key="playlist.id", index=True, ondelete="CASCADE")
-    backend: Backend
-    external_id: str
-    synced_track_ids: list[int] = Field(sa_column=sa.Column(sa.JSON, nullable=False))
-    synced_at: datetime = Field(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(ForeignKey("playlist.id", ondelete="CASCADE"), index=True)
+    backend: Mapped[Backend]
+    external_id: Mapped[str]
+    synced_track_ids: Mapped[list[int]] = mapped_column(sa.JSON, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
 
 engine = create_engine(str(settings.db_dsn), echo=settings.db_echo)

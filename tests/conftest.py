@@ -1,8 +1,9 @@
 import pytest
 from sqlalchemy import create_engine, text
-from sqlmodel import Session, SQLModel
+from sqlalchemy.orm import Session
 
 from airdrome.conf import settings
+from airdrome.models import AirdromeBase
 
 
 def _test_db_url() -> str:
@@ -37,11 +38,11 @@ def test_engine():
     import airdrome.cloud.apple.models  # noqa: F401
     import airdrome.models  # noqa: F401
 
-    SQLModel.metadata.create_all(engine)
+    AirdromeBase.metadata.create_all(engine)
 
     yield engine
 
-    SQLModel.metadata.drop_all(engine)
+    AirdromeBase.metadata.drop_all(engine)
     engine.dispose()
 
 

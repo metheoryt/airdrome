@@ -9,7 +9,8 @@ docstring for the rule on what makes it into the snapshot.
 
 from datetime import datetime, timezone
 
-from sqlmodel import Session, delete, select
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from airdrome.console import console
 from airdrome.enums import Platform
@@ -50,14 +51,14 @@ def _three_way_merge(base: list[int], ours: list[int], theirs: list[int]) -> lis
 
 
 def _airdrome_canonical_ids(s: Session, playlist_id: int) -> list[int]:
-    rows = s.exec(
+    rows = s.scalars(
         select(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id).order_by(PlaylistTrack.position)
     ).all()
     return [_resolve_canonical(s, pt.track_id) for pt in rows]
 
 
 def _apply_to_airdrome(s: Session, playlist_id: int, merged_canon: list[int]) -> None:
-    s.exec(delete(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id))
+    s.execute(delete(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id))
     s.flush()
     for pos, track_id in enumerate(merged_canon, start=1):
         s.add(PlaylistTrack(playlist_id=playlist_id, track_id=track_id, position=pos))
@@ -135,14 +136,14 @@ def _sync_pair(
 def sync(s: Session, adapter: PlaylistAdapter) -> None:
     """Run one bidirectional sync pass between Airdrome and a backend."""
 
-    airdrome_playlist_ids = [pid for pid in s.exec(select(Playlist.id).order_by(Playlist.name)).all()]
+    airdrome_playlist_ids = [pid for pid in s.scalars(select(Playlist.id).order_by(Playlist.name)).all()]
     seen_external: set[str] = set()
     changed = total = 0
 
     # 1. Existing Airdrome playlists — push or merge against the backend
     for playlist_id in airdrome_playlist_ids:
         playlist = s.get(Playlist, playlist_id)
-        link = s.exec(
+        link = s.scalars(
             select(PlaylistLink).where(
                 PlaylistLink.playlist_id == playlist.id,
                 PlaylistLink.backend == adapter.backend,

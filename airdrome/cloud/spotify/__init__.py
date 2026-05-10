@@ -1,1 +1,1 @@
-from .scrobbles import SpotifyScrobbleParser
+from .scrobbles import SpotifyScrobbleParser as SpotifyScrobbleParser

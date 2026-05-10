@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 
 from rich.progress import Progress, TaskID
-from sqlmodel import Session, select
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from airdrome.enums import Platform
 from airdrome.models import AwareDatetime, Playlist, PlaylistTrack, Track, TrackFile
@@ -12,7 +13,7 @@ from .models import AppleFSDiscoverable, AppleMSPlaylist, AppleMSTrack, ApplePla
 def _bind_track_files(apple_track: AppleFSDiscoverable, s: Session) -> list[TrackFile]:
     tfs = []
     for rel_path in apple_track.possible_locations(max_suffix=2):
-        tf: TrackFile | None = s.exec(
+        tf: TrackFile | None = s.scalars(
             select(TrackFile).where(TrackFile.source_path.contains(rel_path))
         ).one_or_none()
         if tf and tf.track_id is None:
@@ -20,9 +21,11 @@ def _bind_track_files(apple_track: AppleFSDiscoverable, s: Session) -> list[Trac
     return tfs
 
 
-def _unify_xml_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
+def _unify_xml_tracks(
+    s: Session, progress: Progress | None = None, task: TaskID | None = None
+) -> tuple[int, int, int]:
     created = updated = files_bound = 0
-    for apple_track in s.exec(select(AppleTrack).where(AppleTrack.track_id.is_(None))):
+    for apple_track in s.scalars(select(AppleTrack).where(AppleTrack.track_id.is_(None))):
         track_defaults = {
             "track_n": apple_track.track_number,
             "disc_n": apple_track.disc_number,
@@ -57,14 +60,17 @@ def _unify_xml_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int
             files_bound += len(tfs)
 
         s.flush()
-        progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
+        if progress is not None:
+            progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
 
     return created, updated, files_bound
 
 
-def _unify_ms_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
+def _unify_ms_tracks(
+    s: Session, progress: Progress | None = None, task: TaskID | None = None
+) -> tuple[int, int, int]:
     created = updated = files_bound = 0
-    for ms_track in s.exec(select(AppleMSTrack)):
+    for ms_track in s.scalars(select(AppleMSTrack)):
         ms_track: AppleMSTrack
         duration_ms = ms_track.duration
         track_defaults = {
@@ -98,12 +104,15 @@ def _unify_ms_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int,
             files_bound += len(tfs)
 
         s.flush()
-        progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
+        if progress is not None:
+            progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
 
     return created, updated, files_bound
 
 
-def unify_apple_tracks(s: Session, progress: Progress, task: TaskID) -> tuple[int, int, int]:
+def unify_apple_tracks(
+    s: Session, progress: Progress | None = None, task: TaskID | None = None
+) -> tuple[int, int, int]:
     """
     Create canonical Track records from AppleTrack and AppleMSTrack data,
     then bind matching TrackFile records via possible_locations() DB lookup.
@@ -128,7 +137,7 @@ class _SourcePlaylist:
 def _gather_xml_source_playlists(s: Session) -> list[_SourcePlaylist]:
     result = []
     stmt = select(ApplePlaylist).where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
-    for pl in s.exec(stmt):
+    for pl in s.scalars(stmt):
         track_dates = [m.track.date_added for m in pl.members if m.track.date_added is not None]
         track_ids = [
             m.track.track_id
@@ -151,7 +160,7 @@ def _gather_xml_source_playlists(s: Session) -> list[_SourcePlaylist]:
 
 def _gather_ms_source_playlists(s: Session) -> list[_SourcePlaylist]:
     result = []
-    for pl in s.exec(select(AppleMSPlaylist)):
+    for pl in s.scalars(select(AppleMSPlaylist)):
         track_ids = [
             m.track.track_id
             for m in sorted(pl.members, key=lambda m: m.position)
@@ -171,19 +180,23 @@ def _gather_ms_source_playlists(s: Session) -> list[_SourcePlaylist]:
     return result
 
 
-def unify_apple_playlists(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
+def unify_apple_playlists(
+    s: Session, progress: Progress | None = None, task: TaskID | None = None
+) -> tuple[int, int]:
     """
     Create deduplicated canonical Playlist records from Apple XML and Media Services data.
     Processes newest-to-oldest by date_modified; same-name playlists merge (unique tracks
     appended); playlists whose track set duplicates an existing canonical are skipped.
     Returns (playlists_created, tracks_linked).
     """
-    existing = list(s.exec(select(Playlist)))
+    existing = list(s.scalars(select(Playlist)))
     name_to_canonical: dict[str, Playlist] = {pl.name: pl for pl in existing}
 
     # Mutable per-canonical track-ID sets; updated in-place as we merge
     canonical_track_ids: dict[int, set[int]] = {
-        pl.id: {pt.track_id for pt in s.exec(select(PlaylistTrack).where(PlaylistTrack.playlist_id == pl.id))}
+        pl.id: {
+            pt.track_id for pt in s.scalars(select(PlaylistTrack).where(PlaylistTrack.playlist_id == pl.id))
+        }
         for pl in existing
     }
 
@@ -197,14 +210,15 @@ def unify_apple_playlists(s: Session, progress: Progress, task: TaskID) -> tuple
 
     for src in sources:
         if not src.track_ids:
-            progress.update(task, advance=1)
+            if progress is not None:
+                progress.update(task, advance=1)
             continue
 
         if src.name in name_to_canonical:
             canonical = name_to_canonical[src.name]
             existing_ids = canonical_track_ids[canonical.id]
 
-            max_pos_row = s.exec(
+            max_pos_row = s.scalars(
                 select(PlaylistTrack)
                 .where(PlaylistTrack.playlist_id == canonical.id)
                 .order_by(PlaylistTrack.position.desc())
@@ -221,7 +235,8 @@ def unify_apple_playlists(s: Session, progress: Progress, task: TaskID) -> tuple
         else:
             src_track_set = frozenset(src.track_ids)
             if any(src_track_set == frozenset(ids) for ids in canonical_track_ids.values()):
-                progress.update(task, advance=1)
+                if progress is not None:
+                    progress.update(task, advance=1)
                 continue
 
             canonical = Playlist(
@@ -244,6 +259,7 @@ def unify_apple_playlists(s: Session, progress: Progress, task: TaskID) -> tuple
                 tracks_linked += 1
 
         s.flush()
-        progress.update(task, advance=1, pl_created=playlists_created, tr_linked=tracks_linked)
+        if progress is not None:
+            progress.update(task, advance=1, pl_created=playlists_created, tr_linked=tracks_linked)
 
     return playlists_created, tracks_linked

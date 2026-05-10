@@ -1,7 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
-from sqlmodel import Session, delete, select
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_import_progress, make_progress
 
@@ -22,7 +23,7 @@ def import_ms_track(s: Session, item: dict) -> bool:
     """Import Apple Media Services tracks. Yields whether an AppleMSTrack record was created."""
     track_identifier = item["Track Identifier"]
 
-    if s.exec(select(AppleMSTrack).where(AppleMSTrack.track_identifier == track_identifier)).one_or_none():
+    if s.scalars(select(AppleMSTrack).where(AppleMSTrack.track_identifier == track_identifier)).one_or_none():
         return False
 
     ms_track = AppleMSTrack(
@@ -67,7 +68,7 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
     if not item_identifiers:
         return created
 
-    pl_db = s.exec(
+    pl_db = s.scalars(
         select(AppleMSPlaylist).where(AppleMSPlaylist.container_identifier == container_id)
     ).one_or_none()
 
@@ -86,14 +87,14 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
 
     if not created:
         # clear all playlist members to insert again
-        s.exec(delete(AppleMSPlaylistTrack).where(AppleMSPlaylistTrack.playlist_id == pl_db.id))
+        s.execute(delete(AppleMSPlaylistTrack).where(AppleMSPlaylistTrack.playlist_id == pl_db.id))
 
-    ms_tracks = s.exec(select(AppleMSTrack).where(AppleMSTrack.track_identifier.in_(item_identifiers)))
+    ms_tracks = s.scalars(select(AppleMSTrack).where(AppleMSTrack.track_identifier.in_(item_identifiers)))
     ms_tracks_by_identifier = {t.track_identifier: t for t in ms_tracks}
 
     pos = 0
     for track_identifier in item_identifiers:
-        if ms_track := ms_tracks_by_identifier.get(track_identifier) is None:
+        if (ms_track := ms_tracks_by_identifier.get(track_identifier)) is None:
             # the track referenced in the playlist is not in the library, skip it
             continue
 
@@ -111,8 +112,8 @@ def import_apple_media_services(s: Session, path: str, reset: bool = False):
     playlist_items = package.load_playlists()
 
     if reset:
-        s.exec(delete(AppleMSPlaylist))
-        s.exec(delete(AppleMSTrack))
+        s.execute(delete(AppleMSPlaylist))
+        s.execute(delete(AppleMSTrack))
         s.flush()
         console.print("[yellow]Apple Media Services data purged[/yellow]")
 

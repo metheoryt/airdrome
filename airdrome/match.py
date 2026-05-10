@@ -1,7 +1,8 @@
 from collections.abc import Callable
 from typing import Any
 
-from sqlmodel import Session, func, select
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from .models import Track
 
@@ -59,12 +60,12 @@ def find_best_track(
             )
             .limit(1)
         )
-        track, score_val = session.exec(stmt).one_or_none(), 1.0
+        track, score_val = session.scalars(stmt).one_or_none(), 1.0
     else:
         score = build_match_score(artist_norm, album_norm).label("score")
         stmt = select(Track, score).where(Track.title_norm == title_norm).order_by(score.desc()).limit(1)
 
-        result = session.exec(stmt).one_or_none()
+        result = session.execute(stmt).one_or_none()
         if result:
             track, score_val = result
         else:

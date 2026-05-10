@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import typer
-from sqlmodel import update
+from sqlalchemy import update
 
 from airdrome.conf import settings
 from airdrome.console import console
@@ -52,7 +52,7 @@ def deduplicate_cli(
 ):
     state: AppState = ctx.obj
     if reset:
-        state.session.exec(update(Track).values(canon_id=None))
+        state.session.execute(update(Track).values(canon_id=None))
         console.print("[yellow]duplicates data reset[/yellow]")
     Deduplicator(
         state.session,

@@ -1,4 +1,5 @@
-from sqlmodel import Session, select
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from airdrome.console import console
 from airdrome.models import Track, TrackAlias, TrackFile
@@ -8,7 +9,7 @@ from .norm import normalize_name
 
 def _renormalize(session: Session, model, fields: list[tuple[str, str]], label: str):
     i = 0
-    for obj in session.exec(select(model)):
+    for obj in session.scalars(select(model)):
         for src, dst in fields:
             setattr(obj, dst, normalize_name(getattr(obj, src)))
         i += 1

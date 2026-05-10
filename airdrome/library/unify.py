@@ -1,5 +1,6 @@
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
-from sqlmodel import Session, delete, func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from airdrome.cloud.apple.models import AppleMSPlaylist, AppleMSTrack, ApplePlaylist, AppleTrack
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
@@ -10,7 +11,7 @@ from airdrome.models import Playlist, Track, TrackFile
 def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
     created = updated = 0
     stmt = select(TrackFile).where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))
-    for tf in s.exec(stmt):
+    for tf in s.scalars(stmt):
         year = None
         if tf.date:
             try:
@@ -43,21 +44,21 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
 
 def do_unify(s: Session, reset_playlists: bool = False):
     if reset_playlists:
-        s.exec(delete(Playlist))
+        s.execute(delete(Playlist))
         s.flush()
         console.print("[yellow]Canonical playlists reset[/yellow]")
 
-    xml_track_count = s.exec(
+    xml_track_count = s.scalars(
         select(func.count()).select_from(AppleTrack).where(AppleTrack.track_id.is_(None))
     ).one()
-    ms_track_count = s.exec(select(func.count()).select_from(AppleMSTrack)).one()
-    xml_pl_count = s.exec(
+    ms_track_count = s.scalars(select(func.count()).select_from(AppleMSTrack)).one()
+    xml_pl_count = s.scalars(
         select(func.count())
         .select_from(ApplePlaylist)
         .where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
     ).one()
-    ms_pl_count = s.exec(select(func.count()).select_from(AppleMSPlaylist)).one()
-    orphan_count = s.exec(
+    ms_pl_count = s.scalars(select(func.count()).select_from(AppleMSPlaylist)).one()
+    orphan_count = s.scalars(
         select(func.count())
         .select_from(TrackFile)
         .where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from sqlmodel import Session
+from sqlalchemy.orm import Session
 
 
 @dataclass

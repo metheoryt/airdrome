@@ -3,15 +3,18 @@ import string
 from datetime import datetime, timezone
 from enum import StrEnum
 
-from sqlalchemy import text
-from sqlalchemy.orm import registry
-from sqlmodel import Field, Relationship, SQLModel, create_engine
+from sqlalchemy import ForeignKey, create_engine, text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from airdrome.conf import settings
 
 
-class NVSQLModel(SQLModel, registry=registry()):
+class NavidromeBase(DeclarativeBase):
     pass
+
+
+class NVSQLModel(NavidromeBase):
+    __abstract__ = True
 
 
 _engine = None
@@ -42,74 +45,78 @@ def generate_id():
     return "".join(random.choices(string.ascii_letters + string.digits, k=22))
 
 
-class User(NVSQLModel, table=True):
+class User(NVSQLModel):
     __tablename__ = "user"
-    id: str = Field(primary_key=True, default_factory=generate_id)
-    user_name: str = Field("")
+    id: Mapped[str] = mapped_column(primary_key=True, default=generate_id)
+    user_name: Mapped[str] = mapped_column(default="")
 
 
-class PlaylistTracks(NVSQLModel, table=True):
+class PlaylistTracks(NVSQLModel):
     __tablename__ = "playlist_tracks"
-    id: int | None = Field(None, primary_key=True)
-    playlist_id: str = Field(foreign_key="playlist.id", primary_key=True)
-    media_file_id: str = Field(foreign_key="media_file.id")
+    id: Mapped[int | None] = mapped_column(primary_key=True)
+    playlist_id: Mapped[str] = mapped_column(ForeignKey("playlist.id"), primary_key=True)
+    media_file_id: Mapped[str] = mapped_column(ForeignKey("media_file.id"))
 
 
-class Playlist(NVSQLModel, table=True):
+class Playlist(NVSQLModel):
     __tablename__ = "playlist"
 
-    id: str = Field(primary_key=True, default_factory=generate_id)
-    name: str = Field("")
-    comment: str = Field("")
-    duration: float = Field(0)
-    song_count: int = Field(0)
-    public: bool = Field(False)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    path: str = Field("")
-    sync: bool = Field(False)
-    size: int = Field(0)
-    rules: str | None = Field(None)
-    evaluated_at: datetime | None = Field(None)
-    owner_id: str
-    media_files: list["MediaFile"] = Relationship(back_populates="playlists", link_model=PlaylistTracks)
+    id: Mapped[str] = mapped_column(primary_key=True, default=generate_id)
+    name: Mapped[str] = mapped_column(default="")
+    comment: Mapped[str] = mapped_column(default="")
+    duration: Mapped[float] = mapped_column(default=0)
+    song_count: Mapped[int] = mapped_column(default=0)
+    public: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
+    path: Mapped[str] = mapped_column(default="")
+    sync: Mapped[bool] = mapped_column(default=False)
+    size: Mapped[int] = mapped_column(default=0)
+    rules: Mapped[str | None]
+    evaluated_at: Mapped[datetime | None]
+    owner_id: Mapped[str]
+    media_files: Mapped[list["MediaFile"]] = relationship(
+        back_populates="playlists", secondary="playlist_tracks"
+    )
 
 
-class MediaFile(NVSQLModel, table=True):
+class MediaFile(NVSQLModel):
     __tablename__ = "media_file"
-    id: str = Field(primary_key=True, default_factory=generate_id)
-    path: str
-    title: str
-    artist: str
-    album: str
-    album_id: str = Field(foreign_key="album.id")
-    birth_time: datetime
-    created_at: datetime
-    duration: float
-    size: int
+    id: Mapped[str] = mapped_column(primary_key=True, default=generate_id)
+    path: Mapped[str]
+    title: Mapped[str]
+    artist: Mapped[str]
+    album: Mapped[str]
+    album_id: Mapped[str] = mapped_column(ForeignKey("album.id"))
+    birth_time: Mapped[datetime]
+    created_at: Mapped[datetime]
+    duration: Mapped[float]
+    size: Mapped[int]
 
-    album_model: "Album" = Relationship(back_populates="media_files")
-    playlists: list["Playlist"] = Relationship(back_populates="media_files", link_model=PlaylistTracks)
+    album_model: Mapped["Album"] = relationship(back_populates="media_files")
+    playlists: Mapped[list["Playlist"]] = relationship(
+        back_populates="media_files", secondary="playlist_tracks"
+    )
 
 
-class Album(NVSQLModel, table=True):
+class Album(NVSQLModel):
     __tablename__ = "album"
-    id: str = Field(primary_key=True, default_factory=generate_id)
-    name: str
-    created_at: datetime
+    id: Mapped[str] = mapped_column(primary_key=True, default=generate_id)
+    name: Mapped[str]
+    created_at: Mapped[datetime]
 
-    media_files: list["MediaFile"] = Relationship(back_populates="album_model")
+    media_files: Mapped[list["MediaFile"]] = relationship(back_populates="album_model")
 
 
-class AlbumArtist(NVSQLModel, table=True):
+class AlbumArtist(NVSQLModel):
     __tablename__ = "album_artists"
-    album_id: str = Field(foreign_key="album.id", primary_key=True)
-    artist_id: str = Field(foreign_key="artist.id", primary_key=True)
-    role: str = Field("", primary_key=True)
-    sub_role: str = Field("", primary_key=True)
+    album_id: Mapped[str] = mapped_column(ForeignKey("album.id"), primary_key=True)
+    artist_id: Mapped[str] = mapped_column(ForeignKey("artist.id"), primary_key=True)
+    role: Mapped[str] = mapped_column(default="", primary_key=True)
+    sub_role: Mapped[str] = mapped_column(default="", primary_key=True)
 
 
-class Annotation(NVSQLModel, table=True):
+class Annotation(NVSQLModel):
     """Annotates an Artist, Album, or Media File with rating, play count, and starred status."""
 
     __tablename__ = "annotation"
@@ -119,21 +126,21 @@ class Annotation(NVSQLModel, table=True):
         ALBUM = "album"
         ARTIST = "artist"
 
-    user_id: str = Field(primary_key=True, foreign_key="user.id")
-    item_id: str = Field(primary_key=True)  # can be a media file, album, or artist
-    item_type: str = Field(primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user.id"), primary_key=True)
+    item_id: Mapped[str] = mapped_column(primary_key=True)  # can be a media file, album, or artist
+    item_type: Mapped[str] = mapped_column(primary_key=True)
 
-    play_count: int = Field(0)
-    play_date: datetime | None = Field(None)
-    rating: int = Field(0)
-    starred: bool = Field(False)
-    starred_at: datetime | None = Field(None)
-    rated_at: datetime | None = Field(None)
+    play_count: Mapped[int] = mapped_column(default=0)
+    play_date: Mapped[datetime | None]
+    rating: Mapped[int] = mapped_column(default=0)
+    starred: Mapped[bool] = mapped_column(default=False)
+    starred_at: Mapped[datetime | None]
+    rated_at: Mapped[datetime | None]
 
 
-class Scrobbles(NVSQLModel, table=True):
+class Scrobbles(NVSQLModel):
     __tablename__ = "scrobbles"
-    media_file_id: str = Field(foreign_key="media_file.id", primary_key=True)
-    user_id: str = Field(foreign_key="user.id", primary_key=True)
+    media_file_id: Mapped[str] = mapped_column(ForeignKey("media_file.id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user.id"), primary_key=True)
     # UTC timestamp of a submission
-    submission_time: int = Field(index=True, primary_key=True)
+    submission_time: Mapped[int] = mapped_column(index=True, primary_key=True)

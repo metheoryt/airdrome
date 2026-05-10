@@ -3,7 +3,8 @@ from datetime import datetime
 from typing import Iterator
 
 from rich.progress import track
-from sqlmodel import Session, select
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from airdrome.enums import Platform
 from airdrome.models import TrackAlias, TrackAliasScrobble
@@ -63,7 +64,9 @@ class ScrobbleParser:
         dates_uniq = set(dates)
         existing_dates = {
             scrobble.date
-            for scrobble in s.exec(select(TrackAliasScrobble).where(TrackAliasScrobble.date.in_(dates_uniq)))
+            for scrobble in s.scalars(
+                select(TrackAliasScrobble).where(TrackAliasScrobble.date.in_(dates_uniq))
+            )
         }
         new_dates = dates_uniq.difference(existing_dates)
         new_scrobbles = []

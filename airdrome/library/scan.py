@@ -2,7 +2,8 @@ from pathlib import Path
 from typing import Callable
 
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
-from sqlmodel import Session, select
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from airdrome.models import TrackFile
 
@@ -15,7 +16,7 @@ class MusicScanner:
 
     def scan_file(self, abs_path: Path, s: Session) -> tuple[TrackFile, bool]:
         created = False
-        tf = s.exec(select(TrackFile).where(TrackFile.source_path == abs_path)).one_or_none()
+        tf = s.scalars(select(TrackFile).where(TrackFile.source_path == abs_path)).one_or_none()
         if not tf:
             tf = TrackFile(source_path=abs_path)
             s.add(tf)

@@ -1,8 +1,8 @@
 import typer
-from sqlmodel import Session, SQLModel
+from sqlalchemy.orm import Session
 
 from airdrome.console import console
-from airdrome.models import engine
+from airdrome.models import AirdromeBase, engine
 
 from .apple import apple_app
 from .library import library_app
@@ -11,7 +11,7 @@ from .scrobble import scrobble_app
 from .state import AppState
 
 
-SQLModel.metadata.create_all(engine, checkfirst=True)
+AirdromeBase.metadata.create_all(engine, checkfirst=True)
 
 app = typer.Typer(help="Airdrome CLI")
 app.add_typer(apple_app, name="apple")
