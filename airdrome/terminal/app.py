@@ -2,7 +2,8 @@ import typer
 from sqlalchemy.orm import Session
 
 from airdrome.console import console
-from airdrome.models import AirdromeBase, engine
+from airdrome.migrations import upgrade_to_head
+from airdrome.models import engine
 
 from .apple import apple_app
 from .library import library_app
@@ -11,7 +12,7 @@ from .scrobble import scrobble_app
 from .state import AppState
 
 
-AirdromeBase.metadata.create_all(engine, checkfirst=True)
+upgrade_to_head()
 
 app = typer.Typer(help="Airdrome CLI")
 app.add_typer(apple_app, name="apple")

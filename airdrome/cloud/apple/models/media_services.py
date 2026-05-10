@@ -1,5 +1,4 @@
 import sqlalchemy as sa
-from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from airdrome.models import AwareDatetime, Base, Track
@@ -10,7 +9,7 @@ from .mixins import AppleFSDiscoverable
 class AppleMSTrack(Base, AppleFSDiscoverable):
     __tablename__ = "apple_ms_track"
 
-    id: Mapped[int | None] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     track_id: Mapped[int | None] = mapped_column(sa.ForeignKey("track.id", ondelete="CASCADE"))
     track: Mapped[Track | None] = relationship(back_populates="apple_ms_tracks")
@@ -44,7 +43,7 @@ class AppleMSTrack(Base, AppleFSDiscoverable):
 class AppleMSPlaylist(Base):
     __tablename__ = "apple_ms_playlist"
 
-    id: Mapped[int | None] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     container_identifier: Mapped[int] = mapped_column(sa.BIGINT, unique=True, nullable=False)
     title: Mapped[str]
     container_type: Mapped[str]
@@ -57,9 +56,8 @@ class AppleMSPlaylist(Base):
 
 class AppleMSPlaylistTrack(Base):
     __tablename__ = "apple_ms_playlist_track"
-    __table_args__ = (UniqueConstraint("track_id", "playlist_id", name="uq_apple_ms_playlist_track"),)
 
-    id: Mapped[int | None] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     playlist_id: Mapped[int] = mapped_column(
         sa.ForeignKey("apple_ms_playlist.id", ondelete="CASCADE"), index=True

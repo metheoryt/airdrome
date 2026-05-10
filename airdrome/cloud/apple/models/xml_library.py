@@ -1,6 +1,5 @@
 import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from airdrome.models import AwareDatetime, Base, Track
@@ -80,7 +79,7 @@ _TRACK_ALIAS_MAP = {
 class AppleTrack(Base, AppleFSDiscoverable):
     __tablename__ = "appletrack"
 
-    id: Mapped[int | None] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     track_id: Mapped[int | None] = mapped_column(sa.ForeignKey("track.id", ondelete="CASCADE"))
     track: Mapped[Track | None] = relationship(back_populates="apple_tracks")
@@ -208,7 +207,7 @@ class ApplePlaylistBase(BaseModel):
 class ApplePlaylist(Base):
     __tablename__ = "appleplaylist"
 
-    id: Mapped[int | None] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
     playlist_id: Mapped[int] = mapped_column(unique=True)
     persistent_id: Mapped[str] = mapped_column(unique=True)
@@ -228,11 +227,8 @@ class ApplePlaylist(Base):
 
 class ApplePlaylistTrack(Base):
     __tablename__ = "appleplaylisttrack"
-    __table_args__ = (
-        UniqueConstraint("track_id", "playlist_id", name="uq_trackplaylistlink_track_id_playlist_id"),
-    )
 
-    id: Mapped[int | None] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     track_id: Mapped[int] = mapped_column(sa.ForeignKey("appletrack.id", ondelete="CASCADE"), index=True)
     track: Mapped[AppleTrack] = relationship(back_populates="playlist_memberships")

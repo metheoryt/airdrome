@@ -118,7 +118,7 @@ def import_apple_media_services(s: Session, path: str, reset: bool = False):
         console.print("[yellow]Apple Media Services data purged[/yellow]")
 
     with make_import_progress() as progress:
-        task = progress.add_task("Tracks", total=len(track_items), created=0)
+        task = progress.add_task("Tracks", total=len(track_items), created=0, updated=0)
         created_cnt = 0
 
         for item in track_items:

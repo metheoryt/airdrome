@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from itertools import chain
+from typing import Iterator
 
 from rich.progress import Progress, TaskID
 from sqlalchemy import select
@@ -21,10 +23,7 @@ def _bind_track_files(apple_track: AppleFSDiscoverable, s: Session) -> list[Trac
     return tfs
 
 
-def _unify_xml_tracks(
-    s: Session, progress: Progress | None = None, task: TaskID | None = None
-) -> tuple[int, int, int]:
-    created = updated = files_bound = 0
+def _unify_xml_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
     for apple_track in s.scalars(select(AppleTrack).where(AppleTrack.track_id.is_(None))):
         track_defaults = {
             "track_n": apple_track.track_number,
@@ -46,30 +45,21 @@ def _unify_xml_tracks(
             album_artist=apple_track.album_artist,
             defaults=track_defaults,
         )
-        if track_created:
-            created += 1
-        elif track.fill_nulls(track_defaults):
-            updated += 1
-
+        track_updated = not track_created and track.fill_nulls(track_defaults)
         apple_track.track = track
 
+        n_files = 0
         if not apple_track.apple_music:
             tfs = _bind_track_files(apple_track, s)
             for tf in tfs:
                 track.files.append(tf)
-            files_bound += len(tfs)
+            n_files = len(tfs)
 
         s.flush()
-        if progress is not None:
-            progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
-
-    return created, updated, files_bound
+        yield track_created, track_updated, n_files
 
 
-def _unify_ms_tracks(
-    s: Session, progress: Progress | None = None, task: TaskID | None = None
-) -> tuple[int, int, int]:
-    created = updated = files_bound = 0
+def _unify_ms_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
     for ms_track in s.scalars(select(AppleMSTrack)):
         ms_track: AppleMSTrack
         duration_ms = ms_track.duration
@@ -89,25 +79,20 @@ def _unify_ms_tracks(
             album_artist=ms_track.album_artist,
             defaults=track_defaults,
         )
-        if track_created:
-            created += 1
-        elif track.fill_nulls(track_defaults):
-            updated += 1
+        track_updated = not track_created and track.fill_nulls(track_defaults)
 
         if ms_track.track_id is None:
             ms_track.track = track
 
+        n_files = 0
         if ms_track.audio_file_extension:
             tfs = _bind_track_files(ms_track, s)
             for tf in tfs:
                 track.files.append(tf)
-            files_bound += len(tfs)
+            n_files = len(tfs)
 
         s.flush()
-        if progress is not None:
-            progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
-
-    return created, updated, files_bound
+        yield track_created, track_updated, n_files
 
 
 def unify_apple_tracks(
@@ -118,9 +103,14 @@ def unify_apple_tracks(
     then bind matching TrackFile records via possible_locations() DB lookup.
     Returns (created, updated, files_bound) Track counts.
     """
-    xml_created, xml_updated, xml_files = _unify_xml_tracks(s, progress, task)
-    ms_created, ms_updated, ms_files = _unify_ms_tracks(s, progress, task)
-    return xml_created + ms_created, xml_updated + ms_updated, xml_files + ms_files
+    created = updated = files_bound = 0
+    for was_created, was_updated, n_files in chain(_unify_xml_tracks(s), _unify_ms_tracks(s)):
+        created += was_created
+        updated += was_updated
+        files_bound += n_files
+        if progress is not None:
+            progress.update(task, advance=1, created=created, updated=updated, files_bound=files_bound)
+    return created, updated, files_bound
 
 
 @dataclass

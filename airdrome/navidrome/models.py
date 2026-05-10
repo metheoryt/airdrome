@@ -53,7 +53,7 @@ class User(NVSQLModel):
 
 class PlaylistTracks(NVSQLModel):
     __tablename__ = "playlist_tracks"
-    id: Mapped[int | None] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     playlist_id: Mapped[str] = mapped_column(ForeignKey("playlist.id"), primary_key=True)
     media_file_id: Mapped[str] = mapped_column(ForeignKey("media_file.id"))
 

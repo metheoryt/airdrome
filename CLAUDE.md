@@ -26,6 +26,11 @@ uv run pytest
 
 # Run CLI
 airdrome --help
+
+# Migrations (schema is auto-applied on CLI startup)
+uv run alembic revision --autogenerate -m "<message>"  # after editing models
+uv run alembic upgrade head                             # apply pending migrations
+uv run alembic downgrade -1                             # roll back one migration
 ```
 
 ## Architecture
