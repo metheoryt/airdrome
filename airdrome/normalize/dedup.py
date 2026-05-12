@@ -22,14 +22,16 @@ INSTRUCTION_TEXT = Text.from_markup(
     "[bold]Enter[/bold] - confirm current group\n"
     "[bold]r[/bold] - reset choices for this group\n"
     "[bold]a[/bold] / [bold]d[/bold] - previous / next group\n"
-    "[bold]m[/bold] - cycle mode: resolved / auto-resolved\n"
+    "[bold]m[/bold] - cycle mode: resolved all / unconfirmed / confirmed / auto-resolved\n"
     "[bold]c[/bold] - commit changes\n"
     "[bold]q[/bold] - exit\n"
 )
 
 
 class FilterMode(Enum):
-    RESOLVED = "resolved"
+    RESOLVED_ALL = "resolved all"
+    RESOLVED_UNCONFIRMED = "resolved unconfirmed"
+    RESOLVED_CONFIRMED = "resolved confirmed"
     AUTO_RESOLVED = "auto-resolved"
 
     def next(self) -> "FilterMode":
@@ -80,7 +82,7 @@ class Page:
 class DeduplicatorState:
     pages: dict[str, Page] = field(default_factory=dict)
     current_idx: int = 0
-    filter_mode: FilterMode = FilterMode.RESOLVED
+    filter_mode: FilterMode = FilterMode.RESOLVED_ALL
     partial_match: str = ""
     pages_iter: list[tuple[str, Page]] = field(default_factory=list, init=False)
     _mode_idx: dict = field(default_factory=lambda: {m: 0 for m in FilterMode}, init=False)
@@ -102,8 +104,12 @@ class DeduplicatorState:
                 )
             ]
         match self.filter_mode:
-            case FilterMode.RESOLVED:
+            case FilterMode.RESOLVED_ALL:
                 return [(k, p) for k, p in pages if not p.auto_resolved]
+            case FilterMode.RESOLVED_UNCONFIRMED:
+                return [(k, p) for k, p in pages if not p.auto_resolved and not p.confirmed]
+            case FilterMode.RESOLVED_CONFIRMED:
+                return [(k, p) for k, p in pages if not p.auto_resolved and p.confirmed]
             case FilterMode.AUTO_RESOLVED:
                 return [(k, p) for k, p in pages if p.auto_resolved and not p.confirmed]
 
@@ -154,25 +160,33 @@ class DeduplicatorState:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        console.print(f"[dim]Saved {len(data)} confirmed group(s) to {path}[/dim]")
 
     def load(self, path: Path) -> None:
         if not path.exists():
             return
         with path.open("r", encoding="utf-8") as f:
             data: dict = json.load(f)
+        n_restored = 0
         for key, saved in data.items():
             page = self.pages.get(key)
             if page is None:
                 continue
-            hash_to_id = {t.duplicate_hash: t.id for t in page.tracks}
-            current_hashes = [t.duplicate_hash for t in page.tracks]
-            if current_hashes != saved.get("members", []):
-                continue
+            saved_members: list = saved.get("members", [])
             canon_hashes: list = saved.get("canon_hashes", [])
-            if len(canon_hashes) != len(page.tracks):
+            if len(saved_members) != len(canon_hashes):
                 continue
+            current_hashes = [t.duplicate_hash for t in page.tracks]
+            # Order-independent: track IDs are reassigned on re-import, so the
+            # SQL ordering by Track.id can yield a different sequence even when
+            # the set of duplicate hashes is identical.
+            if sorted(current_hashes) != sorted(saved_members):
+                continue
+            saved_canon_by_member = dict(zip(saved_members, canon_hashes))
+            hash_to_id = {t.duplicate_hash: t.id for t in page.tracks}
             restored: list[int | None] = []
-            for canon_hash in canon_hashes:
+            for t in page.tracks:
+                canon_hash = saved_canon_by_member.get(t.duplicate_hash)
                 if canon_hash is None:
                     restored.append(None)
                 else:
@@ -184,6 +198,8 @@ class DeduplicatorState:
                 page.chosen_canons = restored
                 page.confirmed = True
                 page.auto_resolved = False  # human-confirmed overrides auto-resolved status
+                n_restored += 1
+        console.print(f"[dim]Loaded {n_restored}/{len(data)} group(s) from {path}[/dim]")
 
 
 class DeduplicatorUI:
@@ -346,7 +362,11 @@ class DeduplicatorUI:
                     self.state.switch_mode()
                 elif cmd == "c":
                     n = self.dedup.apply_changes()
-                    self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
+                    self.dedup.s.commit()
+                    self.feedback_text = Text(
+                        f"{n} change(s) committed. Saved to {self.dedup.filepath}",
+                        style="bold green",
+                    )
                 continue
 
             key, page = filtered[self.state.current_idx]
@@ -371,7 +391,11 @@ class DeduplicatorUI:
                 self.feedback_text = Text()
             elif action == "commit":
                 n = self.dedup.apply_changes()
-                self.feedback_text = Text(f"{n} change(s) committed.", style="bold green")
+                self.dedup.s.commit()
+                self.feedback_text = Text(
+                    f"{n} change(s) committed. Saved to {self.dedup.filepath}",
+                    style="bold green",
+                )
             elif action == "mode":
                 self.state.switch_mode()
                 self.feedback_text = Text()
@@ -413,7 +437,12 @@ class Deduplicator:
                         # Track.canon_id.is_(None),
                         *[col == val for col, val in col_to_val]
                     )
-                    .order_by(Track.id)
+                    .order_by(
+                        Track.date_added.asc().nulls_last(),
+                        Track.year.asc().nulls_last(),
+                        Track.loved.desc().nulls_last(),
+                        Track.id,
+                    )
                 )
             )
             groups.append((key, track_group))
@@ -461,6 +490,7 @@ class Deduplicator:
         self.state.load(self.filepath)
 
     def apply_changes(self) -> int:
+        """Stage confirmed canon picks onto the session. Caller is responsible for commit."""
         changed = 0
         for key, page in self.state.pages_iter:
             if not page.confirmed:
@@ -471,8 +501,6 @@ class Deduplicator:
                     track.canon_id = new_canon
                     self.s.add(track)
                     changed += 1
-        if changed:
-            self.s.commit()
         self.state.dump(self.filepath)
         return changed
 
@@ -485,7 +513,7 @@ class Deduplicator:
         DeduplicatorUI(self).serve()
 
 
-def auto_deduplicate(
+def compute_auto_dedup_groups(
     session: Session,
     with_artist: bool = True,
     with_album_artist: bool = True,
@@ -494,22 +522,24 @@ def auto_deduplicate(
     with_track_n: bool = True,
     with_disc_n: bool = True,
     with_duration: bool = True,
-    dry_run: bool = False,
 ) -> list[list[Track]]:
-    """Auto-mark twins for tracks with identical normalized metadata.
+    """Return duplicate groups for a single flag-set; no writes.
 
-    Only processes tracks where canon_id IS NULL (unreviewed). For each
-    matching group, the track with the lowest ID becomes the canonical one;
-    the rest are marked as twins. No metadata is written back to the canonical
-    track — aggregated values are derived from the group at use time.
-
-    Title and artist are always required. Album artist, album, track number,
-    disc number, and duration can each be excluded to loosen matching.
-
-    Returns the resolved groups (each group[0] is the canon). Pass dry_run=True
-    to compute the groups without writing to the database.
+    Tracks within a group are sorted by canon priority (earliest date_added,
+    then earliest year, then loved=True, then lowest id) — group[0] is the
+    candidate canon. Title is always required; the other fields can each be
+    excluded to loosen matching.
     """
-    tracks = list(session.scalars(select(Track).where(Track.canon_id.is_(None)).order_by(Track.id)))
+    tracks = list(
+        session.scalars(
+            select(Track).order_by(
+                Track.date_added.asc().nulls_last(),
+                Track.year.asc().nulls_last(),
+                Track.loved.desc().nulls_last(),
+                Track.id,
+            )
+        )
+    )
 
     def group_key(t: Track) -> tuple:
         key: list = [t.title_norm]
@@ -533,18 +563,22 @@ def auto_deduplicate(
     for t in tracks:
         bucketed.setdefault(group_key(t), []).append(t)
 
-    resolved: list[list[Track]] = []
-    for group_tracks in bucketed.values():
-        if len(group_tracks) < 2:
-            continue
-        resolved.append(group_tracks)  # already sorted by ID (ascending) from the query
-        if not dry_run:
-            canon = group_tracks[0]
-            for twin in group_tracks[1:]:
-                twin.canon_id = canon.id
-                session.add(twin)
+    return [g for g in bucketed.values() if len(g) >= 2]
 
-    if not dry_run and resolved:
-        session.commit()
 
-    return resolved
+def flatten_canon_chains(session: Session) -> int:
+    """Rewrite every chained twin→...→canon pointer to point directly at the root."""
+    twins = list(session.scalars(select(Track).where(Track.canon_id.is_not(None))))
+    canon_of = {t.id: t.canon_id for t in twins}
+    rewrites = 0
+    for t in twins:
+        seen = {t.id}
+        current = t.canon_id
+        while current in canon_of and current not in seen:
+            seen.add(current)
+            current = canon_of[current]
+        if current is not None and current != t.canon_id:
+            t.canon_id = current
+            session.add(t)
+            rewrites += 1
+    return rewrites

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -22,6 +24,15 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
             "duration": round(tf.duration) if tf.duration else None,
             "year": year,
         }
+        try:
+            st = tf.source_path.stat()
+            # st_ctime is creation on Windows / inode-change on Linux; mtime is content edit.
+            # min() yields the oldest known timestamp for the file across platforms.
+            track_defaults["date_added"] = datetime.fromtimestamp(
+                min(st.st_ctime, st.st_mtime), tz=timezone.utc
+            )
+        except OSError:
+            pass
         track, track_created = Track.get_or_create(
             s,
             title=tf.title,

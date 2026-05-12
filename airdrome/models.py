@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Type, TypeVar
 
 import sqlalchemy as sa
 from mutagen import File
@@ -130,26 +130,26 @@ class Track(Base):
         ),
     )
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     # basic metadata
     title: Mapped[str]
-    artist: Mapped[Optional[str]]
-    album_artist: Mapped[Optional[str]]
-    album: Mapped[Optional[str]]
+    artist: Mapped[str | None]
+    album_artist: Mapped[str | None]
+    album: Mapped[str | None]
 
     # anything we would need for other things
-    track_n: Mapped[Optional[int]]
-    disc_n: Mapped[Optional[int]]
-    compilation: Mapped[Optional[bool]]
-    year: Mapped[Optional[int]]
-    duration: Mapped[Optional[int]]
+    track_n: Mapped[int | None]
+    disc_n: Mapped[int | None]
+    compilation: Mapped[bool | None]
+    year: Mapped[int | None]
+    duration: Mapped[int | None]
     """Duration in seconds."""
     date_added: Mapped[AwareDatetimeDefNow]
-    loved: Mapped[Optional[bool]]
-    album_loved: Mapped[Optional[bool]]
-    rating: Mapped[Optional[int]]
-    album_rating: Mapped[Optional[int]]
+    loved: Mapped[bool | None]
+    album_loved: Mapped[bool | None]
+    rating: Mapped[int | None]
+    album_rating: Mapped[int | None]
 
     title_norm: Mapped[str] = mapped_column(default="")
     artist_norm: Mapped[str] = mapped_column(default="")
@@ -157,8 +157,8 @@ class Track(Base):
     album_norm: Mapped[str] = mapped_column(default="")
 
     # duplicates
-    canon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("track.id", ondelete="SET NULL"), index=True)
-    canon: Mapped[Optional["Track"]] = relationship(
+    canon_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="SET NULL"), index=True)
+    canon: Mapped["Track | None"] = relationship(
         "Track",
         foreign_keys=[canon_id],
         back_populates="twins",
@@ -230,7 +230,7 @@ class Track(Base):
         return ";".join(str(v) if v is not None else "" for v in hash_fields)
 
     @property
-    def main_file(self) -> Optional["TrackFile"]:
+    def main_file(self) -> "TrackFile | None":
         return next((t for t in self.files if t.is_main), None)
 
     @property
@@ -294,25 +294,25 @@ class TrackFile(Base):
         ),
     )
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
     # absolute path of the original file
     source_path: Mapped[Path] = mapped_column(PathType(), nullable=False, unique=True)
     # relative path of the file in the library (after organizing)
-    library_path: Mapped[Optional[Path]] = mapped_column(PathType(), nullable=True, unique=True)
+    library_path: Mapped[Path | None] = mapped_column(PathType(), nullable=True, unique=True)
     is_main: Mapped[bool] = mapped_column(default=False)
 
-    track_id: Mapped[Optional[int]] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
-    track: Mapped[Optional[Track]] = relationship(back_populates="files")
+    track_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
+    track: Mapped[Track | None] = relationship(back_populates="files")
 
-    duration: Mapped[Optional[float]]
-    bitrate: Mapped[Optional[int]]
-    date: Mapped[Optional[str]]
+    duration: Mapped[float | None]
+    bitrate: Mapped[int | None]
+    date: Mapped[str | None]
 
-    title: Mapped[Optional[str]]
-    artist: Mapped[Optional[str]]
-    album_artist: Mapped[Optional[str]]
-    album: Mapped[Optional[str]]
+    title: Mapped[str | None]
+    artist: Mapped[str | None]
+    album_artist: Mapped[str | None]
+    album: Mapped[str | None]
 
     title_norm: Mapped[str] = mapped_column(default="")
     artist_norm: Mapped[str] = mapped_column(default="")
@@ -398,18 +398,18 @@ class TrackAlias(Base):
         ),
     )
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
 
-    artist: Mapped[Optional[str]]
-    title: Mapped[Optional[str]]
-    album: Mapped[Optional[str]]
+    artist: Mapped[str | None]
+    title: Mapped[str | None]
+    album: Mapped[str | None]
 
     artist_norm: Mapped[str] = mapped_column(default="")
     title_norm: Mapped[str] = mapped_column(default="")
     album_norm: Mapped[str] = mapped_column(default="")
 
-    track_id: Mapped[Optional[int]] = mapped_column(ForeignKey("track.id"), index=True)
-    track: Mapped[Optional[Track]] = relationship(back_populates="aliases")
+    track_id: Mapped[int | None] = mapped_column(ForeignKey("track.id"), index=True)
+    track: Mapped[Track | None] = relationship(back_populates="aliases")
 
     scrobbles: Mapped[list["TrackAliasScrobble"]] = relationship(
         back_populates="alias", cascade="all, delete-orphan"
@@ -428,7 +428,7 @@ class TrackAlias(Base):
 class TrackAliasScrobble(Base):
     __tablename__ = "trackaliasscrobble"
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     alias_id: Mapped[int] = mapped_column(ForeignKey("trackalias.id", ondelete="CASCADE"), index=True)
     alias: Mapped[TrackAlias] = relationship(back_populates="scrobbles")
     date: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), unique=True)
@@ -446,12 +446,12 @@ class TrackPlay(Base):
         ),
     )
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
     track: Mapped[Track] = relationship(back_populates="plays")
     played_at: Mapped[AwareDatetime]
     platform: Mapped[Platform]
-    source_scrobble_id: Mapped[Optional[int]] = mapped_column(
+    source_scrobble_id: Mapped[int | None] = mapped_column(
         ForeignKey("trackaliasscrobble.id", ondelete="SET NULL")
     )
 
@@ -460,13 +460,13 @@ class Playlist(Base):
     __tablename__ = "playlist"
     __table_args__ = (UniqueConstraint("name"),)
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
     platform: Mapped[Platform]
-    source_id: Mapped[Optional[str]]
-    description: Mapped[Optional[str]]
-    date_added: Mapped[Optional[AwareDatetime]]
-    date_modified: Mapped[Optional[AwareDatetime]]
+    source_id: Mapped[str | None]
+    description: Mapped[str | None]
+    date_added: Mapped[AwareDatetime | None]
+    date_modified: Mapped[AwareDatetime | None]
 
     tracks: Mapped[list["PlaylistTrack"]] = relationship(
         back_populates="playlist", cascade="all, delete-orphan"
@@ -484,9 +484,8 @@ class Playlist(Base):
 
 class PlaylistTrack(Base):
     __tablename__ = "playlisttrack"
-    __table_args__ = (UniqueConstraint("playlist_id", "track_id"),)
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     playlist_id: Mapped[int] = mapped_column(ForeignKey("playlist.id", ondelete="CASCADE"), index=True)
     playlist: Mapped[Playlist] = relationship(back_populates="tracks")
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
@@ -512,7 +511,7 @@ class PlaylistLink(Base):
         UniqueConstraint("backend", "external_id"),
     )
 
-    id: Mapped[Optional[int]] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
     playlist_id: Mapped[int] = mapped_column(ForeignKey("playlist.id", ondelete="CASCADE"), index=True)
     backend: Mapped[Backend]
     external_id: Mapped[str]

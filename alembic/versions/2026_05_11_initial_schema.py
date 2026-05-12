@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: a1421c7ab529
+Revision ID: c3dd24e4564d
 Revises:
-Create Date: 2026-05-11 03:30:54.521038
+Create Date: 2026-05-11 22:13:34.392347
 
 """
 
@@ -15,7 +15,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = "a1421c7ab529"
+revision: str = "c3dd24e4564d"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -268,7 +268,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["playlist_id"], ["playlist.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["track_id"], ["track.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("playlist_id", "track_id"),
     )
     op.create_index(op.f("ix_playlisttrack_playlist_id"), "playlisttrack", ["playlist_id"], unique=False)
     op.create_index(op.f("ix_playlisttrack_position"), "playlisttrack", ["position"], unique=False)
