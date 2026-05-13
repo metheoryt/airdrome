@@ -450,35 +450,72 @@ class Deduplicator:
         return groups
 
     def dedup_pages(self, groups: list[tuple[str, list[Track]]]) -> list[tuple[str, list[Track]]]:
-        """
-        Deduplicate track pages:
-            remove duplicate groups or smaller subgroups,
-            produced by different column sets.
-        Leave the biggest group.
-        """
-        id_tups = [tuple(sorted([t.id for t in tracks if t.id is not None])) for _, tracks in groups]
-        id_tups.sort(key=len, reverse=True)
-        seen = set()
-        for id_tup in id_tups:
-            # starting from the longest sets
-            # 1. same group check
-            if id_tup in seen:
-                continue
-            id_set = set(id_tup)
-            # 2. subgroup check
-            if any([id_set.issubset(set(v)) for v in seen]):
-                continue
+        """Merge groups that share any track into one page per connected component.
 
-            seen.add(id_tup)
+        Surfacing the full component together lets the user resolve all canon
+        picks for those tracks in one place — and structurally prevents
+        cross-page picks from creating canon chains (e.g. T3->T2 chosen on
+        one page and T2->T1 on another).
+        """
+        n = len(groups)
+        if n == 0:
+            return []
 
-        # construct groups back from seen, keep original order
-        new_groups = []
-        for key, tracks in groups:
-            id_tup = tuple(sorted([t.id for t in tracks if t.id is not None]))
-            if id_tup in seen:
-                new_groups.append((key, tracks))
-                seen.remove(id_tup)
-        return new_groups
+        parent = list(range(n))
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        first_group: dict[int, int] = {}
+        for i, (_, tracks) in enumerate(groups):
+            for t in tracks:
+                if t.id is None:
+                    continue
+                if t.id in first_group:
+                    union(first_group[t.id], i)
+                else:
+                    first_group[t.id] = i
+
+        components: dict[int, list[int]] = {}
+        for i in range(n):
+            components.setdefault(find(i), []).append(i)
+
+        merged: list[tuple[str, list[Track]]] = []
+        emitted: set[int] = set()
+        for i, _ in enumerate(groups):
+            root = find(i)
+            if root in emitted:
+                continue
+            emitted.add(root)
+            member_idxs = components[root]
+            key = " + ".join(sorted({groups[idx][0] for idx in member_idxs}))
+            if len(member_idxs) == 1:
+                merged.append((key, groups[member_idxs[0]][1]))
+                continue
+            ids = {t.id for idx in member_idxs for t in groups[idx][1] if t.id is not None}
+            tracks = list(
+                self.s.scalars(
+                    select(Track)
+                    .where(Track.id.in_(ids))
+                    .order_by(
+                        Track.date_added.asc().nulls_last(),
+                        Track.year.asc().nulls_last(),
+                        Track.loved.desc().nulls_last(),
+                        Track.id,
+                    )
+                )
+            )
+            merged.append((key, tracks))
+
+        return merged
 
     def fill_state(self) -> None:
         groups = []
