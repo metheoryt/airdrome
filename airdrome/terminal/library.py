@@ -9,9 +9,7 @@ from airdrome.library.organize import organize_library
 from airdrome.library.scan import MusicScanner
 from airdrome.library.unify import do_unify
 from airdrome.models import Track
-from airdrome.normalize.dedup import Deduplicator, DeduplicatorUI, compute_auto_dedup_groups
-from airdrome.normalize.dedup_history import format_flags, load_history, record_run
-from airdrome.normalize.materialize import materialize
+from airdrome.normalize.dedup import Deduplicator, DeduplicatorUI, auto_deduplicate
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
 from .state import AppState
@@ -46,18 +44,6 @@ def scan_folder(
     MusicScanner(target_path=Path(folder_path), match_threshold=threshold).run(state.session)
 
 
-def _print_materialize_stats(stats, dry_run: bool) -> None:
-    style = "yellow" if dry_run else "green"
-    suffix = " (dry run, will roll back)" if dry_run else ""
-    console.print(
-        f"[{style}]Materialized {stats.auto_twins} twin(s) across {stats.auto_components} "
-        f"component(s) from {stats.history_entries} history entry(ies)"
-        f" + {stats.manual_changes} manual change(s)"
-        f"{f' (+{stats.chain_rewrites} chain rewrite(s))' if stats.chain_rewrites else ''}"
-        f"{suffix}.[/{style}]"
-    )
-
-
 @library_app.command("deduplicate")
 def deduplicate_cli(
     ctx: typer.Context,
@@ -68,10 +54,6 @@ def deduplicate_cli(
     if reset:
         state.session.execute(update(Track).values(canon_id=None))
         console.print("[yellow]duplicates data reset[/yellow]")
-    else:
-        # Bring the DB into sync with history + duplicates.json before the UI
-        # reads current canon_id state into its pages.
-        materialize(state.session)
     Deduplicator(
         state.session,
         filepath=settings.duplicates_filepath,
@@ -93,26 +75,14 @@ def auto_deduplicate_cli(
     no_year: bool = typer.Option(False, "--no-year", help="Exclude year from matching."),
     dry_run: bool = _DRY_RUN,
 ):
-    """Record a flag-set into auto-dedup history and re-materialize the world.
+    """Rebuild Track.canon_id from this flag-set + duplicates.json overrides.
 
-    The DB's canon_id state is treated as a materialized view of
-    (auto-dedup history + duplicates.json). Recording a new flag-set adds
-    edges; all history is then collapsed into connected components via
-    union-find, with the earliest-sorted track in each component picked as
-    canon. Order of recording does not affect the final state.
+    Every run is a clean slate: all canon_ids are reset, the chosen flag-set
+    decides auto groupings, then manual choices from duplicates.json are
+    layered on top. Re-run with different flags to experiment freely.
     """
     state: AppState = ctx.obj
     state.dry_run = dry_run
-
-    history_path = settings.auto_dedup_history_filepath
-    history = load_history(history_path)
-    if history:
-        console.print("[dim]Previous auto-dedup runs:[/dim]")
-        for entry in history:
-            console.print(
-                f"[dim]  {entry['ran_at'][:16]}  {format_flags(entry['flags'])}  "
-                f"→  {entry['groups']} groups, {entry['twins']} twins[/dim]"
-            )
 
     flags = {
         "with_artist": not no_artist,
@@ -123,46 +93,18 @@ def auto_deduplicate_cli(
         "with_duration": not no_duration,
         "with_year": not no_year,
     }
-    groups = compute_auto_dedup_groups(state.session, **flags)
-    twin_count = sum(len(g) - 1 for g in groups)
-    for group in groups:
+    result = auto_deduplicate(state.session, **flags)
+    for group in result.groups:
         canons = [None] + [group[0].id] * (len(group) - 1)
         console.print(DeduplicatorUI.compose_table("auto-dedup", group, canons))
 
-    if not groups:
-        console.print("[dim]This flag-set produces no groups; nothing recorded.[/dim]")
-        return
-
-    if any(entry["flags"] == flags for entry in history):
-        console.print(
-            "[dim]This flag-set is already in history; nothing recorded. "
-            "Run 'library deduplicate-replay' to rebuild the DB from sources.[/dim]"
-        )
-        return
-
-    if dry_run:
-        console.print(
-            f"[yellow](dry run) Would record {len(groups)} group(s) / {twin_count} twin(s) "
-            f"and re-materialize.[/yellow]"
-        )
-        return
-
-    record_run(history_path, flags, len(groups), twin_count)
-    console.print(f"[dim]Recorded run in {history_path}[/dim]")
-    stats = materialize(state.session)
-    _print_materialize_stats(stats, dry_run=False)
-
-
-@library_app.command("deduplicate-replay")
-def deduplicate_replay_cli(
-    ctx: typer.Context,
-    dry_run: bool = _DRY_RUN,
-):
-    """Rebuild the DB's canon_id state from auto-dedup history + duplicates.json."""
-    state: AppState = ctx.obj
-    state.dry_run = dry_run
-    stats = materialize(state.session)
-    _print_materialize_stats(stats, dry_run=dry_run)
+    style = "yellow" if dry_run else "green"
+    suffix = " (dry run, will roll back)" if dry_run else ""
+    console.print(
+        f"[{style}]{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
+        f" + {result.manual_changes} manual override(s) from duplicates.json"
+        f"{suffix}.[/{style}]"
+    )
 
 
 @library_app.command("unify")

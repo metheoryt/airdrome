@@ -9,9 +9,10 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
-from sqlalchemy import Column, func, select
+from sqlalchemy import Column, func, select, update
 from sqlalchemy.orm import Session
 
+from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.models import Track
 
@@ -566,19 +567,61 @@ def compute_auto_dedup_groups(
     return [g for g in bucketed.values() if len(g) >= 2]
 
 
-def flatten_canon_chains(session: Session) -> int:
-    """Rewrite every chained twin→...→canon pointer to point directly at the root."""
-    twins = list(session.scalars(select(Track).where(Track.canon_id.is_not(None))))
-    canon_of = {t.id: t.canon_id for t in twins}
-    rewrites = 0
-    for t in twins:
-        seen = {t.id}
-        current = t.canon_id
-        while current in canon_of and current not in seen:
-            seen.add(current)
-            current = canon_of[current]
-        if current is not None and current != t.canon_id:
-            t.canon_id = current
-            session.add(t)
-            rewrites += 1
-    return rewrites
+@dataclass
+class AutoDedupResult:
+    groups: list[list[Track]]
+    auto_twins: int
+    manual_changes: int
+
+
+def auto_deduplicate(
+    session: Session,
+    with_artist: bool = True,
+    with_album_artist: bool = True,
+    with_album: bool = True,
+    with_year: bool = True,
+    with_track_n: bool = True,
+    with_disc_n: bool = True,
+    with_duration: bool = True,
+) -> AutoDedupResult:
+    """Rebuild Track.canon_id from one flag-set + duplicates.json overrides.
+
+    Every run starts clean: all canon_ids are reset, the current flag-set
+    decides auto groupings, and manual choices from duplicates.json are
+    layered on top (overriding any auto canon they touch). Caller is
+    responsible for committing (or rolling back via AppState dry-run).
+    """
+    # Reset before computing groups so the in-memory Track objects this
+    # function returns reflect DB state (no stale canon_id values).
+    session.execute(update(Track).values(canon_id=None))
+    session.flush()
+
+    groups = compute_auto_dedup_groups(
+        session,
+        with_artist=with_artist,
+        with_album_artist=with_album_artist,
+        with_album=with_album,
+        with_year=with_year,
+        with_track_n=with_track_n,
+        with_disc_n=with_disc_n,
+        with_duration=with_duration,
+    )
+    auto_twins = 0
+    for group in groups:
+        canon = group[0]
+        for twin in group[1:]:
+            twin.canon_id = canon.id
+            session.add(twin)
+            auto_twins += 1
+    session.flush()
+
+    dedup = Deduplicator(session, filepath=settings.duplicates_filepath)
+    dedup.fill_state()
+    manual_changes = dedup.apply_changes()
+    session.flush()
+
+    return AutoDedupResult(
+        groups=groups,
+        auto_twins=auto_twins,
+        manual_changes=manual_changes,
+    )

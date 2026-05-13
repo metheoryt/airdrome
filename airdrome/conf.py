@@ -16,7 +16,6 @@ class Settings(BaseSettings):
 
     # app-produced data
     duplicates_filepath: Path = Path("data") / "duplicates.json"
-    auto_dedup_history_filepath: Path = Path("data") / "auto-dedup.history.json"
 
     # navidrome
     navidrome_db_dsn: str | None = None
