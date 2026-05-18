@@ -61,39 +61,46 @@ def deduplicate_cli(
     ).run()
 
 
+_VALID_FIELDS = {"artist", "album_artist", "album", "track_n", "disc_n", "duration", "year"}
+
+
+def _parse_set(spec: str) -> dict[str, bool]:
+    fields = {f.strip() for f in spec.split(",") if f.strip()}
+    unknown = fields - _VALID_FIELDS
+    if unknown:
+        raise typer.BadParameter(
+            f"Unknown field(s): {', '.join(sorted(unknown))}. Valid: {', '.join(sorted(_VALID_FIELDS))}"
+        )
+    return {f"with_{f}": (f in fields) for f in _VALID_FIELDS}
+
+
 @library_app.command("auto-deduplicate")
 def auto_deduplicate_cli(
     ctx: typer.Context,
-    no_artist: bool = typer.Option(False, "--no-artist", help="Exclude artist from matching."),
-    no_album_artist: bool = typer.Option(
-        False, "--no-album-artist", help="Exclude album artist from matching."
+    sets: list[str] = typer.Option(
+        None,
+        "--set",
+        "-s",
+        help=(
+            'Flag-set as comma-separated fields (repeatable). Example: --set "artist,album,year". '
+            "Listed fields are included; title is always implicit. No --set means one set with all "
+            "fields on. Multiple --sets union-find-merge their groups."
+        ),
     ),
-    no_album: bool = typer.Option(False, "--no-album", help="Exclude album from matching."),
-    no_track_n: bool = typer.Option(False, "--no-track-n", help="Exclude track number from matching."),
-    no_disc_n: bool = typer.Option(False, "--no-disc-n", help="Exclude disc number from matching."),
-    no_duration: bool = typer.Option(False, "--no-duration", help="Exclude duration bucket from matching."),
-    no_year: bool = typer.Option(False, "--no-year", help="Exclude year from matching."),
     dry_run: bool = _DRY_RUN,
 ):
-    """Rebuild Track.canon_id from this flag-set + duplicates.json overrides.
+    """Rebuild Track.canon_id from N flag-sets + duplicates.json overrides.
 
-    Every run is a clean slate: all canon_ids are reset, the chosen flag-set
-    decides auto groupings, then manual choices from duplicates.json are
-    layered on top. Re-run with different flags to experiment freely.
+    Every run is a clean slate: all canon_ids are reset, each --set produces
+    its own bucket-grouping, overlapping groups across sets are merged, then
+    manual choices from duplicates.json layer on top.
     """
     state: AppState = ctx.obj
     state.dry_run = dry_run
 
-    flags = {
-        "with_artist": not no_artist,
-        "with_album_artist": not no_album_artist,
-        "with_album": not no_album,
-        "with_track_n": not no_track_n,
-        "with_disc_n": not no_disc_n,
-        "with_duration": not no_duration,
-        "with_year": not no_year,
-    }
-    result = auto_deduplicate(state.session, **flags)
+    flag_sets = [_parse_set(s) for s in sets] if sets else None
+    result = auto_deduplicate(state.session, flag_sets=flag_sets)
+
     for group in result.groups:
         canons = [None] + [group[0].id] * (len(group) - 1)
         console.print(DeduplicatorUI.compose_table("auto-dedup", group, canons))

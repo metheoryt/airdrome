@@ -450,72 +450,7 @@ class Deduplicator:
         return groups
 
     def dedup_pages(self, groups: list[tuple[str, list[Track]]]) -> list[tuple[str, list[Track]]]:
-        """Merge groups that share any track into one page per connected component.
-
-        Surfacing the full component together lets the user resolve all canon
-        picks for those tracks in one place — and structurally prevents
-        cross-page picks from creating canon chains (e.g. T3->T2 chosen on
-        one page and T2->T1 on another).
-        """
-        n = len(groups)
-        if n == 0:
-            return []
-
-        parent = list(range(n))
-
-        def find(x: int) -> int:
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        def union(a: int, b: int) -> None:
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[ra] = rb
-
-        first_group: dict[int, int] = {}
-        for i, (_, tracks) in enumerate(groups):
-            for t in tracks:
-                if t.id is None:
-                    continue
-                if t.id in first_group:
-                    union(first_group[t.id], i)
-                else:
-                    first_group[t.id] = i
-
-        components: dict[int, list[int]] = {}
-        for i in range(n):
-            components.setdefault(find(i), []).append(i)
-
-        merged: list[tuple[str, list[Track]]] = []
-        emitted: set[int] = set()
-        for i, _ in enumerate(groups):
-            root = find(i)
-            if root in emitted:
-                continue
-            emitted.add(root)
-            member_idxs = components[root]
-            key = " + ".join(sorted({groups[idx][0] for idx in member_idxs}))
-            if len(member_idxs) == 1:
-                merged.append((key, groups[member_idxs[0]][1]))
-                continue
-            ids = {t.id for idx in member_idxs for t in groups[idx][1] if t.id is not None}
-            tracks = list(
-                self.s.scalars(
-                    select(Track)
-                    .where(Track.id.in_(ids))
-                    .order_by(
-                        Track.date_added.asc().nulls_last(),
-                        Track.year.asc().nulls_last(),
-                        Track.loved.desc().nulls_last(),
-                        Track.id,
-                    )
-                )
-            )
-            merged.append((key, tracks))
-
-        return merged
+        return merge_overlapping_groups(self.s, groups)
 
     def fill_state(self) -> None:
         groups = []
@@ -549,6 +484,79 @@ class Deduplicator:
         self.state.current_idx = next((i for i, (_, p) in enumerate(filtered) if not p.confirmed), 0)
         print(" done!", end="\r")
         DeduplicatorUI(self).serve()
+
+
+def merge_overlapping_groups(
+    session: Session,
+    groups: list[tuple[str, list[Track]]],
+) -> list[tuple[str, list[Track]]]:
+    """Union-find over groups: any two sharing a track collapse into one page.
+
+    Surfacing the full component together lets the user resolve all canon
+    picks for those tracks in one place — and structurally prevents
+    cross-page picks from creating canon chains (e.g. T3->T2 chosen on
+    one page and T2->T1 on another). Multi-group components are re-queried
+    so members come back in canon-priority order.
+    """
+    n = len(groups)
+    if n == 0:
+        return []
+
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    first_group: dict[int, int] = {}
+    for i, (_, tracks) in enumerate(groups):
+        for t in tracks:
+            if t.id is None:
+                continue
+            if t.id in first_group:
+                union(first_group[t.id], i)
+            else:
+                first_group[t.id] = i
+
+    components: dict[int, list[int]] = {}
+    for i in range(n):
+        components.setdefault(find(i), []).append(i)
+
+    merged: list[tuple[str, list[Track]]] = []
+    emitted: set[int] = set()
+    for i, _ in enumerate(groups):
+        root = find(i)
+        if root in emitted:
+            continue
+        emitted.add(root)
+        member_idxs = components[root]
+        key = " + ".join(sorted({groups[idx][0] for idx in member_idxs}))
+        if len(member_idxs) == 1:
+            merged.append((key, groups[member_idxs[0]][1]))
+            continue
+        ids = {t.id for idx in member_idxs for t in groups[idx][1] if t.id is not None}
+        tracks = list(
+            session.scalars(
+                select(Track)
+                .where(Track.id.in_(ids))
+                .order_by(
+                    Track.date_added.asc().nulls_last(),
+                    Track.year.asc().nulls_last(),
+                    Track.loved.desc().nulls_last(),
+                    Track.id,
+                )
+            )
+        )
+        merged.append((key, tracks))
+
+    return merged
 
 
 def compute_auto_dedup_groups(
@@ -613,38 +621,39 @@ class AutoDedupResult:
 
 def auto_deduplicate(
     session: Session,
-    with_artist: bool = True,
-    with_album_artist: bool = True,
-    with_album: bool = True,
-    with_year: bool = True,
-    with_track_n: bool = True,
-    with_disc_n: bool = True,
-    with_duration: bool = True,
+    flag_sets: list[dict[str, bool]] | None = None,
 ) -> AutoDedupResult:
-    """Rebuild Track.canon_id from one flag-set + duplicates.json overrides.
+    """Rebuild Track.canon_id from one or more flag-sets + duplicates.json overrides.
 
-    Every run starts clean: all canon_ids are reset, the current flag-set
-    decides auto groupings, and manual choices from duplicates.json are
-    layered on top (overriding any auto canon they touch). Caller is
-    responsible for committing (or rolling back via AppState dry-run).
+    Every run starts clean: all canon_ids are reset, each flag-set produces
+    its own bucket-grouping, overlapping groups across sets merge via
+    union-find so a track ends up with one canon, then manual choices
+    from duplicates.json layer on top (overriding any auto canon they
+    touch). Caller is responsible for committing (or rolling back via
+    AppState dry-run).
     """
+    if not flag_sets:
+        flag_sets = [{}]
+
     # Reset before computing groups so the in-memory Track objects this
     # function returns reflect DB state (no stale canon_id values).
     session.execute(update(Track).values(canon_id=None))
     session.flush()
 
-    groups = compute_auto_dedup_groups(
-        session,
-        with_artist=with_artist,
-        with_album_artist=with_album_artist,
-        with_album=with_album,
-        with_year=with_year,
-        with_track_n=with_track_n,
-        with_disc_n=with_disc_n,
-        with_duration=with_duration,
-    )
+    raw: list[tuple[str, list[Track]]] = []
+    for i, flags in enumerate(flag_sets):
+        groups = compute_auto_dedup_groups(session, **flags)
+        excluded = sorted(k.removeprefix("with_") for k, v in flags.items() if v is False)
+        key_suffix = "-" + "-".join(excluded) if excluded else "all"
+        for j, group in enumerate(groups):
+            raw.append((f"set{i}[{key_suffix}]#{j}", group))
+
+    merged = merge_overlapping_groups(session, raw)
+
     auto_twins = 0
-    for group in groups:
+    out_groups: list[list[Track]] = []
+    for _, group in merged:
+        out_groups.append(group)
         canon = group[0]
         for twin in group[1:]:
             twin.canon_id = canon.id
@@ -658,7 +667,7 @@ def auto_deduplicate(
     session.flush()
 
     return AutoDedupResult(
-        groups=groups,
+        groups=out_groups,
         auto_twins=auto_twins,
         manual_changes=manual_changes,
     )
