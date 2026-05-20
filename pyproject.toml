@@ -42,6 +42,7 @@ select = ["E", "F", "I", "W"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["airdrome"]
+known-local-folder = ["factories"]
 combine-as-imports = true
 lines-after-imports = 2
 split-on-trailing-comma = false
@@ -55,6 +56,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 env = [
     "LIBRARY_DIR=/tmp/airdrome_test_library",
 ]
