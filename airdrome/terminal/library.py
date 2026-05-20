@@ -1,14 +1,12 @@
 from pathlib import Path
 
 import typer
-from sqlalchemy import update
 
 from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.library.organize import organize_library
 from airdrome.library.scan import MusicScanner
 from airdrome.library.unify import do_unify
-from airdrome.models import Track
 from airdrome.normalize.dedup import Deduplicator, DeduplicatorUI, auto_deduplicate
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
@@ -48,17 +46,9 @@ def scan_folder(
 def deduplicate_cli(
     ctx: typer.Context,
     match: str = typer.Option("", "--match", help="Filter by a substring"),
-    reset: bool = typer.Option(False, "--reset", "-r"),
 ):
     state: AppState = ctx.obj
-    if reset:
-        state.session.execute(update(Track).values(canon_id=None))
-        console.print("[yellow]duplicates data reset[/yellow]")
-    Deduplicator(
-        state.session,
-        filepath=settings.duplicates_filepath,
-        partial_match=match,
-    ).run()
+    Deduplicator(state.session, partial_match=match).run()
 
 
 _VALID_FIELDS = {"artist", "album_artist", "album", "track_n", "disc_n", "duration", "year"}
@@ -87,16 +77,14 @@ def auto_deduplicate_cli(
             "fields on. Multiple --sets union-find-merge their groups."
         ),
     ),
-    dry_run: bool = _DRY_RUN,
 ):
-    """Rebuild Track.canon_id from N flag-sets + duplicates.json overrides.
+    """Rebuild Track.canon_id from N flag-sets + stored manual overrides.
 
     Every run is a clean slate: all canon_ids are reset, each --set produces
     its own bucket-grouping, overlapping groups across sets are merged, then
-    manual choices from duplicates.json layer on top.
+    stored manual choices layer on top and any canon chain is flattened.
     """
     state: AppState = ctx.obj
-    state.dry_run = dry_run
 
     flag_sets = [_parse_set(s) for s in sets] if sets else None
     result = auto_deduplicate(state.session, flag_sets=flag_sets)
@@ -105,12 +93,9 @@ def auto_deduplicate_cli(
         canons = [None] + [group[0].id] * (len(group) - 1)
         console.print(DeduplicatorUI.compose_table("auto-dedup", group, canons))
 
-    style = "yellow" if dry_run else "green"
-    suffix = " (dry run, will roll back)" if dry_run else ""
     console.print(
-        f"[{style}]{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
-        f" + {result.manual_changes} manual override(s) from duplicates.json"
-        f"{suffix}.[/{style}]"
+        f"[green]{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
+        f" + {result.manual_changes} manual override(s) from stored choices.[/green]"
     )
 
 

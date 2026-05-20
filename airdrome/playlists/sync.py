@@ -19,14 +19,16 @@ from airdrome.models import Playlist, PlaylistLink, PlaylistTrack, Track
 from .adapter import ExternalPlaylist, ExternalTrackRef, PlaylistAdapter
 
 
-def _resolve_canonical(s: Session, track_id: int, _depth: int = 0) -> int:
-    """Follow `Track.canon_id` chains to the canonical track ID."""
-    if _depth > 8:  # paranoia: shouldn't happen, but don't infinite-loop on a cycle
-        return track_id
+def _resolve_canonical(s: Session, track_id: int) -> int:
+    """Resolve to the canonical track ID with a single hop.
+
+    canon_id is terminal by invariant (see Track.canon_id; enforced by
+    flatten_canon_chains), so no chain walking is needed.
+    """
     track = s.get(Track, track_id)
     if track is None or track.canon_id is None or track.canon_id == track_id:
         return track_id
-    return _resolve_canonical(s, track.canon_id, _depth + 1)
+    return track.canon_id
 
 
 def _three_way_merge(base: list[int], ours: list[int], theirs: list[int]) -> list[int]:

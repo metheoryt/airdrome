@@ -53,7 +53,7 @@ def find_best_track(
             select(Track)
             .where(Track.title_norm == title_norm)
             .order_by(
-                Track.canon_id,  # originals first
+                Track.canon_id.asc().nulls_first(),  # canonical (NULL canon_id) first
                 Track.album_artist_norm,
                 Track.artist_norm,
                 Track.album_norm,

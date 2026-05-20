@@ -1,7 +1,5 @@
-import json
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 
 from rich.console import Group
 from rich.panel import Panel
@@ -10,11 +8,10 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 from sqlalchemy import Column, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
-from airdrome.conf import settings
 from airdrome.console import console
-from airdrome.models import Track
+from airdrome.models import DedupGroup, DedupGroupMember, Track
 
 
 INSTRUCTION_TEXT = Text.from_markup(
@@ -145,45 +142,48 @@ class DeduplicatorState:
             return True
         return False
 
-    def dump(self, path: Path) -> None:
-        data: dict = {}
+    def dump(self, session: Session) -> None:
+        """Persist confirmed picks to the DB, keyed by member-hash multiset.
+
+        Only pages materialized in this run are touched: a confirmed page is
+        upserted; a materialized page that matches a stored group but is no
+        longer confirmed (user reset it) is deleted. Stored groups not present
+        in this run are left untouched.
+        """
+        index = _load_stored_index(session)
+        n_saved = 0
         for key, page in self.pages_iter:
+            hashes = tuple(sorted(t.duplicate_hash for t in page.tracks))
+            existing = index.get(hashes)
             if not page.confirmed:
+                if existing is not None:
+                    session.delete(existing)
                 continue
             id_to_hash = {t.id: t.duplicate_hash for t in page.tracks}
-            data[key] = {
-                "members": [t.duplicate_hash for t in page.tracks],
-                "canon_hashes": [
-                    id_to_hash.get(canon_id) if canon_id is not None else None
-                    for canon_id in page.chosen_canons
-                ],
+            canon_by_member = {
+                t.duplicate_hash: (id_to_hash.get(canon_id) if canon_id is not None else None)
+                for t, canon_id in zip(page.tracks, page.chosen_canons)
             }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        console.print(f"[dim]Saved {len(data)} confirmed group(s) to {path}[/dim]")
+            group = existing if existing is not None else DedupGroup()
+            group.label = key
+            group.members = [
+                DedupGroupMember(member_hash=h, canon_hash=canon_by_member.get(h))
+                for h in (t.duplicate_hash for t in page.tracks)
+            ]
+            session.add(group)
+            n_saved += 1
+        session.flush()
+        console.print(f"[dim]Saved {n_saved} confirmed group(s) to DB[/dim]")
 
-    def load(self, path: Path) -> None:
-        if not path.exists():
-            return
-        with path.open("r", encoding="utf-8") as f:
-            data: dict = json.load(f)
+    def load(self, session: Session) -> None:
+        index = _load_stored_index(session)
         n_restored = 0
-        for key, saved in data.items():
-            page = self.pages.get(key)
-            if page is None:
+        for page in self.pages.values():
+            hashes = tuple(sorted(t.duplicate_hash for t in page.tracks))
+            stored = index.get(hashes)
+            if stored is None:
                 continue
-            saved_members: list = saved.get("members", [])
-            canon_hashes: list = saved.get("canon_hashes", [])
-            if len(saved_members) != len(canon_hashes):
-                continue
-            current_hashes = [t.duplicate_hash for t in page.tracks]
-            # Order-independent: track IDs are reassigned on re-import, so the
-            # SQL ordering by Track.id can yield a different sequence even when
-            # the set of duplicate hashes is identical.
-            if sorted(current_hashes) != sorted(saved_members):
-                continue
-            saved_canon_by_member = dict(zip(saved_members, canon_hashes))
+            saved_canon_by_member = {m.member_hash: m.canon_hash for m in stored.members}
             hash_to_id = {t.duplicate_hash: t.id for t in page.tracks}
             restored: list[int | None] = []
             for t in page.tracks:
@@ -200,7 +200,7 @@ class DeduplicatorState:
                 page.confirmed = True
                 page.auto_resolved = False  # human-confirmed overrides auto-resolved status
                 n_restored += 1
-        console.print(f"[dim]Loaded {n_restored}/{len(data)} group(s) from {path}[/dim]")
+        console.print(f"[dim]Loaded {n_restored}/{len(index)} group(s) from DB[/dim]")
 
 
 class DeduplicatorUI:
@@ -356,7 +356,8 @@ class DeduplicatorUI:
                 entry = Prompt.ask("Write here")
                 cmd = entry.strip().lower()
                 if cmd == "q":
-                    self.state.dump(self.dedup.filepath)
+                    self.state.dump(self.dedup.s)
+                    self.dedup.s.commit()
                     console.print("[green]Exited.[/green]")
                     return
                 elif cmd == "m":
@@ -365,7 +366,7 @@ class DeduplicatorUI:
                     n = self.dedup.apply_changes()
                     self.dedup.s.commit()
                     self.feedback_text = Text(
-                        f"{n} change(s) committed. Saved to {self.dedup.filepath}",
+                        f"{n} change(s) committed. Saved to DB",
                         style="bold green",
                     )
                 continue
@@ -394,14 +395,15 @@ class DeduplicatorUI:
                 n = self.dedup.apply_changes()
                 self.dedup.s.commit()
                 self.feedback_text = Text(
-                    f"{n} change(s) committed. Saved to {self.dedup.filepath}",
+                    f"{n} change(s) committed. Saved to DB",
                     style="bold green",
                 )
             elif action == "mode":
                 self.state.switch_mode()
                 self.feedback_text = Text()
             elif action == "exit":
-                self.state.dump(self.dedup.filepath)
+                self.state.dump(self.dedup.s)
+                self.dedup.s.commit()
                 console.print("[green]Exited.[/green]")
                 return
 
@@ -413,16 +415,20 @@ class Deduplicator:
         [Track.album_norm, Track.title_norm],
     ]
 
-    def __init__(self, s: Session, filepath: Path, partial_match: str = ""):
+    def __init__(self, s: Session, partial_match: str = ""):
         self.s = s
-        self.filepath = filepath
         self.state = DeduplicatorState(partial_match=partial_match)
 
     def get_track_groups(self, cols: list[Column]) -> list[tuple[str, list[Track]]]:
+        # Skip empty normalized keys: an empty artist/album/title would
+        # otherwise collapse every unrelated track sharing that blank into
+        # one giant bogus group.
+        non_empty = [col != "" for col in cols]
         combinations = self.s.execute(
             select(*cols, func.count(Track.id).label("count"))
             # do not exclude them, since they can appear in a broader group
             # .where(Track.canon_id.is_(None))  # exclude tracks already marked as twins
+            .where(*non_empty)
             .group_by(*cols)
             .having(func.count(Track.id) > 1)
             .order_by(*cols)
@@ -460,7 +466,7 @@ class Deduplicator:
         groups = self.dedup_pages(groups)
         pages = {key: Page(tracks=tracks) for key, tracks in groups}
         self.state = DeduplicatorState(pages=pages, current_idx=0, partial_match=self.state.partial_match)
-        self.state.load(self.filepath)
+        self.state.load(self.s)
 
     def apply_changes(self) -> int:
         """Stage confirmed canon picks onto the session. Caller is responsible for commit."""
@@ -474,7 +480,7 @@ class Deduplicator:
                     track.canon_id = new_canon
                     self.s.add(track)
                     changed += 1
-        self.state.dump(self.filepath)
+        self.state.dump(self.s)
         return changed
 
     def run(self) -> None:
@@ -607,6 +613,8 @@ def compute_auto_dedup_groups(
 
     bucketed: dict[tuple, list[Track]] = {}
     for t in tracks:
+        if not t.title_norm:  # title is the always-required key; skip blanks
+            continue
         bucketed.setdefault(group_key(t), []).append(t)
 
     return [g for g in bucketed.values() if len(g) >= 2]
@@ -623,14 +631,14 @@ def auto_deduplicate(
     session: Session,
     flag_sets: list[dict[str, bool]] | None = None,
 ) -> AutoDedupResult:
-    """Rebuild Track.canon_id from one or more flag-sets + duplicates.json overrides.
+    """Rebuild Track.canon_id from one or more flag-sets + stored manual overrides.
 
     Every run starts clean: all canon_ids are reset, each flag-set produces
     its own bucket-grouping, overlapping groups across sets merge via
-    union-find so a track ends up with one canon, then manual choices
-    from duplicates.json layer on top (overriding any auto canon they
-    touch). Caller is responsible for committing (or rolling back via
-    AppState dry-run).
+    union-find so a track ends up with one canon, then stored manual choices
+    layer on top (overriding any auto canon they touch), and a final pass
+    flattens any canon chain the overlay may have introduced. Caller is
+    responsible for committing.
     """
     if not flag_sets:
         flag_sets = [{}]
@@ -661,13 +669,103 @@ def auto_deduplicate(
             auto_twins += 1
     session.flush()
 
-    dedup = Deduplicator(session, filepath=settings.duplicates_filepath)
-    dedup.fill_state()
-    manual_changes = dedup.apply_changes()
-    session.flush()
+    manual_changes = apply_manual_overrides(session)
+    flatten_canon_chains(session)
 
     return AutoDedupResult(
         groups=out_groups,
         auto_twins=auto_twins,
         manual_changes=manual_changes,
     )
+
+
+def _load_stored_index(session: Session) -> dict[tuple[str, ...], DedupGroup]:
+    """Map each stored group to the sorted multiset of its member hashes."""
+    index: dict[tuple[str, ...], DedupGroup] = {}
+    for group in session.scalars(select(DedupGroup)):
+        hashes = tuple(sorted(m.member_hash for m in group.members))
+        index[hashes] = group
+    return index
+
+
+def apply_manual_overrides(session: Session) -> int:
+    """Apply stored manual dedup choices onto Track.canon_id.
+
+    A stored group governs its tracks entirely: for every group still fully
+    present in the library (same member-hash multiset), each member's
+    canon_id is set to the stored choice (or cleared), overriding any auto
+    canon. Caller is responsible for committing.
+    """
+    index = _load_stored_index(session)
+    if not index:
+        return 0
+
+    by_hash: dict[str, list[Track]] = {}
+    for t in session.scalars(select(Track)):
+        by_hash.setdefault(t.duplicate_hash, []).append(t)
+
+    changed = 0
+    for hashes, group in index.items():
+        present = tuple(sorted(h for h in hashes if h in by_hash))
+        # Require the whole group to still be present so we never apply a
+        # partial, possibly-misleading override.
+        if present != hashes:
+            continue
+        canon_by_member = {m.member_hash: m.canon_hash for m in group.members}
+        for member_hash, tracks in by_hash.items():
+            if member_hash not in canon_by_member:
+                continue
+            canon_hash = canon_by_member[member_hash]
+            canon_id = None
+            if canon_hash is not None:
+                canon_tracks = by_hash.get(canon_hash)
+                if not canon_tracks:
+                    continue
+                canon_id = canon_tracks[0].id
+            for t in tracks:
+                new_canon = None if canon_id == t.id else canon_id
+                if t.canon_id != new_canon:
+                    t.canon_id = new_canon
+                    session.add(t)
+                    changed += 1
+    session.flush()
+    return changed
+
+
+def flatten_canon_chains(session: Session) -> int:
+    """Repoint any canon_id whose target is itself a twin to the root.
+
+    Enforces the flat invariant documented on Track.canon_id so every reader
+    can resolve canonicality with a single hop. Idempotent; asserts no chain
+    remains.
+    """
+    pairs = session.execute(select(Track.id, Track.canon_id)).all()
+    canon_of = {tid: cid for tid, cid in pairs}
+
+    changed = 0
+    for tid, cid in pairs:
+        if cid is None:
+            continue
+        seen = {tid}
+        root = cid
+        while True:
+            nxt = canon_of.get(root)
+            if nxt is None or root in seen:
+                break
+            seen.add(root)
+            root = nxt
+        if root != cid:
+            session.execute(update(Track).where(Track.id == tid).values(canon_id=root))
+            changed += 1
+    if changed:
+        session.flush()
+
+    canon = aliased(Track)
+    remaining = session.scalar(
+        select(func.count())
+        .select_from(Track)
+        .join(canon, Track.canon_id == canon.id)
+        .where(canon.canon_id.is_not(None))
+    )
+    assert remaining == 0, f"canon chains remain after flatten: {remaining}"
+    return changed

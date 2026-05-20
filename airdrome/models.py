@@ -157,6 +157,9 @@ class Track(Base):
     album_norm: Mapped[str] = mapped_column(default="")
 
     # duplicates
+    # Invariant: canon_id is terminal — a canon is never itself a twin, so
+    # canon_id chains (A->B->C) never exist. Enforced at write time by
+    # flatten_canon_chains(); all readers may resolve with a single hop.
     canon_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="SET NULL"), index=True)
     canon: Mapped["Track | None"] = relationship(
         "Track",
@@ -517,6 +520,41 @@ class PlaylistLink(Base):
     external_id: Mapped[str]
     synced_track_ids: Mapped[list[int]] = mapped_column(sa.JSON, nullable=False)
     synced_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+
+
+class DedupGroup(Base):
+    """A user-confirmed duplicate group from the manual deduplicator.
+
+    The group's identity is the multiset of its members' `duplicate_hash`
+    values, not `label` (which is an engine-specific display string kept only
+    for readability). A persisted group means the user reviewed it; a group
+    whose members all have `canon_hash = NULL` records "reviewed, these are
+    not duplicates" and must not be re-prompted.
+    """
+
+    __tablename__ = "dedupgroup"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str | None]
+    members: Mapped[list["DedupGroupMember"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
+
+
+class DedupGroupMember(Base):
+    """One track within a `DedupGroup`, identified by its `duplicate_hash`.
+
+    `canon_hash` is the `duplicate_hash` of the chosen canon within the same
+    group, or NULL when the track is itself a canon / unassigned.
+    """
+
+    __tablename__ = "dedupgroupmember"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("dedupgroup.id", ondelete="CASCADE"), index=True)
+    group: Mapped[DedupGroup] = relationship(back_populates="members")
+    member_hash: Mapped[str] = mapped_column(index=True)
+    canon_hash: Mapped[str | None]
 
 
 engine = create_engine(str(settings.db_dsn), echo=settings.db_echo)
