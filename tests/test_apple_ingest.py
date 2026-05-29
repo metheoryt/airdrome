@@ -2,10 +2,19 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from airdrome.cloud.apple.models import ApplePlaylist, AppleTrack
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
 from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
+from airdrome.cloud.sources import SourcePlaylist, SourceTrack
+from airdrome.enums import Provider
 from airdrome.models import Playlist, PlaylistTrack, Track
+
+
+def _xml_track(session, source_id):
+    return session.scalars(
+        select(SourceTrack).where(
+            SourceTrack.provider == Provider.APPLE_XML, SourceTrack.source_id == str(source_id)
+        )
+    )
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -61,8 +70,8 @@ def test_import_tracks_creates_apple_track(session):
 
     do_import_tracks(session, {str(track_id): data})
 
-    apple_track = session.scalars(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).one()
-    assert apple_track.name == "My Song"
+    apple_track = _xml_track(session, track_id).one()
+    assert apple_track.title == "My Song"
 
 
 def test_import_tracks_idempotent(session):
@@ -75,16 +84,14 @@ def test_import_tracks_idempotent(session):
 
     assert first == 1
     assert second == 0
-    assert len(session.scalars(select(AppleTrack).where(AppleTrack.apple_track_id == track_id)).all()) == 1
+    assert len(_xml_track(session, track_id).all()) == 1
 
 
 def test_import_tracks_no_track_id_before_unify(session):
     data = _track_data()
     do_import_tracks(session, {str(data["Track ID"]): data})
 
-    apple_track = session.scalars(
-        select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])
-    ).one()
+    apple_track = _xml_track(session, data["Track ID"]).one()
     assert apple_track.track_id is None
 
 
@@ -106,9 +113,7 @@ def test_unify_links_apple_track(session):
     do_import_tracks(session, {str(data["Track ID"]): data})
     unify_apple_tracks(session)
 
-    apple_track = session.scalars(
-        select(AppleTrack).where(AppleTrack.apple_track_id == data["Track ID"])
-    ).one()
+    apple_track = _xml_track(session, data["Track ID"]).one()
     assert apple_track.track_id is not None
 
 
@@ -147,7 +152,9 @@ def test_import_playlists_creates_playlist(session):
     created = do_import_playlists(session, [pl])
 
     assert created == 1
-    pl_db = session.scalars(select(ApplePlaylist).where(ApplePlaylist.playlist_id == pl["Playlist ID"])).one()
+    pl_db = session.scalars(
+        select(SourcePlaylist).where(SourcePlaylist.source_id == pl["Playlist Persistent ID"])
+    ).one()
     assert pl_db.name == "My Playlist"
 
 
@@ -158,7 +165,7 @@ def test_import_playlists_skips_smart_playlists(session):
     created = do_import_playlists(session, [pl])
 
     assert created == 0
-    assert len(session.scalars(select(ApplePlaylist)).all()) == 0
+    assert len(session.scalars(select(SourcePlaylist)).all()) == 0
 
 
 def test_import_playlists_idempotent(session):

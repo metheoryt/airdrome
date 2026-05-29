@@ -6,6 +6,7 @@ from rich.table import Table
 from rich.text import Text
 
 from airdrome.console import console
+from airdrome.enums import Provider
 from airdrome.models import Track
 
 from .manual import Deduplicator, Page
@@ -37,6 +38,8 @@ class DeduplicatorUI:
 
     @staticmethod
     def _get_table_row(t: Track) -> dict[str, str]:
+        xml_n = sum(1 for st in t.source_tracks if st.provider == Provider.APPLE_XML)
+        ams_n = sum(1 for st in t.source_tracks if st.provider == Provider.APPLE_MS)
         return {
             "ID": str(t.id),
             "Title": t.title,
@@ -52,8 +55,8 @@ class DeduplicatorUI:
             "Date added": t.date_added.strftime("%Y-%m-%d"),
             "❤️": "❤️" if t.loved else "",
             "Album ❤️": "❤️" if t.album_loved else "",
-            "XML": str(len(t.apple_tracks)) if t.apple_tracks else "",
-            "AMS": str(len(t.apple_ms_tracks)) if t.apple_ms_tracks else "",
+            "XML": str(xml_n) if xml_n else "",
+            "AMS": str(ams_n) if ams_n else "",
         }
 
     @staticmethod

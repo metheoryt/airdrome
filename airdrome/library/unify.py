@@ -4,8 +4,8 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextC
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from airdrome.cloud.apple.models import AppleMSPlaylist, AppleMSTrack, ApplePlaylist, AppleTrack
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
+from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.console import console
 from airdrome.models import Playlist, Track, TrackFile
 
@@ -59,16 +59,10 @@ def do_unify(s: Session, reset_playlists: bool = False):
         s.flush()
         console.print("[yellow]Canonical playlists reset[/yellow]")
 
-    xml_track_count = s.scalars(
-        select(func.count()).select_from(AppleTrack).where(AppleTrack.track_id.is_(None))
+    track_count = s.scalars(
+        select(func.count()).select_from(SourceTrack).where(SourceTrack.track_id.is_(None))
     ).one()
-    ms_track_count = s.scalars(select(func.count()).select_from(AppleMSTrack)).one()
-    xml_pl_count = s.scalars(
-        select(func.count())
-        .select_from(ApplePlaylist)
-        .where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
-    ).one()
-    ms_pl_count = s.scalars(select(func.count()).select_from(AppleMSPlaylist)).one()
+    pl_count = s.scalars(select(func.count()).select_from(SourcePlaylist).where(~SourcePlaylist.folder)).one()
     orphan_count = s.scalars(
         select(func.count())
         .select_from(TrackFile)
@@ -89,7 +83,7 @@ def do_unify(s: Session, reset_playlists: bool = False):
     ) as progress:
         task = progress.add_task(
             "Tracks",
-            total=xml_track_count + ms_track_count,
+            total=track_count,
             created=0,
             updated=0,
             files_bound=0,
@@ -109,7 +103,7 @@ def do_unify(s: Session, reset_playlists: bool = False):
     ) as progress:
         task = progress.add_task(
             "Playlists",
-            total=xml_pl_count + ms_pl_count,
+            total=pl_count,
             pl_created=0,
             tr_linked=0,
         )

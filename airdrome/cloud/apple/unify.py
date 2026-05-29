@@ -1,20 +1,19 @@
 from dataclasses import dataclass
-from itertools import chain
 from typing import Iterator
 
 from rich.progress import Progress, TaskID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from airdrome.enums import Platform
+from airdrome.cloud.sources import SourcePlaylist, SourceTrack
+from airdrome.console import console
+from airdrome.enums import Platform, Provider
 from airdrome.models import AwareDatetime, Playlist, PlaylistTrack, Track, TrackFile
 
-from .models import AppleFSDiscoverable, AppleMSPlaylist, AppleMSTrack, ApplePlaylist, AppleTrack
 
-
-def _bind_track_files(apple_track: AppleFSDiscoverable, s: Session) -> list[TrackFile]:
+def _bind_track_files(source_track: SourceTrack, s: Session) -> list[TrackFile]:
     tfs = []
-    for rel_path in apple_track.possible_locations(max_suffix=2):
+    for rel_path in source_track.possible_locations(max_suffix=2):
         tf: TrackFile | None = s.scalars(
             select(TrackFile).where(TrackFile.source_path.contains(rel_path))
         ).one_or_none()
@@ -23,73 +22,52 @@ def _bind_track_files(apple_track: AppleFSDiscoverable, s: Session) -> list[Trac
     return tfs
 
 
-def _unify_xml_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
-    for apple_track in s.scalars(select(AppleTrack).where(AppleTrack.track_id.is_(None))):
+def expects_local_file(st: SourceTrack) -> bool:
+    """Whether a local audio file is expected on disk for this source track.
+
+    File binding is attempted for every source track regardless; this helper only encodes the
+    "a local copy should exist" expectation (XML tracks not added from Apple Music; MS tracks with
+    a known audio extension) so a missing match can be surfaced.
+    """
+    if st.provider == Provider.APPLE_XML:
+        return not st.extra.get("apple_music", False)
+    if st.provider == Provider.APPLE_MS:
+        return bool(st.extra.get("audio_file_extension"))
+    return False
+
+
+def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
+    for st in s.scalars(select(SourceTrack).where(SourceTrack.track_id.is_(None))):
         track_defaults = {
-            "track_n": apple_track.track_number,
-            "disc_n": apple_track.disc_number,
-            "compilation": apple_track.compilation,
-            "year": apple_track.year,
-            "duration": round(apple_track.total_time / 1000) if apple_track.total_time else None,
-            "loved": apple_track.loved if apple_track.loved else None,
-            "album_loved": apple_track.album_loved if apple_track.album_loved else None,
-            "rating": apple_track.rating if not apple_track.rating_computed else None,
-            "album_rating": apple_track.album_rating if not apple_track.album_rating_computed else None,
-            "date_added": apple_track.date_added,
+            "track_n": st.track_number,
+            "disc_n": st.disc_number,
+            "compilation": st.compilation,
+            "year": st.year,
+            "duration": round(st.duration_ms / 1000) if st.duration_ms else None,
+            "loved": st.loved or None,
+            "album_loved": st.album_loved or None,
+            "rating": st.rating if not st.rating_computed else None,
+            "album_rating": st.album_rating if not st.album_rating_computed else None,
+            "date_added": st.date_added,
         }
         track, track_created = Track.get_or_create(
             s,
-            title=apple_track.name,
-            artist=apple_track.artist,
-            album=apple_track.album,
-            album_artist=apple_track.album_artist,
+            title=st.title,
+            artist=st.artist,
+            album=st.album,
+            album_artist=st.album_artist,
             defaults=track_defaults,
         )
         track_updated = not track_created and track.fill_nulls(track_defaults)
-        apple_track.track = track
+        st.track = track
 
-        n_files = 0
-        if not apple_track.apple_music:
-            tfs = _bind_track_files(apple_track, s)
-            for tf in tfs:
-                track.files.append(tf)
-            n_files = len(tfs)
-
-        s.flush()
-        yield track_created, track_updated, n_files
-
-
-def _unify_ms_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
-    for ms_track in s.scalars(select(AppleMSTrack)):
-        ms_track: AppleMSTrack
-        duration_ms = ms_track.duration
-        track_defaults = {
-            "track_n": ms_track.track_number,
-            "disc_n": ms_track.disc_number,
-            "compilation": ms_track.compilation,
-            "year": ms_track.year,
-            "duration": round(duration_ms / 1000) if duration_ms else None,
-            "date_added": ms_track.date_added,
-        }
-        track, track_created = Track.get_or_create(
-            s,
-            title=ms_track.title,
-            artist=ms_track.artist,
-            album=ms_track.album,
-            album_artist=ms_track.album_artist,
-            defaults=track_defaults,
-        )
-        track_updated = not track_created and track.fill_nulls(track_defaults)
-
-        if ms_track.track_id is None:
-            ms_track.track = track
-
-        n_files = 0
-        if ms_track.audio_file_extension:
-            tfs = _bind_track_files(ms_track, s)
-            for tf in tfs:
-                track.files.append(tf)
-            n_files = len(tfs)
+        # Rely on FS discovery for everyone; the flag only tells us whether to complain on a miss.
+        tfs = _bind_track_files(st, s)
+        for tf in tfs:
+            track.files.append(tf)
+        n_files = len(tfs)
+        if not tfs and expects_local_file(st):
+            console.print(f"[dim yellow]expected local file not found: {st.title!r}[/dim yellow]")
 
         s.flush()
         yield track_created, track_updated, n_files
@@ -99,12 +77,12 @@ def unify_apple_tracks(
     s: Session, progress: Progress | None = None, task: TaskID | None = None
 ) -> tuple[int, int, int]:
     """
-    Create canonical Track records from AppleTrack and AppleMSTrack data,
+    Create canonical Track records from SourceTrack data,
     then bind matching TrackFile records via possible_locations() DB lookup.
     Returns (created, updated, files_bound) Track counts.
     """
     created = updated = files_bound = 0
-    for was_created, was_updated, n_files in chain(_unify_xml_tracks(s), _unify_ms_tracks(s)):
+    for was_created, was_updated, n_files in _unify_source_tracks(s):
         created += was_created
         updated += was_updated
         files_bound += n_files
@@ -124,9 +102,9 @@ class _SourcePlaylist:
     track_ids: list[int]
 
 
-def _gather_xml_source_playlists(s: Session) -> list[_SourcePlaylist]:
+def _gather_source_playlists(s: Session) -> list[_SourcePlaylist]:
     result = []
-    stmt = select(ApplePlaylist).where(~ApplePlaylist.master, ~ApplePlaylist.music, ~ApplePlaylist.folder)
+    stmt = select(SourcePlaylist).where(~SourcePlaylist.folder)
     for pl in s.scalars(stmt):
         track_dates = [m.track.date_added for m in pl.members if m.track.date_added is not None]
         track_ids = [
@@ -137,33 +115,12 @@ def _gather_xml_source_playlists(s: Session) -> list[_SourcePlaylist]:
         result.append(
             _SourcePlaylist(
                 name=pl.name,
-                date_modified=max(track_dates) if track_dates else None,
-                date_added=min(track_dates) if track_dates else None,
+                # XML playlists carry no own dates → derive from members; MS supplies its own.
+                date_modified=pl.date_modified or (max(track_dates) if track_dates else None),
+                date_added=pl.date_added or (min(track_dates) if track_dates else None),
                 description=pl.description or None,
                 platform=Platform.APPLE,
-                source_id=pl.persistent_id,
-                track_ids=track_ids,
-            )
-        )
-    return result
-
-
-def _gather_ms_source_playlists(s: Session) -> list[_SourcePlaylist]:
-    result = []
-    for pl in s.scalars(select(AppleMSPlaylist)):
-        track_ids = [
-            m.track.track_id
-            for m in sorted(pl.members, key=lambda m: m.position)
-            if m.track.track_id is not None
-        ]
-        result.append(
-            _SourcePlaylist(
-                name=pl.title,
-                date_modified=pl.items_modified_date,
-                date_added=pl.date_added,
-                description=None,
-                platform=Platform.APPLE,
-                source_id=str(pl.container_identifier),
+                source_id=pl.source_id,
                 track_ids=track_ids,
             )
         )
@@ -190,7 +147,7 @@ def unify_apple_playlists(
         for pl in existing
     }
 
-    sources = _gather_xml_source_playlists(s) + _gather_ms_source_playlists(s)
+    sources = _gather_source_playlists(s)
     # Newest date_modified first; nulls sorted last
     sources.sort(
         key=lambda p: (p.date_modified is None, -p.date_modified.timestamp() if p.date_modified else 0)

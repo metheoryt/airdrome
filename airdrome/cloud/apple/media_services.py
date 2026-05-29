@@ -4,9 +4,10 @@ from pathlib import Path
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from airdrome.cloud.sources import SourcePlaylist, SourcePlaylistTrack, SourceTrack
 from airdrome.console import console, make_import_progress, make_progress
+from airdrome.enums import Provider
 
-from .models import AppleMSPlaylist, AppleMSPlaylistTrack, AppleMSTrack
 from .package import AppleMediaServicesPackage
 
 
@@ -20,14 +21,19 @@ def _parse_dt(s: str | None) -> datetime | None:
 
 
 def import_ms_track(s: Session, item: dict) -> bool:
-    """Import Apple Media Services tracks. Yields whether an AppleMSTrack record was created."""
-    track_identifier = item["Track Identifier"]
+    """Import Apple Media Services tracks. Returns whether a SourceTrack record was created."""
+    source_id = str(item["Track Identifier"])
 
-    if s.scalars(select(AppleMSTrack).where(AppleMSTrack.track_identifier == track_identifier)).one_or_none():
+    if s.scalars(
+        select(SourceTrack).where(
+            SourceTrack.provider == Provider.APPLE_MS, SourceTrack.source_id == source_id
+        )
+    ).one_or_none():
         return False
 
-    ms_track = AppleMSTrack(
-        track_identifier=track_identifier,
+    st = SourceTrack(
+        provider=Provider.APPLE_MS,
+        source_id=source_id,
         title=item["Title"],
         artist=item.get("Artist"),
         album=item.get("Album"),
@@ -35,27 +41,30 @@ def import_ms_track(s: Session, item: dict) -> bool:
         compilation=item.get("Is Part of Compilation", False),
         track_number=item.get("Track Number On Album"),
         disc_number=item.get("Disc Number Of Album"),
-        track_count=item.get("Track Count On Album"),
-        disc_count=item.get("Disc Count Of Album"),
         year=item.get("Track Year"),
-        duration=item.get("Track Duration"),
-        play_count=item.get("Track Play Count"),
-        skip_count=item.get("Skip Count"),
+        duration_ms=item.get("Track Duration"),
         date_added=_parse_dt(item.get("Date Added To Library")),
         date_modified=_parse_dt(item.get("Last Modified Date")),
-        release_date=_parse_dt(item.get("Release Date")),
-        genre=item.get("Genre"),
-        audio_file_extension=item.get("Audio File Extension") or None,
-        is_purchased=bool(item.get("Is Purchased", False)),
-        purchased_track_identifier=item.get("Purchased Track Identifier") or None,
-        audio_matched_track_identifier=item.get("Audio Matched Track Identifier") or None,
+        extra={
+            "track_identifier": item["Track Identifier"],
+            "track_count": item.get("Track Count On Album"),
+            "disc_count": item.get("Disc Count Of Album"),
+            "play_count": item.get("Track Play Count"),
+            "skip_count": item.get("Skip Count"),
+            "release_date": item.get("Release Date"),
+            "genre": item.get("Genre"),
+            "audio_file_extension": item.get("Audio File Extension") or None,
+            "is_purchased": bool(item.get("Is Purchased", False)),
+            "purchased_track_identifier": item.get("Purchased Track Identifier") or None,
+            "audio_matched_track_identifier": item.get("Audio Matched Track Identifier") or None,
+        },
     )
-    s.add(ms_track)
+    s.add(st)
     return True
 
 
 def import_ms_playlist(s: Session, pl: dict) -> bool:
-    """Import Apple Media Services playlists. Returns the number of new playlist rows created."""
+    """Import Apple Media Services playlists. Returns whether a new playlist row was created."""
     container_id = pl["Container Identifier"]
     container_type = pl.get("Container Type", "")
     title = pl.get("Title", "")
@@ -68,18 +77,24 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
     if not item_identifiers:
         return created
 
+    source_id = str(container_id)
     pl_db = s.scalars(
-        select(AppleMSPlaylist).where(AppleMSPlaylist.container_identifier == container_id)
+        select(SourcePlaylist).where(
+            SourcePlaylist.provider == Provider.APPLE_MS, SourcePlaylist.source_id == source_id
+        )
     ).one_or_none()
 
     if not pl_db:
-        pl_db = AppleMSPlaylist(
-            container_identifier=container_id,
-            title=title,
-            container_type=container_type,
-            parent_folder_identifier=pl.get("Parent Folder Identifier"),
+        pl_db = SourcePlaylist(
+            provider=Provider.APPLE_MS,
+            source_id=source_id,
+            name=title,
             date_added=_parse_dt(pl.get("Added Date")),
-            items_modified_date=_parse_dt(pl.get("Playlist Items Modified Date")),
+            date_modified=_parse_dt(pl.get("Playlist Items Modified Date")),
+            extra={
+                "container_type": container_type,
+                "parent_folder_identifier": pl.get("Parent Folder Identifier"),
+            },
         )
         s.add(pl_db)
         s.flush()
@@ -87,19 +102,24 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
 
     if not created:
         # clear all playlist members to insert again
-        s.execute(delete(AppleMSPlaylistTrack).where(AppleMSPlaylistTrack.playlist_id == pl_db.id))
+        s.execute(delete(SourcePlaylistTrack).where(SourcePlaylistTrack.playlist_id == pl_db.id))
 
-    ms_tracks = s.scalars(select(AppleMSTrack).where(AppleMSTrack.track_identifier.in_(item_identifiers)))
-    ms_tracks_by_identifier = {t.track_identifier: t for t in ms_tracks}
+    member_source_ids = [str(i) for i in item_identifiers]
+    ms_tracks = s.scalars(
+        select(SourceTrack).where(
+            SourceTrack.provider == Provider.APPLE_MS, SourceTrack.source_id.in_(member_source_ids)
+        )
+    )
+    ms_tracks_by_source_id = {t.source_id: t for t in ms_tracks}
 
     pos = 0
     for track_identifier in item_identifiers:
-        if (ms_track := ms_tracks_by_identifier.get(track_identifier)) is None:
+        if (ms_track := ms_tracks_by_source_id.get(str(track_identifier))) is None:
             # the track referenced in the playlist is not in the library, skip it
             continue
 
         pos += 1
-        s.add(AppleMSPlaylistTrack(track=ms_track, playlist=pl_db, position=pos))
+        s.add(SourcePlaylistTrack(track=ms_track, playlist=pl_db, position=pos))
 
     s.flush()
 
@@ -112,8 +132,8 @@ def import_apple_media_services(s: Session, path: str, reset: bool = False):
     playlist_items = package.load_playlists()
 
     if reset:
-        s.execute(delete(AppleMSPlaylist))
-        s.execute(delete(AppleMSTrack))
+        s.execute(delete(SourcePlaylist).where(SourcePlaylist.provider == Provider.APPLE_MS))
+        s.execute(delete(SourceTrack).where(SourceTrack.provider == Provider.APPLE_MS))
         s.flush()
         console.print("[yellow]Apple Media Services data purged[/yellow]")
 

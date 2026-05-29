@@ -2,7 +2,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
-import airdrome.cloud.apple.models  # noqa: F401  (registers Apple models on AirdromeBase)
+import airdrome.cloud.sources  # noqa: F401  (registers source models on AirdromeBase)
 import airdrome.models  # noqa: F401
 from airdrome.conf import settings
 from airdrome.models import AirdromeBase, PathType

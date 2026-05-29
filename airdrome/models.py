@@ -26,7 +26,7 @@ class Backend(StrEnum):
 
 
 if TYPE_CHECKING:
-    from airdrome.cloud.apple.models import AppleMSTrack, AppleTrack
+    from airdrome.cloud.sources import SourceTrack
 
 
 T = TypeVar("T", bound="Base")
@@ -174,13 +174,9 @@ class Track(Base):
     )
 
     # Other relations.
-    # The Track can have multiple Apple tracks,
-    #   but this is rare and doesn't have anything to do with duplicates.
-    # They tend to be the same tracks but with different apple IDs. We can pick first.
-    apple_tracks: Mapped[list["AppleTrack"]] = relationship(
-        back_populates="track", cascade="all, delete-orphan"
-    )
-    apple_ms_tracks: Mapped[list["AppleMSTrack"]] = relationship(
+    # A Track can have multiple source records (across providers, or duplicate ids within
+    #   a provider). This is rare and unrelated to deduplication.
+    source_tracks: Mapped[list["SourceTrack"]] = relationship(
         back_populates="track", cascade="all, delete-orphan"
     )
     aliases: Mapped[list["TrackAlias"]] = relationship(back_populates="track", cascade="all, delete-orphan")
