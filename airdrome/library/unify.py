@@ -101,8 +101,6 @@ def expects_local_file(st: SourceTrack) -> bool:
     """
     if st.provider == Source.APPLE_XML:
         return not st.extra.get("apple_music", False)
-    if st.provider == Source.APPLE_MS:
-        return bool(st.extra.get("audio_file_extension"))
     return False
 
 
