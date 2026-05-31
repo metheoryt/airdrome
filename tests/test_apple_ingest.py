@@ -151,6 +151,26 @@ def test_unify_binds_multiple_files_for_one_path(session):
     assert {tf.id for tf in track.files} == {f1.id, f2.id}
 
 
+def test_unify_binds_file_with_differing_case(session):
+    """A file whose on-disk path differs only in case still binds (icontains, not contains)."""
+    data = _track_data(name="Case Song", artist="Case Artist")
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    st = _xml_track(session, data["Track ID"]).one()
+    rel = st.possible_locations(max_suffix=2)[0]
+
+    # Store the file with an upper-cased path; a case-sensitive LIKE would miss it.
+    tf = TrackFile(source_path=Path("/root") / rel.upper())
+    session.add(tf)
+    session.flush()
+
+    _, _, files_bound = unify_source_tracks(session)
+
+    assert files_bound == 1
+    track = session.scalars(select(Track).where(Track.title == "Case Song")).one()
+    assert {f.id for f in track.files} == {tf.id}
+
+
 def test_unify_idempotent(session):
     data = _track_data()
     do_import_tracks(session, {str(data["Track ID"]): data})

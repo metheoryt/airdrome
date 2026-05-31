@@ -84,9 +84,14 @@ def _bind_track_files(source_track: SourceTrack, s: Session) -> list[TrackFile]:
     # source_path matching is a substring LIKE, so a single rel_path can hit multiple files
     # (same tail under different roots), and overlapping possible_locations can re-hit the same
     # file — hence .all() instead of .one_or_none() (which would raise), keyed by id to dedup.
+    # icontains (ILIKE), not contains (LIKE): the path rebuilt from source metadata and the path
+    # stored on disk routinely differ only in case, and a case-sensitive match drops those files.
+    # autoescape=True keeps '_' and '%' literal — paths sanitize '/' to '_' (e.g. "AC_DC"), and an
+    # unescaped '_' is a single-char LIKE wildcard that would silently over-match.
     tfs: dict[int, TrackFile] = {}
     for rel_path in source_track.possible_locations(max_suffix=2):
-        for tf in s.scalars(select(TrackFile).where(TrackFile.source_path.contains(rel_path))):
+        stmt = select(TrackFile).where(TrackFile.source_path.icontains(rel_path, autoescape=True))
+        for tf in s.scalars(stmt):
             if tf.track_id is None:
                 tfs[tf.id] = tf
     return list(tfs.values())
