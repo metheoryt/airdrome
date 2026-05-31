@@ -12,14 +12,15 @@ from airdrome.models import AwareDatetime, Playlist, PlaylistTrack, Track, Track
 
 
 def _bind_track_files(source_track: SourceTrack, s: Session) -> list[TrackFile]:
-    tfs = []
+    # source_path matching is a substring LIKE, so a single rel_path can hit multiple files
+    # (same tail under different roots), and overlapping possible_locations can re-hit the same
+    # file — hence .all() instead of .one_or_none() (which would raise), keyed by id to dedup.
+    tfs: dict[int, TrackFile] = {}
     for rel_path in source_track.possible_locations(max_suffix=2):
-        tf: TrackFile | None = s.scalars(
-            select(TrackFile).where(TrackFile.source_path.contains(rel_path))
-        ).one_or_none()
-        if tf and tf.track_id is None:
-            tfs.append(tf)
-    return tfs
+        for tf in s.scalars(select(TrackFile).where(TrackFile.source_path.contains(rel_path))):
+            if tf.track_id is None:
+                tfs[tf.id] = tf
+    return list(tfs.values())
 
 
 def expects_local_file(st: SourceTrack) -> bool:
@@ -62,6 +63,9 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
         st.track = track
 
         # Rely on FS discovery for everyone; the flag only tells us whether to complain on a miss.
+        # Appends stay idempotent without a membership check here: _bind_track_files dedups within a
+        # call and only returns unbound files, and the per-source-track flush below sets track_id so
+        # the next source track's guard skips files already claimed.
         tfs = _bind_track_files(st, s)
         for tf in tfs:
             track.files.append(tf)

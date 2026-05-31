@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -6,7 +7,7 @@ from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
 from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.enums import Source
-from airdrome.models import Playlist, PlaylistTrack, Track
+from airdrome.models import Playlist, PlaylistTrack, Track, TrackFile
 
 
 def _xml_track(session, source_id):
@@ -127,6 +128,27 @@ def test_unify_reuses_existing_track(session):
 
     tracks_in_db = session.scalars(select(Track).where(Track.title == "Same Song")).all()
     assert len(tracks_in_db) == 1
+
+
+def test_unify_binds_multiple_files_for_one_path(session):
+    """One rel_path matching files under two roots binds both (no MultipleResultsFound, no dup)."""
+    data = _track_data(name="Dup Song", artist="Dup Artist")
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    st = _xml_track(session, data["Track ID"]).one()
+    rel = st.possible_locations(max_suffix=2)[0]
+
+    # Same relative tail under two distinct roots — both contain `rel` as a substring.
+    f1 = TrackFile(source_path=Path("/rootA") / rel)
+    f2 = TrackFile(source_path=Path("/rootB") / rel)
+    session.add_all([f1, f2])
+    session.flush()
+
+    _, _, files_bound = unify_apple_tracks(session)
+
+    assert files_bound == 2
+    track = session.scalars(select(Track).where(Track.title == "Dup Song")).one()
+    assert {tf.id for tf in track.files} == {f1.id, f2.id}
 
 
 def test_unify_idempotent(session):
