@@ -1,11 +1,8 @@
-from pathlib import Path
-
 import typer
 
 from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.library.organize import organize_library
-from airdrome.library.scan import MusicScanner
 from airdrome.library.unify import do_unify
 from airdrome.normalize.dedup import Deduplicator, DeduplicatorUI, auto_deduplicate
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
@@ -28,18 +25,6 @@ def library_organize(
     state: AppState = ctx.obj
     state.dry_run = dry_run
     organize_library(state.session, dst_dir=settings.library_dir, copy=copy, reset=reset)
-
-
-@library_app.command("scan")
-def scan_folder(
-    ctx: typer.Context,
-    folder_path: str = typer.Argument(help="Folder path to scan."),
-    threshold: float = typer.Option(0.4, "--threshold", "-t", help="Existing tracks matching threshold."),
-    dry_run: bool = _DRY_RUN,
-):
-    state: AppState = ctx.obj
-    state.dry_run = dry_run
-    MusicScanner(target_path=Path(folder_path), match_threshold=threshold).run(state.session)
 
 
 @library_app.command("deduplicate")

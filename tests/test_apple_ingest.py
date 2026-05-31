@@ -5,14 +5,14 @@ from sqlalchemy import select
 from airdrome.cloud.apple.unify import unify_apple_playlists, unify_apple_tracks
 from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
-from airdrome.enums import Provider
+from airdrome.enums import Source
 from airdrome.models import Playlist, PlaylistTrack, Track
 
 
 def _xml_track(session, source_id):
     return session.scalars(
         select(SourceTrack).where(
-            SourceTrack.provider == Provider.APPLE_XML, SourceTrack.source_id == str(source_id)
+            SourceTrack.provider == Source.APPLE_XML, SourceTrack.source_id == str(source_id)
         )
     )
 

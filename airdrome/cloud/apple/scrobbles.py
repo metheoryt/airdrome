@@ -6,7 +6,7 @@ from typing import Iterator
 
 from pydantic import BaseModel, Field, model_validator
 
-from airdrome.enums import Platform
+from airdrome.enums import Source
 from airdrome.models import TrackAlias
 from airdrome.scrobbles.parser import ScrobbleParser
 
@@ -51,7 +51,7 @@ def _parse_play_activity(
 
 
 class AppleScrobbleParser(ScrobbleParser):
-    platform = Platform.APPLE
+    platform = Source.APPLE_MS
 
     def __init__(self, path: Path):
         self._package = AppleMediaServicesPackage(path)

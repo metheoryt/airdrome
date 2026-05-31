@@ -5,7 +5,7 @@ from typing import Iterator
 
 from pydantic import BaseModel, Field
 
-from airdrome.enums import Platform
+from airdrome.enums import Source
 from airdrome.models import TrackAlias
 from airdrome.scrobbles.parser import ScrobbleParser
 
@@ -38,7 +38,7 @@ def get_spotify_streaming_history(dirpath: str):
 
 
 class SpotifyScrobbleParser(ScrobbleParser):
-    platform = Platform.SPOTIFY
+    platform = Source.SPOTIFY
 
     def __init__(self, dirpath: str):
         self.dirpath = dirpath

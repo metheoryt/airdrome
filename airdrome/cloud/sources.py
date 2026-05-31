@@ -3,10 +3,10 @@
 A `SourceTrack`/`SourcePlaylist` is a track/playlist as seen by a single source export
 (Apple iTunes XML, Apple Media Services, …). Common, queried fields live in real columns;
 everything provider-specific is preserved verbatim in the `extra` JSONB blob. Each row carries
-a `provider` marker and a `source_id` (the source's native identifier, stringified), and is later
-unified into the canonical `Track`/`Playlist`.
+a `provider` marker (a `Source` value) and a `source_id` (the source's native identifier,
+stringified), and is later unified into the canonical `Track`/`Playlist`.
 
-Adding a new source is "a `Provider` value + a field-mapping table", not a new table.
+Adding a new source is "a `Source` value + a field-mapping table", not a new table.
 """
 
 from datetime import datetime
@@ -17,7 +17,7 @@ from sqlalchemy import ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from airdrome.enums import Provider
+from airdrome.enums import Source
 from airdrome.models import AwareDatetime, Base, Track
 
 from .apple.models.mixins import AppleFSDiscoverable
@@ -37,7 +37,7 @@ class SourceTrack(Base, AppleFSDiscoverable):
     __table_args__ = (UniqueConstraint("provider", "source_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    provider: Mapped[Provider] = mapped_column(sa.Enum(Provider, native_enum=False))
+    provider: Mapped[Source] = mapped_column(sa.Enum(Source, native_enum=False))
     source_id: Mapped[str]
     """The source's native id (apple_track_id / track_identifier), stringified."""
 
@@ -76,7 +76,7 @@ class SourceTrack(Base, AppleFSDiscoverable):
     @classmethod
     def from_raw(
         cls,
-        provider: Provider,
+        provider: Source,
         source_id: Any,
         data: dict,
         *,
@@ -96,7 +96,7 @@ class SourcePlaylist(Base):
     __table_args__ = (UniqueConstraint("provider", "source_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    provider: Mapped[Provider] = mapped_column(sa.Enum(Provider, native_enum=False))
+    provider: Mapped[Source] = mapped_column(sa.Enum(Source, native_enum=False))
     source_id: Mapped[str]
 
     name: Mapped[str]

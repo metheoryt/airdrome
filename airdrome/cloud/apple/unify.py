@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.console import console
-from airdrome.enums import Platform, Provider
+from airdrome.enums import Source
 from airdrome.models import AwareDatetime, Playlist, PlaylistTrack, Track, TrackFile
 
 
@@ -29,9 +29,9 @@ def expects_local_file(st: SourceTrack) -> bool:
     "a local copy should exist" expectation (XML tracks not added from Apple Music; MS tracks with
     a known audio extension) so a missing match can be surfaced.
     """
-    if st.provider == Provider.APPLE_XML:
+    if st.provider == Source.APPLE_XML:
         return not st.extra.get("apple_music", False)
-    if st.provider == Provider.APPLE_MS:
+    if st.provider == Source.APPLE_MS:
         return bool(st.extra.get("audio_file_extension"))
     return False
 
@@ -97,7 +97,7 @@ class _SourcePlaylist:
     date_modified: AwareDatetime | None
     date_added: AwareDatetime | None
     description: str | None
-    platform: Platform
+    platform: Source
     source_id: str
     track_ids: list[int]
 
@@ -119,7 +119,7 @@ def _gather_source_playlists(s: Session) -> list[_SourcePlaylist]:
                 date_modified=pl.date_modified or (max(track_dates) if track_dates else None),
                 date_added=pl.date_added or (min(track_dates) if track_dates else None),
                 description=pl.description or None,
-                platform=Platform.APPLE,
+                platform=pl.provider,
                 source_id=pl.source_id,
                 track_ids=track_ids,
             )

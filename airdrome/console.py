@@ -5,8 +5,12 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, T
 console = Console()
 
 
-def make_progress(*extra_columns) -> Progress:
-    """Standard progress bar. Pass extra TextColumn instances for custom fields."""
+def make_progress(*extra_columns, transient: bool = False) -> Progress:
+    """Standard progress bar. Pass extra TextColumn instances for custom fields.
+
+    With `transient=True` the bar is cleared on completion (used by `import`, which
+    prints its own persistent summary line per phase).
+    """
     return Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -14,10 +18,11 @@ def make_progress(*extra_columns) -> Progress:
         *extra_columns,
         TimeElapsedColumn(),
         console=console,
+        transient=transient,
     )
 
 
-def make_import_progress() -> Progress:
+def make_import_progress(transient: bool = False) -> Progress:
     """Progress bar for import operations with created/updated counters."""
     return Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -28,4 +33,5 @@ def make_import_progress() -> Progress:
         ),
         TimeElapsedColumn(),
         console=console,
+        transient=transient,
     )

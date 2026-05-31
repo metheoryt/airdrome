@@ -11,7 +11,7 @@ from sqlalchemy.types import TypeDecorator
 
 from .cloud.apple.utils import generate_path
 from .conf import settings
-from .enums import Platform
+from .enums import Source
 from .library import MAIN_SUBDIR
 from .normalize.norm import normalize_name
 
@@ -431,7 +431,7 @@ class TrackAliasScrobble(Base):
     alias_id: Mapped[int] = mapped_column(ForeignKey("trackalias.id", ondelete="CASCADE"), index=True)
     alias: Mapped[TrackAlias] = relationship(back_populates="scrobbles")
     date: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), unique=True)
-    platform: Mapped[Platform]
+    platform: Mapped[Source] = mapped_column(sa.Enum(Source, native_enum=False))
 
 
 class TrackPlay(Base):
@@ -449,7 +449,7 @@ class TrackPlay(Base):
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
     track: Mapped[Track] = relationship(back_populates="plays")
     played_at: Mapped[AwareDatetime]
-    platform: Mapped[Platform]
+    platform: Mapped[Source] = mapped_column(sa.Enum(Source, native_enum=False))
     source_scrobble_id: Mapped[int | None] = mapped_column(
         ForeignKey("trackaliasscrobble.id", ondelete="SET NULL")
     )
@@ -461,7 +461,7 @@ class Playlist(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
-    platform: Mapped[Platform]
+    platform: Mapped[Source] = mapped_column(sa.Enum(Source, native_enum=False))
     source_id: Mapped[str | None]
     description: Mapped[str | None]
     date_added: Mapped[AwareDatetime | None]
@@ -473,7 +473,7 @@ class Playlist(Base):
 
     @property
     def comment(self):
-        c = self.platform.name
+        c = self.platform.service
         if self.source_id:
             c += f" #{self.source_id}"
         if self.description:

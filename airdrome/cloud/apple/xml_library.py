@@ -1,12 +1,9 @@
-import plistlib
-
 from rich.progress import Progress, TaskID
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourcePlaylistTrack, SourceTrack
-from airdrome.console import console, make_import_progress, make_progress
-from airdrome.enums import Provider
+from airdrome.enums import Source
 
 from .schemas import ApplePlaylistImport
 
@@ -99,14 +96,14 @@ def do_import_tracks(
 
         if s.scalars(
             select(SourceTrack).where(
-                SourceTrack.provider == Provider.APPLE_XML, SourceTrack.source_id == source_id
+                SourceTrack.provider == Source.APPLE_XML, SourceTrack.source_id == source_id
             )
         ).one_or_none():
             if progress is not None:
                 progress.advance(task_id)
             continue
 
-        st = SourceTrack.from_raw(Provider.APPLE_XML, data["Track ID"], data, alias_map=_TRACK_ALIAS_MAP)
+        st = SourceTrack.from_raw(Source.APPLE_XML, data["Track ID"], data, alias_map=_TRACK_ALIAS_MAP)
         s.add(st)
         s.flush()
         created += 1
@@ -144,14 +141,14 @@ def do_import_playlists(
 
         pl_db = s.scalars(
             select(SourcePlaylist).where(
-                SourcePlaylist.provider == Provider.APPLE_XML,
+                SourcePlaylist.provider == Source.APPLE_XML,
                 SourcePlaylist.source_id == pl_import.persistent_id,
             )
         ).one_or_none()
         if not pl_db:
             dump = pl_import.model_dump(exclude={"smart_info", "smart_criteria", "items"})
             pl_db = SourcePlaylist(
-                provider=Provider.APPLE_XML,
+                provider=Source.APPLE_XML,
                 source_id=dump.pop("persistent_id"),
                 name=dump.pop("name"),
                 description=dump.pop("description") or None,
@@ -174,7 +171,7 @@ def do_import_playlists(
             t.source_id: t
             for t in s.scalars(
                 select(SourceTrack).where(
-                    SourceTrack.provider == Provider.APPLE_XML,
+                    SourceTrack.provider == Source.APPLE_XML,
                     SourceTrack.source_id.in_(pl_track_source_ids),
                 )
             )
@@ -199,30 +196,3 @@ def do_import_playlists(
             progress.advance(task_id)
 
     return created
-
-
-def import_apple_library(s: Session, xml_filename: str, reset: bool = False):
-    if reset:
-        s.execute(delete(SourcePlaylist).where(SourcePlaylist.provider == Provider.APPLE_XML))
-        s.execute(delete(SourceTrack).where(SourceTrack.provider == Provider.APPLE_XML))
-        s.flush()
-        console.print("[yellow]Apple library purged[/yellow]")
-
-    with open(xml_filename, "rb") as f:
-        plist = plistlib.load(f)
-
-    tracks_data = plist["Tracks"]
-    with make_import_progress() as progress:
-        task = progress.add_task("Tracks", total=len(tracks_data), created=0, updated=0)
-        created = do_import_tracks(s, tracks_data, progress=progress, task_id=task)
-    console.print(f"Tracks: [green]{created} new[/green]")
-
-    playlists_data = plist["Playlists"]
-    with make_progress() as progress:
-        task = progress.add_task("Playlists", total=len(playlists_data))
-        n_playlists = do_import_playlists(s, playlists_data, progress=progress, task_id=task)
-    console.print(f"Playlists: [green]{n_playlists} new[/green]")
-
-    console.print(
-        "[green]Apple library import finished. Run `library unify` to create canonical records.[/green]"
-    )

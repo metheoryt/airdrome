@@ -2,11 +2,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterator
 
-from rich.progress import track
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from airdrome.enums import Platform
+from airdrome.console import make_progress
+from airdrome.enums import Source
 from airdrome.models import TrackAlias, TrackAliasScrobble
 
 
@@ -20,7 +20,7 @@ class ImportStats:
 
 
 class ScrobbleParser:
-    platform: Platform
+    platform: Source
 
     def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
         raise NotImplementedError()
@@ -32,8 +32,11 @@ class ScrobbleParser:
                 aliases[alias.repr] = (alias, set())
             aliases[alias.repr][1].add(date)
 
-        for alias, dates in track(aliases.values(), description=f"Processing {len(aliases)} aliases"):
-            yield alias, sorted(dates)
+        with make_progress(transient=True) as progress:
+            task = progress.add_task("Scrobbles", total=len(aliases))
+            for alias, dates in aliases.values():
+                yield alias, sorted(dates)
+                progress.advance(task)
 
     def import_aliases_scrobbles(self, s: Session) -> ImportStats:
         stats = ImportStats()
@@ -56,7 +59,6 @@ class ScrobbleParser:
             alias.scrobbles.extend(new_scrobbles)
             s.flush()
 
-        s.commit()
         return stats
 
     def get_fresh_scrobbles(self, s: Session, dates: list[datetime]) -> list[TrackAliasScrobble]:

@@ -2,7 +2,7 @@ import csv
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterator
 
-from airdrome.enums import Platform
+from airdrome.enums import Source
 from airdrome.models import TrackAlias
 from airdrome.scrobbles.parser import ScrobbleParser
 
@@ -30,7 +30,7 @@ def get_lastfm_records(filepath: str) -> Iterator["LastFMScrobble"]:
 
 
 class LastFMScrobbleParser(ScrobbleParser):
-    platform = Platform.LASTFM
+    platform = Source.LASTFM
 
     def __init__(self, filepath: str):
         self.filepath = filepath

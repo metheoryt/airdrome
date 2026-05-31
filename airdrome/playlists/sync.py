@@ -13,7 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console
-from airdrome.enums import Platform
+from airdrome.enums import Source
 from airdrome.models import Playlist, PlaylistLink, PlaylistTrack, Track
 
 from .adapter import ExternalPlaylist, ExternalTrackRef, PlaylistAdapter
@@ -188,7 +188,7 @@ def sync(s: Session, adapter: PlaylistAdapter) -> None:
             continue
         playlist = Playlist(
             name=ext.name,
-            platform=Platform.NAVIDROME,  # generalise once a second backend lands
+            platform=Source.NAVIDROME,  # generalise once a second backend lands
             source_id=ext.id,
             description=ext.comment,
         )

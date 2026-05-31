@@ -6,7 +6,7 @@ from typing import Iterator
 
 from pydantic import BaseModel, model_validator
 
-from airdrome.enums import Platform
+from airdrome.enums import Source
 from airdrome.models import TrackAlias
 from airdrome.scrobbles.parser import ScrobbleParser
 
@@ -52,7 +52,7 @@ def get_lb_records(path: Path) -> Iterator[ListenBrainzScrobble]:
 
 
 class ListenBrainzScrobbleParser(ScrobbleParser):
-    platform = Platform.LISTENBRAINZ
+    platform = Source.LISTENBRAINZ
 
     def __init__(self, path: Path):
         self.path = path
