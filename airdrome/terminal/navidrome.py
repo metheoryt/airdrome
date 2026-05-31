@@ -12,11 +12,6 @@ from .state import AppState
 
 
 navidrome_app = typer.Typer(help="Navidrome sync")
-sync_app = typer.Typer(help="Bidirectional sync between Airdrome and Navidrome")
-push_app = typer.Typer(help="Push data from Airdrome to Navidrome (one-way)")
-
-navidrome_app.add_typer(sync_app, name="sync")
-navidrome_app.add_typer(push_app, name="push")
 
 
 def _require_user() -> str:
@@ -47,7 +42,7 @@ def _guard_navidrome_stopped(yes: bool):
 _YES_OPT = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped confirmation")
 
 
-@sync_app.command("playlists")
+@navidrome_app.command("playlists")
 def sync_playlists_cmd(ctx: typer.Context, yes: bool = _YES_OPT):
     """3-way merge every playlist between Airdrome and Navidrome."""
     username = _require_user()
@@ -60,12 +55,13 @@ def sync_playlists_cmd(ctx: typer.Context, yes: bool = _YES_OPT):
     console.print("[bold green]Done[/bold green]")
 
 
-@push_app.command("tracks")
+@navidrome_app.command("push")
 def push_tracks(
     ctx: typer.Context,
     reset: bool = typer.Option(False, "--reset", "-r"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped confirmation"),
 ):
+    """Push play counts and ratings for NAVIDROME_USER into Navidrome (`--reset` rewrites all)."""
     username = _require_user()
     _guard_navidrome_stopped(yes)
     checkpoint_wal()

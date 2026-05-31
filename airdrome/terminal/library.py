@@ -3,7 +3,6 @@ import typer
 from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.library.organize import organize_library
-from airdrome.library.unify import do_unify
 from airdrome.normalize.dedup import Deduplicator, DeduplicatorUI, auto_deduplicate
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
@@ -82,19 +81,6 @@ def auto_deduplicate_cli(
         f"[green]{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
         f" + {result.manual_changes} manual override(s) from stored choices.[/green]"
     )
-
-
-@library_app.command("unify")
-def library_unify(
-    ctx: typer.Context,
-    reset: bool = typer.Option(False, "--reset", "-r", help="Delete and rebuild all canonical playlists."),
-    dry_run: bool = _DRY_RUN,
-):
-    """Create canonical Track and Playlist records from all imported platform data."""
-    state: AppState = ctx.obj
-    state.dry_run = dry_run
-    do_unify(state.session, reset_playlists=reset)
-    console.print("[bold green]Unify complete[/bold green]")
 
 
 @library_app.command()

@@ -4,20 +4,24 @@ import typer
 from sqlalchemy.orm import Session
 
 from airdrome.console import console
-from airdrome.ingest import BY_NAME, DataKind, detect
+from airdrome.ingest import BY_NAME, DataKind, Importer, detect
+from airdrome.library.unify import do_unify
 from airdrome.migrations import upgrade_to_head
 from airdrome.models import engine
+from airdrome.scrobbles.augment_aliases import augment_aliases
+from airdrome.scrobbles.copy_plays import copy_plays
+from airdrome.scrobbles.match_aliases import match_aliases
 
 from .library import library_app
 from .navidrome import navidrome_app
-from .scrobble import scrobble_app
 from .state import AppState
 
 
 app = typer.Typer(help="Airdrome CLI")
 app.add_typer(library_app, name="library")
-app.add_typer(scrobble_app, name="scrobble")
 app.add_typer(navidrome_app, name="navidrome")
+
+_DRY_RUN = typer.Option(False, "--dry-run", "-n", help="Roll back all changes after execution.")
 
 
 @app.callback(invoke_without_command=True)
@@ -42,39 +46,44 @@ def main(ctx: typer.Context):
     ctx.call_on_close(_finalize)
 
 
-@app.command("import")
-def import_(
-    ctx: typer.Context,
-    path: Path = typer.Argument(..., exists=True, help="File or folder to import"),
-    as_: str = typer.Option(
-        None, "--as", help=f"Force a source instead of auto-detecting: {', '.join(BY_NAME)}"
-    ),
-    no_tracks: bool = typer.Option(False, "--no-tracks", help="Skip importing tracks"),
-    no_playlists: bool = typer.Option(False, "--no-playlists", help="Skip importing playlists"),
-    no_scrobbles: bool = typer.Option(False, "--no-scrobbles", help="Skip importing scrobbles"),
-    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Roll back all changes after execution."),
-):
-    """Auto-detect the source at PATH and import its tracks, playlists, and scrobbles."""
-    state: AppState = ctx.obj
-    state.dry_run = dry_run
-
+def _resolve_importer(path: Path, as_: str | None) -> type[Importer]:
+    """Pick the Importer class for ``path``: honor ``--as``, else auto-detect. Exits on failure."""
     if as_ is not None:
         if as_ not in BY_NAME:
             console.print(f"[red]Unknown source '{as_}'. Choose from: {', '.join(BY_NAME)}[/red]")
             raise typer.Exit(1)
-        importer_cls = BY_NAME[as_]
-    else:
-        matches = detect(path)
-        if not matches:
-            console.print(
-                f"[red]Couldn't recognize {path}.[/red] Force a source with --as ({', '.join(BY_NAME)})."
-            )
-            raise typer.Exit(1)
-        if len(matches) > 1:
-            names = ", ".join(m.name for m in matches)
-            console.print(f"[red]Ambiguous: {path} matched {names}.[/red] Disambiguate with --as.")
-            raise typer.Exit(1)
-        importer_cls = matches[0]
+        return BY_NAME[as_]
+
+    matches = detect(path)
+    if not matches:
+        console.print(
+            f"[red]Couldn't recognize {path}.[/red] Force a source with --as ({', '.join(BY_NAME)})."
+        )
+        raise typer.Exit(1)
+    if len(matches) > 1:
+        names = ", ".join(m.name for m in matches)
+        console.print(f"[red]Ambiguous: {path} matched {names}.[/red] Disambiguate with --as.")
+        raise typer.Exit(1)
+    return matches[0]
+
+
+@app.command("import")
+def import_(
+    ctx: typer.Context,
+    paths: list[Path] = typer.Argument(..., exists=True, help="One or more files/folders to import"),
+    as_: str = typer.Option(
+        None,
+        "--as",
+        help=f"Force a source instead of auto-detecting (applies to every path): {', '.join(BY_NAME)}",
+    ),
+    no_tracks: bool = typer.Option(False, "--no-tracks", help="Skip importing tracks"),
+    no_playlists: bool = typer.Option(False, "--no-playlists", help="Skip importing playlists"),
+    no_scrobbles: bool = typer.Option(False, "--no-scrobbles", help="Skip importing scrobbles"),
+    dry_run: bool = _DRY_RUN,
+):
+    """Auto-detect the source at each PATH and import its tracks, playlists, and scrobbles."""
+    state: AppState = ctx.obj
+    state.dry_run = dry_run
 
     wanted = DataKind(0)
     if not no_tracks:
@@ -84,21 +93,50 @@ def import_(
     if not no_scrobbles:
         wanted |= DataKind.SCROBBLES
 
-    kinds = importer_cls.provides & wanted
-    if not kinds:
-        console.print(
-            f"[yellow]{importer_cls.name} provides nothing matching your filters; nothing to do.[/yellow]"
-        )
-        return
+    # Resolve every importer up front so an unrecognized/ambiguous path fails before we write anything.
+    plan = [(path, _resolve_importer(path, as_)) for path in paths]
 
-    console.print(
-        f"[bold]Importing {importer_cls.label}[/bold] [dim]({', '.join(k.name.lower() for k in kinds)})[/dim]"
-    )
-    importer_cls(path).ingest(state.session, kinds)
+    for path, importer_cls in plan:
+        kinds = importer_cls.provides & wanted
+        if not kinds:
+            console.print(
+                f"[yellow]{importer_cls.name} provides nothing matching your filters "
+                f"for {path}; skipping.[/yellow]"
+            )
+            continue
+        console.print(
+            f"[bold]Importing {importer_cls.label}[/bold] "
+            f"[dim]{path} ({', '.join(k.name.lower() for k in kinds)})[/dim]"
+        )
+        importer_cls(path).ingest(state.session, kinds)
+
+
+@app.command("resolve")
+def resolve(
+    ctx: typer.Context,
+    threshold: float = typer.Option(0.4, "--threshold", "-t", help="Fuzzy alias-match similarity threshold."),
+    reset: bool = typer.Option(
+        False, "--reset", "-r", help="Rebuild canonical playlists and re-match scrobbles from scratch."
+    ),
+    dry_run: bool = _DRY_RUN,
+):
+    """Build the canonical graph from everything imported.
+
+    Runs the full post-import resolution in dependency order: unify source tracks/playlists into
+    canonical records, then augment, fuzzy-match, and materialize scrobbles into play history.
+    Requires all imports to be done first (see the file-binding / playlist-resolution notes in
+    library.unify) and is idempotent — re-running only fills gaps.
+    """
+    state: AppState = ctx.obj
+    state.dry_run = dry_run
+    do_unify(state.session, reset_playlists=reset)
+    augment_aliases(state.session)
+    match_aliases(state.session, reset=reset, threshold=threshold)
+    copy_plays(state.session, reset=reset)
+    console.print("[bold green]Resolve complete[/bold green]")
 
 
 @library_app.callback(invoke_without_command=True)
-@scrobble_app.callback(invoke_without_command=True)
 @navidrome_app.callback(invoke_without_command=True)
 def sub_callback(ctx: typer.Context):
     if ctx.invoked_subcommand is None:

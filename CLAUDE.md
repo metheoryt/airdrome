@@ -37,11 +37,11 @@ uv run alembic downgrade -1                             # roll back one migratio
 
 ### Data flow
 
-1. **Ingest** — scan local audio files (`library scan`) or import an Apple iTunes XML (`apple import`) → creates `Track` + `TrackFile` records
-2. **Organize** — move/copy files into a structured directory (`library organize`)
-3. **Deduplicate** — group duplicate tracks via trigram fuzzy matching (`library deduplicate`); duplicates link to a canonical track via `Track.canon_id`
-4. **Scrobbles** — import play history from Spotify/Last.fm/ListenBrainz/Apple (`scrobble import`) → `TrackAlias` + `TrackAliasScrobble` records, then fuzzy-match aliases to canonical tracks (`scrobble match`)
-5. **Sync** — push matched play counts + ratings + playlists to Navidrome's SQLite database (`navidrome sync-*`)
+1. **Import** — `airdrome import <path>...` auto-detects each source (Apple XML/Media Services, Spotify, Last.fm, ListenBrainz, local music folder) and writes raw `SourceTrack`/`SourcePlaylist`/`TrackFile` and `TrackAlias`/`TrackAliasScrobble` rows. Dumb and per-source; repeat or pass many paths.
+2. **Resolve** — `airdrome resolve` builds the canonical graph from *everything imported* (run once, after all imports): unify source tracks/playlists into `Track`/`Playlist` + bind files, then augment, fuzzy-match (`pg_trgm`), and copy scrobbles into `TrackPlay` history. Idempotent; needs the full picture (see `library/unify.py` for the file-binding/playlist-resolution dependencies).
+3. **Organize** — move/copy bound files into a structured directory (`library organize`)
+4. **Deduplicate** — group duplicate tracks via trigram fuzzy matching (`library deduplicate` / `auto-deduplicate`); duplicates link to a canonical track via `Track.canon_id`
+5. **Sync** — push matched play counts + ratings (`navidrome push`) and 3-way-merge playlists (`navidrome playlists`) to Navidrome's SQLite database
 
 ### Key models (`airdrome/models.py`)
 
@@ -64,7 +64,7 @@ Each platform has its own `scrobbles.py` (and `ingest.py` for Apple). They parse
 
 ### CLI (`airdrome/terminal/`)
 
-`app.py` is the Typer root; each sub-module (`library.py`, `apple.py`, `scrobble.py`, `navidrome.py`) registers its own command group.
+`app.py` is the Typer root and owns the top-level `import` and `resolve` commands; sub-modules (`library.py`, `navidrome.py`) register their own command groups.
 
 ## Configuration
 

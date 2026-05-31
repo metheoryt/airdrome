@@ -67,15 +67,13 @@ safe and only fills gaps. Add `--dry-run`/`-n` to any write command to roll back
 committing.
 
 ```bash
-# 1. Import each source you have (repeat per export / folder)
-airdrome import ./exports/itunes/Library.xml
-airdrome import ./exports/Apple_Media_Services.zip
-airdrome import ./exports/spotify_history/
-airdrome import /mnt/music            # scan local audio files
+# 1. Import every source you have (one invocation, any mix of exports / folders)
+airdrome import ./exports/itunes/Library.xml ./exports/Apple_Media_Services.zip \
+                ./exports/spotify_history/ /mnt/music
 
-# 2. Build canonical Track + Playlist records from the imported source data,
-#    binding on-disk files to their tracks.
-airdrome library unify
+# 2. Build the canonical graph from everything imported: unify Track/Playlist
+#    records, bind on-disk files, then augment/match/copy scrobbles into play history.
+airdrome resolve                   # --threshold tunes fuzzy matching; --reset rebuilds
 
 # 3. Organize the bound files into LIBRARY_DIR (move, or --copy to keep originals)
 airdrome library organize          # add --copy to copy, --reset to redo from scratch
@@ -84,50 +82,49 @@ airdrome library organize          # add --copy to copy, --reset to redo from sc
 airdrome library auto-deduplicate              # automatic, flag-set driven
 airdrome library deduplicate                   # interactive review/override
 
-# 5. Resolve scrobbles into play history
-airdrome scrobble augment          # backfill alias fields after all imports
-airdrome scrobble match            # fuzzy-match aliases to canonical tracks
-airdrome scrobble copy-plays       # materialize matched scrobbles as play events
-
-# 6. Push to Navidrome (stop Navidrome first — these write its SQLite DB directly)
-airdrome navidrome push tracks     # play counts + ratings
-airdrome navidrome sync playlists  # 3-way playlist merge
+# 5. Push to Navidrome (stop Navidrome first — these write its SQLite DB directly)
+airdrome navidrome push             # play counts + ratings
+airdrome navidrome playlists        # 3-way playlist merge
 ```
 
 ## Command reference
 
 Run any command with `--help` for its full options.
 
-### `airdrome import <path>`
+### `airdrome import <path>...`
 
-Auto-detect the source at `<path>` and import its tracks, playlists, and scrobbles.
+Auto-detect the source at each `<path>` and import its tracks, playlists, and scrobbles.
+Accepts any number of paths; each is detected and ingested independently.
 
-- `--as <name>` — force a source (see table above)
+- `--as <name>` — force a source for every path (see table above)
 - `--no-tracks` / `--no-playlists` / `--no-scrobbles` — skip a data kind
+- `--dry-run`, `-n`
+
+### `airdrome resolve`
+
+Build the canonical graph from everything imported — run once, after all imports. Unifies source
+tracks/playlists into canonical `Track`/`Playlist` records and binds on-disk files, then augments,
+fuzzy-matches, and materializes scrobbles into `TrackPlay` play history. Idempotent.
+
+- `--threshold`, `-t` — fuzzy alias-match similarity (default `0.4`)
+- `--reset`, `-r` — rebuild canonical playlists and re-match scrobbles from scratch
 - `--dry-run`, `-n`
 
 ### `airdrome library`
 
-- `unify` — build canonical `Track`/`Playlist` records from source data (`--reset` rebuilds playlists)
 - `organize` — move/copy bound files into `LIBRARY_DIR` (`--copy`, `--reset`)
 - `auto-deduplicate` — rebuild `canon_id` automatically; `--set "artist,album,year"` defines a
   comparison flag-set (repeatable; multiple sets union-merge their groups)
 - `deduplicate` — interactive duplicate review (`--match <substring>` to filter)
 - `renormalize` — recompute the `_norm` text fields for tracks, aliases, and files
 
-### `airdrome scrobble`
-
-- `augment` — backfill alias metadata across sources (run after all imports)
-- `match` — fuzzy-match aliases to canonical tracks (`--threshold`, default `0.4`; `--reset`)
-- `copy-plays` — write matched scrobbles to `TrackPlay` rows (`--reset`)
-
 ### `airdrome navidrome`
 
 > ⚠️ These write directly to Navidrome's SQLite database. **Stop Navidrome first** — the CLI
 > refuses to run while it's listening on `NAVIDROME_PORT`. Pass `--yes`/`-y` to skip the prompt.
 
-- `push tracks` — push play counts and ratings for `NAVIDROME_USER` (`--reset`)
-- `sync playlists` — 3-way merge every playlist between Airdrome and Navidrome
+- `push` — push play counts and ratings for `NAVIDROME_USER` (`--reset`)
+- `playlists` — 3-way merge every playlist between Airdrome and Navidrome
 
 ## Development
 
