@@ -171,6 +171,36 @@ def test_unify_binds_file_with_differing_case(session):
     assert {f.id for f in track.files} == {tf.id}
 
 
+def test_unify_no_not_found_when_sibling_already_bound(session, monkeypatch):
+    """A local-file-expecting XML track must not warn 'not found' when a sibling already bound the file.
+
+    The same physical file commonly has both an Apple XML and an Apple MS source row resolving to one
+    canonical track; whichever is processed first binds the file. The other must stay quiet, not warn.
+    """
+    import airdrome.library.unify as unify_mod
+
+    # The canonical track + file a sibling source row would already have produced this run.
+    track = Track(title="Sib Song", artist="Sib Artist", album="Sib Album", album_artist="Sib Artist")
+    session.add(track)
+    session.flush()
+    session.add(TrackFile(source_path=Path("/root/Sib Artist/Sib Album/01 Sib Song.mp3"), track_id=track.id))
+    session.flush()
+
+    # XML row for the same metadata that expects a local file (apple_music=False).
+    data = _track_data(
+        name="Sib Song", artist="Sib Artist", album="Sib Album", album_artist="Sib Artist", apple_music=False
+    )
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    warnings: list[str] = []
+    monkeypatch.setattr(unify_mod.console, "print", lambda *a, **k: warnings.append(str(a[0]) if a else ""))
+    unify_source_tracks(session)
+
+    assert not any("not found" in w for w in warnings)
+    st = _xml_track(session, data["Track ID"]).one()
+    assert st.track_id == track.id  # linked to the same canonical track the sibling's file is on
+
+
 def test_unify_idempotent(session):
     data = _track_data()
     do_import_tracks(session, {str(data["Track ID"]): data})

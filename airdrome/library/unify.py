@@ -111,7 +111,11 @@ def expects_local_file(st: SourceTrack) -> bool:
 
 def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
     """Yield ``(created, updated, n_files_bound)`` per unlinked SourceTrack as it is unified."""
-    for st in s.scalars(select(SourceTrack).where(SourceTrack.track_id.is_(None))):
+    # Process in insertion order: makes runs reproducible and gives a deterministic "first import wins"
+    # for canonical metadata — the earliest-inserted source row creates the Track and sets its defaults,
+    # later siblings only backfill NULLs (see _upsert_track).
+    stmt = select(SourceTrack).where(SourceTrack.track_id.is_(None)).order_by(SourceTrack.id)
+    for st in s.scalars(stmt):
         st: SourceTrack
         defaults = {
             "track_n": st.track_number,
@@ -142,7 +146,11 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
         tfs = _bind_track_files(st, s)
         for tf in tfs:
             track.files.append(tf)
-        if not tfs and expects_local_file(st):
+        # Warn only on a genuine miss. The same physical file usually has two source rows (Apple XML
+        # *and* Apple MS) that resolve to one canonical track; whichever is processed first binds the
+        # file, leaving none for the second. Checking ``track.files`` — populated by that sibling —
+        # avoids a spurious "not found" for a file that is, in fact, already bound to this track.
+        if not tfs and not track.files and expects_local_file(st):
             console.print(f"[dim yellow]not found: {st.possible_locations()[0]!r}[/dim yellow]")
 
         s.flush()
@@ -302,7 +310,12 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
     so a file whose tags happen to match a source-built track binds to it rather than duplicating.
     """
     created = updated = 0
-    stmt = select(TrackFile).where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))
+    # Insertion order for reproducibility, mirroring the source-track stage.
+    stmt = (
+        select(TrackFile)
+        .where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))
+        .order_by(TrackFile.id)
+    )
     for tf in s.scalars(stmt):
         year = None
         if tf.date:
