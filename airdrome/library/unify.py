@@ -107,6 +107,7 @@ def expects_local_file(st: SourceTrack) -> bool:
 def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
     """Yield ``(created, updated, n_files_bound)`` per unlinked SourceTrack as it is unified."""
     for st in s.scalars(select(SourceTrack).where(SourceTrack.track_id.is_(None))):
+        st: SourceTrack
         defaults = {
             "track_n": st.track_number,
             "disc_n": st.disc_number,
@@ -137,7 +138,7 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
         for tf in tfs:
             track.files.append(tf)
         if not tfs and expects_local_file(st):
-            console.print(f"[dim yellow]expected local file not found: {st.title!r}[/dim yellow]")
+            console.print(f"[dim yellow]not found: {st.possible_locations()[0]!r}[/dim yellow]")
 
         s.flush()
         yield created, updated, len(tfs)
