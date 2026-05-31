@@ -80,6 +80,14 @@ Each platform has its own `scrobbles.py` (and `ingest.py` for Apple). They parse
 
 PostgreSQL runs on port **5437** (see `compose.yml`). The `initdb/` directory contains DB initialization scripts.
 
+## Workflow
+
+- For any task beyond a simple bugfix, start a new branch from `main`.
+- Cover changes with meaningful tests. Lean on pytest and its fixtures heavily.
+- Give every function and method a one-line docstring.
+- Comment non-obvious code, explaining the decision made — the more complicated the situation, the more explicit the comment.
+- While working, spot and call out places that can be simplified.
+
 ## Conventions
 
 - Line length: 110 characters (Ruff)
