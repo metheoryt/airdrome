@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import ClassVar
 
 from sqlalchemy import Column, func, select
 from sqlalchemy.orm import Session
@@ -16,7 +17,7 @@ class FilterMode(Enum):
     RESOLVED_CONFIRMED = "resolved confirmed"
     AUTO_RESOLVED = "auto-resolved"
 
-    def next(self) -> "FilterMode":
+    def next(self) -> FilterMode:
         members = list(FilterMode)
         return members[(members.index(self) + 1) % len(members)]
 
@@ -67,7 +68,7 @@ class DeduplicatorState:
     filter_mode: FilterMode = FilterMode.RESOLVED_ALL
     partial_match: str = ""
     pages_iter: list[tuple[str, Page]] = field(default_factory=list, init=False)
-    _mode_idx: dict = field(default_factory=lambda: {m: 0 for m in FilterMode}, init=False)
+    _mode_idx: dict = field(default_factory=lambda: dict.fromkeys(FilterMode, 0), init=False)
 
     def __post_init__(self):
         self.pages_iter = list(self.pages.items())
@@ -128,7 +129,7 @@ class DeduplicatorState:
 
 
 class Deduplicator:
-    COLUMN_SETS = [
+    COLUMN_SETS: ClassVar[list[list[Column]]] = [
         [Track.artist_norm, Track.title_norm],
         [Track.album_artist_norm, Track.title_norm],
         [Track.album_norm, Track.title_norm],
@@ -153,8 +154,8 @@ class Deduplicator:
             .order_by(*cols)
         )
         groups = []
-        for *col_vals, count in combinations:
-            col_to_val = list(zip(cols, col_vals))
+        for *col_vals, _count in combinations:
+            col_to_val = list(zip(cols, col_vals, strict=False))
             key = ",".join(f"{c.name}={v}" for c, v in col_to_val)
             track_group = list(
                 self.s.scalars(
@@ -190,7 +191,7 @@ class Deduplicator:
     def apply_changes(self) -> int:
         """Stage confirmed canon picks onto the session. Caller is responsible for commit."""
         changed = 0
-        for key, page in self.state.pages_iter:
+        for _key, page in self.state.pages_iter:
             if not page.confirmed:
                 continue
             for i, track in enumerate(page.tracks):

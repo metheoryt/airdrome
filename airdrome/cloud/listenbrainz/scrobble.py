@@ -1,8 +1,8 @@
 import io
 import zipfile
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
 
 from pydantic import BaseModel, model_validator
 
@@ -21,12 +21,12 @@ class ListenBrainzScrobble(BaseModel):
     @classmethod
     def extract_data(cls, data: dict) -> dict:
         meta = data["track_metadata"]
-        return dict(
-            track_name=meta["track_name"],
-            artist_name=meta["artist_name"],
-            release_name=meta.get("release_name"),
-            listened_at=data["listened_at"],
-        )
+        return {
+            "track_name": meta["track_name"],
+            "artist_name": meta["artist_name"],
+            "release_name": meta.get("release_name"),
+            "listened_at": data["listened_at"],
+        }
 
 
 def _parse_jsonl_lines(lines: Iterator[str]) -> Iterator[ListenBrainzScrobble]:

@@ -1,8 +1,8 @@
 import csv
 import io
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
 
 from pydantic import BaseModel, Field, model_validator
 

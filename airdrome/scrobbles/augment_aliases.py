@@ -45,7 +45,7 @@ def maybe_complete_alias(alias: TrackAlias, s: Session):
         matched_artist = match.artist_norm
         matched_album = match.album_norm
 
-    changed = list()
+    changed = []
     if not alias.album_norm and matched_album:
         alias.album_norm = matched_album
         changed.append("album")

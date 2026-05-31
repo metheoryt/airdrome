@@ -65,7 +65,7 @@ class DeduplicatorUI:
         table.add_column("Index", style="blue")
         table.add_column("Canon ID", style="blue")
 
-        for h in DeduplicatorUI._get_table_row(tracks[0]).keys():
+        for h in DeduplicatorUI._get_table_row(tracks[0]):
             style = "yellow"
             if h in ("Date added", "❤️", "Album ❤️", "Files"):
                 style = "green"

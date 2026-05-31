@@ -1,6 +1,6 @@
 import csv
-from datetime import date, datetime, timedelta, timezone
-from typing import Iterator
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
 
 from airdrome.enums import Source
 from airdrome.models import TrackAlias
@@ -9,9 +9,9 @@ from airdrome.scrobbles.parser import ScrobbleParser
 from .schemas import LastFMScrobble
 
 
-def get_lastfm_records(filepath: str) -> Iterator["LastFMScrobble"]:
+def get_lastfm_records(filepath: str) -> Iterator[LastFMScrobble]:
     missing_date = datetime(2010, 1, 1)
-    with open(filepath, mode="r", newline="", encoding="utf-8") as file:
+    with open(filepath, newline="", encoding="utf-8") as file:
         reader = csv.reader(file)
         for row in reader:
             r = LastFMScrobble(artist=row[0], album=row[1], title=row[2], date=row[3])
@@ -25,7 +25,7 @@ def get_lastfm_records(filepath: str) -> Iterator["LastFMScrobble"]:
                 missing_date += timedelta(minutes=5)
 
             # the time is in UTC already, just make it aware
-            r.date = r.date.replace(tzinfo=timezone.utc)
+            r.date = r.date.replace(tzinfo=UTC)
             yield r
 
 

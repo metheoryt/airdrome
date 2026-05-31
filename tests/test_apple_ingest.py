@@ -231,7 +231,7 @@ def test_unify_playlists_idempotent(session):
     pl = _playlist_data(track_ids=[track_data["Track ID"]])
     do_import_playlists(session, [pl])
 
-    first_pl, first_tr = unify_source_playlists(session)
+    first_pl, _first_tr = unify_source_playlists(session)
     session.flush()
     second_pl, second_tr = unify_source_playlists(session)
 

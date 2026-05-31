@@ -1,6 +1,6 @@
 """End-to-end scenarios that cross the auto / manual / persistence boundary."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -18,12 +18,8 @@ def _canon_snapshot(session) -> dict[int, int | None]:
 
 def test_auto_then_manual_override_layers_correctly(session):
     # Auto would pick T1 as canon (earliest date_added).
-    t1 = make_track(
-        session, "Song", "Artist", "Album A", date_added=datetime(2020, 1, 1, tzinfo=timezone.utc)
-    )
-    t2 = make_track(
-        session, "Song", "Artist", "Album B", date_added=datetime(2024, 1, 1, tzinfo=timezone.utc)
-    )
+    t1 = make_track(session, "Song", "Artist", "Album A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    t2 = make_track(session, "Song", "Artist", "Album B", date_added=datetime(2024, 1, 1, tzinfo=UTC))
 
     # User picks the opposite via the manual table.
     make_dedup_group(session, [(t1, t2), (t2, None)], label="flipped")
@@ -37,8 +33,8 @@ def test_auto_then_manual_override_layers_correctly(session):
 
 
 def test_auto_idempotent_on_repeat(session):
-    make_track(session, "A", "X", date_added=datetime(2020, 1, 1, tzinfo=timezone.utc))
-    make_track(session, "A", "X", date_added=datetime(2024, 1, 1, tzinfo=timezone.utc), album="alt")
+    make_track(session, "A", "X", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    make_track(session, "A", "X", date_added=datetime(2024, 1, 1, tzinfo=UTC), album="alt")
     make_track(session, "B", "Y")
 
     auto_deduplicate(session, flag_sets=[{"with_album": False}])
@@ -88,7 +84,7 @@ def test_confirm_exit_reenter_restores_confirmed_state(session):
     fresh_pages_with_t1 = [p for p in fresh.state.pages.values() if any(t.id == t1.id for t in p.tracks)]
     [fresh_page] = fresh_pages_with_t1
     assert fresh_page.confirmed
-    canon_by_id = dict(zip([t.id for t in fresh_page.tracks], fresh_page.chosen_canons))
+    canon_by_id = dict(zip([t.id for t in fresh_page.tracks], fresh_page.chosen_canons, strict=False))
     assert canon_by_id[t1.id] is None
 
 

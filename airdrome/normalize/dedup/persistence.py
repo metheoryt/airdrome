@@ -42,7 +42,7 @@ def save_confirmed_groups(session: Session, pages: dict[str, Page]) -> None:
         id_to_hash = {t.id: t.duplicate_hash for t in page.tracks}
         canon_by_member = {
             t.duplicate_hash: (id_to_hash.get(canon_id) if canon_id is not None else None)
-            for t, canon_id in zip(page.tracks, page.chosen_canons)
+            for t, canon_id in zip(page.tracks, page.chosen_canons, strict=False)
         }
         group = existing if existing is not None else DedupGroup()
         group.label = key
@@ -142,7 +142,7 @@ def flatten_canon_chains(session: Session) -> int:
     remains.
     """
     pairs = session.execute(select(Track.id, Track.canon_id)).all()
-    canon_of = {tid: cid for tid, cid in pairs}
+    canon_of = dict(pairs)
 
     changed = 0
     for tid, cid in pairs:

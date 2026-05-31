@@ -1,6 +1,6 @@
 import random
 import string
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy import ForeignKey, create_engine, text
@@ -67,15 +67,15 @@ class Playlist(NVSQLModel):
     duration: Mapped[float] = mapped_column(default=0)
     song_count: Mapped[int] = mapped_column(default=0)
     public: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     path: Mapped[str] = mapped_column(default="")
     sync: Mapped[bool] = mapped_column(default=False)
     size: Mapped[int] = mapped_column(default=0)
     rules: Mapped[str | None]
     evaluated_at: Mapped[datetime | None]
     owner_id: Mapped[str]
-    media_files: Mapped[list["MediaFile"]] = relationship(
+    media_files: Mapped[list[MediaFile]] = relationship(
         back_populates="playlists", secondary="playlist_tracks"
     )
 
@@ -93,8 +93,8 @@ class MediaFile(NVSQLModel):
     duration: Mapped[float]
     size: Mapped[int]
 
-    album_model: Mapped["Album"] = relationship(back_populates="media_files")
-    playlists: Mapped[list["Playlist"]] = relationship(
+    album_model: Mapped[Album] = relationship(back_populates="media_files")
+    playlists: Mapped[list[Playlist]] = relationship(
         back_populates="media_files", secondary="playlist_tracks"
     )
 
@@ -105,7 +105,7 @@ class Album(NVSQLModel):
     name: Mapped[str]
     created_at: Mapped[datetime]
 
-    media_files: Mapped[list["MediaFile"]] = relationship(back_populates="album_model")
+    media_files: Mapped[list[MediaFile]] = relationship(back_populates="album_model")
 
 
 class AlbumArtist(NVSQLModel):

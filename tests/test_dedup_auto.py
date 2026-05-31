@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from airdrome.normalize.dedup.auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
 
@@ -78,13 +78,13 @@ def test_compute_groups_sort_order_canon_first(session):
         session,
         "S",
         "A",
-        date_added=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        date_added=datetime(2020, 1, 1, tzinfo=UTC),
     )
     late = make_track(
         session,
         "S",
         "A",
-        date_added=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        date_added=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
     [g] = compute_auto_dedup_groups(session)
@@ -96,8 +96,8 @@ def test_compute_groups_sort_order_canon_first(session):
 
 
 def test_auto_deduplicate_writes_canon_to_twins_keeps_canon_null(session):
-    t1 = make_track(session, "Song", "Artist", date_added=datetime(2020, 1, 1, tzinfo=timezone.utc))
-    t2 = make_track(session, "Song", "Artist", date_added=datetime(2024, 1, 1, tzinfo=timezone.utc))
+    t1 = make_track(session, "Song", "Artist", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    t2 = make_track(session, "Song", "Artist", date_added=datetime(2024, 1, 1, tzinfo=UTC))
 
     result = auto_deduplicate(session)
     session.refresh(t1)
@@ -145,21 +145,21 @@ def test_auto_deduplicate_multiple_flag_sets_union_find_merges(session):
         "X",
         artist="A",
         album="P",
-        date_added=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        date_added=datetime(2020, 1, 1, tzinfo=UTC),
     )
     t2 = make_track(
         session,
         "X",
         artist="A",
         album="Q",
-        date_added=datetime(2021, 1, 1, tzinfo=timezone.utc),
+        date_added=datetime(2021, 1, 1, tzinfo=UTC),
     )
     t3 = make_track(
         session,
         "X",
         artist="B",
         album="Q",
-        date_added=datetime(2022, 1, 1, tzinfo=timezone.utc),
+        date_added=datetime(2022, 1, 1, tzinfo=UTC),
     )
 
     result = auto_deduplicate(
@@ -180,9 +180,9 @@ def test_auto_deduplicate_multiple_flag_sets_union_find_merges(session):
 
 def test_auto_deduplicate_flattens_chains_after_manual_overrides(session):
     # Three identical tracks; auto will pick T1 as canon, T2 and T3 as twins
-    t1 = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=timezone.utc))
-    t2 = make_track(session, "S", "A", date_added=datetime(2021, 1, 1, tzinfo=timezone.utc), album="B")
-    t3 = make_track(session, "S", "A", date_added=datetime(2022, 1, 1, tzinfo=timezone.utc), album="C")
+    t1 = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    t2 = make_track(session, "S", "A", date_added=datetime(2021, 1, 1, tzinfo=UTC), album="B")
+    t3 = make_track(session, "S", "A", date_added=datetime(2022, 1, 1, tzinfo=UTC), album="C")
 
     # Manual override flips T1↔T2: T2 is the user-preferred canon, T1 is a twin.
     # This creates a chain post-overrides: T3 → T1 → T2.
@@ -202,12 +202,8 @@ def test_auto_deduplicate_flattens_chains_after_manual_overrides(session):
 def test_auto_deduplicate_applies_stored_manual_overrides(session):
     # Two duplicates; auto would pick T1 as canon (earlier date_added).
     # Stored override flips: T2 is canon, T1 is twin.
-    t1 = make_track(
-        session, "Song", "Artist", "Album A", date_added=datetime(2020, 1, 1, tzinfo=timezone.utc)
-    )
-    t2 = make_track(
-        session, "Song", "Artist", "Album B", date_added=datetime(2024, 1, 1, tzinfo=timezone.utc)
-    )
+    t1 = make_track(session, "Song", "Artist", "Album A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    t2 = make_track(session, "Song", "Artist", "Album B", date_added=datetime(2024, 1, 1, tzinfo=UTC))
     make_dedup_group(session, [(t1, t2), (t2, None)], label="manual-flip")
 
     result = auto_deduplicate(session, flag_sets=[{"with_album": False}])

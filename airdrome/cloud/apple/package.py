@@ -77,9 +77,8 @@ class AppleMediaServicesPackage:
 
     @staticmethod
     def _parse_json_zip(data: bytes) -> list:
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            with z.open(z.namelist()[0]) as f:
-                return json.load(f)
+        with zipfile.ZipFile(io.BytesIO(data)) as z, z.open(z.namelist()[0]) as f:
+            return json.load(f)
 
     # ------------------------------------------------------------------ public
 

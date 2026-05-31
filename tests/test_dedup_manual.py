@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -254,8 +254,8 @@ def test_get_track_groups_skips_empty_norm_fields(session):
 
 
 def test_get_track_groups_sort_order_canon_first(session):
-    early = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=timezone.utc))
-    late = make_track(session, "S", "A", date_added=datetime(2024, 1, 1, tzinfo=timezone.utc), album="X")
+    early = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    late = make_track(session, "S", "A", date_added=datetime(2024, 1, 1, tzinfo=UTC), album="X")
 
     d = Deduplicator(session)
     groups = d.get_track_groups([Track.artist_norm, Track.title_norm])
@@ -312,7 +312,7 @@ def test_fill_state_restores_confirmed_from_db(session):
     [page] = matching
     assert page.confirmed is True
     # chosen_canons depends on page.tracks order — assert by membership
-    canon_by_id = dict(zip([t.id for t in page.tracks], page.chosen_canons))
+    canon_by_id = dict(zip([t.id for t in page.tracks], page.chosen_canons, strict=False))
     assert canon_by_id[t1.id] is None
     assert canon_by_id[t2.id] == t1.id
 
@@ -328,7 +328,7 @@ def test_apply_changes_writes_only_confirmed_pages(session):
     # Confirm only the first matching page
     pages_with_t1 = [(k, p) for k, p in d.state.pages.items() if any(t.id == t1.id for t in p.tracks)]
     assert pages_with_t1
-    key, page = pages_with_t1[0]
+    _key, page = pages_with_t1[0]
     canon_idx = next(i for i, t in enumerate(page.tracks) if t.id == t1.id)
     twin_idx = next(i for i, t in enumerate(page.tracks) if t.id == t2.id)
     page.set_canon(canon_idx, [twin_idx])

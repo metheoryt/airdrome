@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Type, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 
 import sqlalchemy as sa
 from mutagen import File
@@ -36,7 +36,7 @@ AwareDatetime = Annotated[datetime, mapped_column(sa.DateTime(timezone=True))]
 
 AwareDatetimeDefNow = Annotated[
     datetime,
-    mapped_column(sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)),
+    mapped_column(sa.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)),
 ]
 
 
@@ -66,7 +66,7 @@ class Base(AirdromeBase):
 
     @classmethod
     def get_or_create(
-        cls: Type[T], session: Session, defaults: dict[str, Any] | None = None, **lookups: Any
+        cls: type[T], session: Session, defaults: dict[str, Any] | None = None, **lookups: Any
     ) -> tuple[T, bool]:
         instance = session.scalars(select(cls).filter_by(**lookups)).one_or_none()
 
@@ -161,13 +161,13 @@ class Track(Base):
     # canon_id chains (A->B->C) never exist. Enforced at write time by
     # flatten_canon_chains(); all readers may resolve with a single hop.
     canon_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="SET NULL"), index=True)
-    canon: Mapped["Track | None"] = relationship(
+    canon: Mapped[Track | None] = relationship(
         "Track",
         foreign_keys=[canon_id],
         back_populates="twins",
         remote_side=[id],
     )
-    twins: Mapped[list["Track"]] = relationship(
+    twins: Mapped[list[Track]] = relationship(
         "Track",
         foreign_keys=[canon_id],
         back_populates="canon",
@@ -176,13 +176,13 @@ class Track(Base):
     # Other relations.
     # A Track can have multiple source records (across providers, or duplicate ids within
     #   a provider). This is rare and unrelated to deduplication.
-    source_tracks: Mapped[list["SourceTrack"]] = relationship(
+    source_tracks: Mapped[list[SourceTrack]] = relationship(
         back_populates="track", cascade="all, delete-orphan"
     )
-    aliases: Mapped[list["TrackAlias"]] = relationship(back_populates="track", cascade="all, delete-orphan")
-    files: Mapped[list["TrackFile"]] = relationship(back_populates="track", cascade="all, delete-orphan")
-    plays: Mapped[list["TrackPlay"]] = relationship(back_populates="track", cascade="all, delete-orphan")
-    playlist_memberships: Mapped[list["PlaylistTrack"]] = relationship(
+    aliases: Mapped[list[TrackAlias]] = relationship(back_populates="track", cascade="all, delete-orphan")
+    files: Mapped[list[TrackFile]] = relationship(back_populates="track", cascade="all, delete-orphan")
+    plays: Mapped[list[TrackPlay]] = relationship(back_populates="track", cascade="all, delete-orphan")
+    playlist_memberships: Mapped[list[PlaylistTrack]] = relationship(
         back_populates="track", cascade="all, delete-orphan"
     )
 
@@ -229,7 +229,7 @@ class Track(Base):
         return ";".join(str(v) if v is not None else "" for v in hash_fields)
 
     @property
-    def main_file(self) -> "TrackFile | None":
+    def main_file(self) -> TrackFile | None:
         return next((t for t in self.files if t.is_main), None)
 
     @property
@@ -366,7 +366,7 @@ class TrackFile(Base):
         self.album_artist = get("TPE2", "aART")
         self.title = get("TIT2", "©nam")
         self.date = get("TDRC", "TDOR", "©day")
-        self.duration = getattr(audio.info, "length")
+        self.duration = audio.info.length
         self.bitrate = getattr(audio.info, "bitrate", 0)
 
 
@@ -410,7 +410,7 @@ class TrackAlias(Base):
     track_id: Mapped[int | None] = mapped_column(ForeignKey("track.id"), index=True)
     track: Mapped[Track | None] = relationship(back_populates="aliases")
 
-    scrobbles: Mapped[list["TrackAliasScrobble"]] = relationship(
+    scrobbles: Mapped[list[TrackAliasScrobble]] = relationship(
         back_populates="alias", cascade="all, delete-orphan"
     )
 
@@ -467,7 +467,7 @@ class Playlist(Base):
     date_added: Mapped[AwareDatetime | None]
     date_modified: Mapped[AwareDatetime | None]
 
-    tracks: Mapped[list["PlaylistTrack"]] = relationship(
+    tracks: Mapped[list[PlaylistTrack]] = relationship(
         back_populates="playlist", cascade="all, delete-orphan"
     )
 
@@ -532,7 +532,7 @@ class DedupGroup(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     label: Mapped[str | None]
-    members: Mapped[list["DedupGroupMember"]] = relationship(
+    members: Mapped[list[DedupGroupMember]] = relationship(
         back_populates="group", cascade="all, delete-orphan"
     )
 

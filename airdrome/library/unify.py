@@ -34,9 +34,10 @@ their NULL fields backfilled, never duplicated. Stages 1 and 3 share ``_upsert_t
 get-or-create-then-backfill logic; they differ only in where the metadata and files come from.
 """
 
+import contextlib
+from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Iterator
+from datetime import UTC, datetime
 
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
 from sqlalchemy import delete, func, select
@@ -301,10 +302,8 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
     for tf in s.scalars(stmt):
         year = None
         if tf.date:
-            try:
+            with contextlib.suppress(ValueError, IndexError):
                 year = int(tf.date[:4])
-            except ValueError, IndexError:
-                pass
         defaults = {
             "duration": round(tf.duration) if tf.duration else None,
             "year": year,
@@ -313,7 +312,7 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
             st = tf.source_path.stat()
             # st_ctime is creation on Windows / inode-change on Linux; mtime is content edit.
             # min() yields the oldest known timestamp for the file across platforms.
-            defaults["date_added"] = datetime.fromtimestamp(min(st.st_ctime, st.st_mtime), tz=timezone.utc)
+            defaults["date_added"] = datetime.fromtimestamp(min(st.st_ctime, st.st_mtime), tz=UTC)
         except OSError:
             pass
 

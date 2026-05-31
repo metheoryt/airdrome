@@ -69,7 +69,7 @@ def normalize_name(value: str | None) -> str:
     for char in "/\\":
         value = value.replace(char, " ")
 
-    for char in "-–,.:\"*[]()'’‘…►™":  # some chars, though, need to be replaced with empty string
+    for char in "-–,.:\"*[]()'’‘…►™":  # noqa: RUF001 — ambiguous quotes/dashes are the chars we strip; some need empty-string replacement
         if len(value) < 2:  # stop excluding if the value is too short
             break
         value = value.replace(char, "")

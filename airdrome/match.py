@@ -24,10 +24,7 @@ def build_match_score(artist_norm, album_norm):
     if album_norm:
         album_sim_expr = func.similarity(Track.album_norm, album_norm)
     else:
-        if artist_norm:
-            album_sim_expr = 0.5
-        else:
-            album_sim_expr = 1.0
+        album_sim_expr = 0.5 if artist_norm else 1.0
 
     artist_w = 0.75
     album_w = 0.25

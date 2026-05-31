@@ -26,7 +26,7 @@ def test_organize_moves_main_file(session, tmp_path):
     src_dir.mkdir()
     dst_dir.mkdir()
 
-    track, tf = _make_track_with_file(session, src_dir, "Test Song")
+    _track, tf = _make_track_with_file(session, src_dir, "Test Song")
     organizer = FileOrganizer(dst_dir=dst_dir)
 
     n = organizer.organize(session)
@@ -45,7 +45,7 @@ def test_organize_copy_mode_keeps_source(session, tmp_path):
     src_dir.mkdir()
     dst_dir.mkdir()
 
-    track, tf = _make_track_with_file(session, src_dir, "Test Song")
+    _track, tf = _make_track_with_file(session, src_dir, "Test Song")
     organizer = FileOrganizer(dst_dir=dst_dir, copy=True)
 
     organizer.organize(session)
@@ -59,7 +59,7 @@ def test_organize_skips_already_organized(session, tmp_path):
     src_dir.mkdir()
     dst_dir.mkdir()
 
-    track, tf = _make_track_with_file(session, src_dir, "Test Song")
+    _track, _tf = _make_track_with_file(session, src_dir, "Test Song")
     organizer = FileOrganizer(dst_dir=dst_dir)
 
     n_first = organizer.organize(session)
@@ -75,7 +75,7 @@ def test_organize_reset_re_organizes(session, tmp_path):
     src_dir.mkdir()
     dst_dir.mkdir()
 
-    track, tf = _make_track_with_file(session, src_dir, "Test Song", ext="mp3")
+    _track, tf = _make_track_with_file(session, src_dir, "Test Song", ext="mp3")
     organizer = FileOrganizer(dst_dir=dst_dir)
     organizer.organize(session)
 

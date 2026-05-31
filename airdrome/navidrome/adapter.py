@@ -5,8 +5,8 @@ go through this adapter; the merge engine never touches `MediaFile` or
 `playlist_tracks` directly.
 """
 
-from datetime import datetime, timezone
-from typing import Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -35,7 +35,7 @@ class NavidromeAdapter(PlaylistAdapter):
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
-    def __enter__(self) -> "NavidromeAdapter":
+    def __enter__(self) -> NavidromeAdapter:
         self._nvs = Session(get_nv_engine())
         user = self.nvs.scalars(select(User).where(User.user_name == self._username)).one()
         self._user_id = user.id
@@ -74,7 +74,7 @@ class NavidromeAdapter(PlaylistAdapter):
         return _to_external(nv_pl)
 
     def create(self, playlist: Playlist) -> ExternalPlaylist:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         nv_pl = NVPlaylist(
             name=playlist.name,
             owner_id=self._user_id,
@@ -167,5 +167,5 @@ class NavidromeAdapter(PlaylistAdapter):
         nv_pl.song_count = count
         nv_pl.duration = duration
         nv_pl.size = int(size)
-        nv_pl.updated_at = datetime.now(timezone.utc)
+        nv_pl.updated_at = datetime.now(UTC)
         self.nvs.flush()

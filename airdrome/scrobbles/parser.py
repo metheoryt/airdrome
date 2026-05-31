@@ -1,6 +1,6 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterator
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session

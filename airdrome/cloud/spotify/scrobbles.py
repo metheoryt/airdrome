@@ -1,7 +1,7 @@
 import json
 import os
+from collections.abc import Iterator
 from datetime import datetime
-from typing import Iterator
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,7 @@ class SpotifyRecord(BaseModel):
 
 
 def get_spotify_scrobbles(filename: str):
-    with open(filename, mode="r", encoding="utf-8") as jsonfile:
+    with open(filename, encoding="utf-8") as jsonfile:
         history = json.load(jsonfile)
         for record in history:
             if record["ms_played"] < 30000:

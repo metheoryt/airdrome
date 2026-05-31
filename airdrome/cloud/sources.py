@@ -43,7 +43,7 @@ class SourceTrack(Base, AppleFSDiscoverable):
 
     track_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
     track: Mapped[Track | None] = relationship(back_populates="source_tracks")
-    playlist_memberships: Mapped[list["SourcePlaylistTrack"]] = relationship(back_populates="track")
+    playlist_memberships: Mapped[list[SourcePlaylistTrack]] = relationship(back_populates="track")
 
     # structured fields consumed downstream (matching, FS-path mixin, unify defaults)
     title: Mapped[str]
@@ -81,7 +81,7 @@ class SourceTrack(Base, AppleFSDiscoverable):
         data: dict,
         *,
         alias_map: dict[str, str],
-    ) -> "SourceTrack":
+    ) -> SourceTrack:
         """Build from a raw export dict: rename keys via `alias_map`, split into structured
         columns vs. the `extra` blob. `source_id` is the source's native identifier."""
         mapped = {alias_map.get(k, k): v for k, v in data.items()}
@@ -109,7 +109,7 @@ class SourcePlaylist(Base):
 
     extra: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
-    members: Mapped[list["SourcePlaylistTrack"]] = relationship(
+    members: Mapped[list[SourcePlaylistTrack]] = relationship(
         back_populates="playlist", cascade="all, delete-orphan"
     )
 

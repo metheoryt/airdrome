@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
+from typing import ClassVar
 
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from airdrome.models import TrackFile
 
 
 class MusicScanner:
-    EXTENSIONS = {".mp3", ".m4a", ".flac"}
+    EXTENSIONS: ClassVar[set[str]] = {".mp3", ".m4a", ".flac"}
 
     def __init__(self, target_path: Path, match_threshold: float = 0.4):
         self.target_path = target_path

@@ -7,7 +7,7 @@ either side stay put on whichever side holds them — see `PlaylistLink`
 docstring for the rule on what makes it into the snapshot.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -115,7 +115,7 @@ def _sync_pair(
     if changed_airdrome:
         _apply_to_airdrome(s, playlist.id, merged)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if link is None:
         s.add(
             PlaylistLink(
@@ -138,7 +138,7 @@ def _sync_pair(
 def sync(s: Session, adapter: PlaylistAdapter) -> None:
     """Run one bidirectional sync pass between Airdrome and a backend."""
 
-    airdrome_playlist_ids = [pid for pid in s.scalars(select(Playlist.id).order_by(Playlist.name)).all()]
+    airdrome_playlist_ids = list(s.scalars(select(Playlist.id).order_by(Playlist.name)).all())
     seen_external: set[str] = set()
     changed = total = 0
 

@@ -35,7 +35,7 @@ def test_engine():
         conn.commit()
 
     # Ensure all model metadata is registered before creating tables
-    import airdrome.cloud.sources  # noqa: F401
+    import airdrome.cloud.sources
     import airdrome.models  # noqa: F401
 
     AirdromeBase.metadata.create_all(engine)

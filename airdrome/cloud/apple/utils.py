@@ -33,13 +33,10 @@ def remove_empty_dirs_recursively(root_dir_path: Path):
 
 
 def ensure_truncated(s: str, maxlen: int = 35, is_filename: bool = False):
-    if len(s) > maxlen:
-        tr = s[:maxlen].rstrip()
-    else:
-        tr = s.rstrip()
+    tr = s[:maxlen].rstrip() if len(s) > maxlen else s.rstrip()
 
     # quote windows path
-    for char in '*<>:"/\\|?’“”':
+    for char in '*<>:"/\\|?’“”':  # noqa: RUF001 — the curly quotes are deliberately part of the set
         tr = tr.replace(char, "_")
 
     # quote leading/trailing dot

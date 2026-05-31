@@ -1,6 +1,6 @@
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -69,10 +69,7 @@ class FileOrganizer:
 
         dst_abs.parent.mkdir(parents=True, exist_ok=True)
 
-        if self.copy:
-            new = shutil.copy(src_abs, dst_abs)
-        else:
-            new = shutil.move(src_abs, dst_abs)
+        new = shutil.copy(src_abs, dst_abs) if self.copy else shutil.move(src_abs, dst_abs)
         # return a real path, with the correct case
         return new.resolve()
 
@@ -108,7 +105,7 @@ class FileOrganizer:
             # Do not handle twins, they will be handled together with their canon track
             return self.transfer_track(t.canon)
 
-        files = [tf for tf in t.files]
+        files = list(t.files)
 
         if t.twins:
             # the track has twins, combine all files from all twins

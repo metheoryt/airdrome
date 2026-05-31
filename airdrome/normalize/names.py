@@ -8,11 +8,9 @@ from .norm import normalize_name
 
 
 def _renormalize(session: Session, model, fields: list[tuple[str, str]], label: str):
-    i = 0
-    for obj in session.scalars(select(model)):
+    for i, obj in enumerate(session.scalars(select(model)), start=1):
         for src, dst in fields:
             setattr(obj, dst, normalize_name(getattr(obj, src)))
-        i += 1
         if i % 1000 == 0:
             session.flush()
     session.flush()

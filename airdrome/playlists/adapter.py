@@ -7,8 +7,8 @@ against this interface and never touches a backend's tables directly.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from airdrome.models import Backend, Playlist
 

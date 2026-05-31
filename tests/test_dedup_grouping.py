@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from airdrome.normalize.dedup.grouping import merge_overlapping_groups
 
@@ -63,15 +63,9 @@ def test_three_groups_chain_via_shared_track(session):
 
 def test_merged_component_reordered_by_canon_priority(session):
     # earliest date_added wins; then earliest year; then loved=True; then lowest id
-    early = make_track(
-        session, "early", artist="x", date_added=datetime(2020, 1, 1, tzinfo=timezone.utc), year=2020
-    )
-    late = make_track(
-        session, "late", artist="x", date_added=datetime(2024, 1, 1, tzinfo=timezone.utc), year=2024
-    )
-    shared = make_track(
-        session, "shared", artist="x", date_added=datetime(2022, 1, 1, tzinfo=timezone.utc), year=2022
-    )
+    early = make_track(session, "early", artist="x", date_added=datetime(2020, 1, 1, tzinfo=UTC), year=2020)
+    late = make_track(session, "late", artist="x", date_added=datetime(2024, 1, 1, tzinfo=UTC), year=2024)
+    shared = make_track(session, "shared", artist="x", date_added=datetime(2022, 1, 1, tzinfo=UTC), year=2022)
 
     [(_, tracks)] = merge_overlapping_groups(
         session,
