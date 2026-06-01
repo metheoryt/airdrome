@@ -84,6 +84,19 @@ class DeduplicatorState:
     def __post_init__(self):
         self.pages_iter = list(self.pages.items())
 
+    def order_pages(self) -> None:
+        """Order pages confirmed-first, then by a reinstall-stable content key.
+
+        The tiebreaker is the sorted multiset of member duplicate_hashes —
+        derived from track metadata, not DB ids — so the review order is the
+        same after a database rebuild. Called once after confirmed state loads;
+        the order then stays fixed for the session so pages don't jump around
+        as the user confirms them.
+        """
+        self.pages_iter.sort(
+            key=lambda kv: (not kv[1].confirmed, tuple(sorted(t.duplicate_hash for t in kv[1].tracks)))
+        )
+
     def filtered_pages(self) -> list[tuple[str, Page]]:
         pages = self.pages_iter
         if self.partial_match:
@@ -172,6 +185,7 @@ class Deduplicator:
 
         self.state = DeduplicatorState(pages=pages, current_idx=0, partial_match=self.state.partial_match)
         load_confirmed_groups(self.s, self.state.pages)
+        self.state.order_pages()
 
     def apply_changes(self) -> int:
         """Stage confirmed canon picks onto the session. Caller is responsible for commit."""

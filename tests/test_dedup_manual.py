@@ -283,6 +283,36 @@ def test_custom_flag_sets_override_defaults(session):
     assert split.state.pages == {}  # different albums ⇒ no album-keyed group
 
 
+def test_pages_ordered_by_stable_content_key(session):
+    # Created out of alphabetical order; page order must be deterministic by the
+    # member-hash key (title-prefixed), not by insertion / DB id.
+    for title in ("Ccc", "Aaa", "Bbb"):
+        make_track(session, title, "Art", album="X")
+        make_track(session, title, "Art", album="Y")
+
+    d = Deduplicator(session)
+    d.fill_state()
+
+    assert [p.tracks[0].title for _, p in d.state.pages_iter] == ["Aaa", "Bbb", "Ccc"]
+
+
+def test_pages_ordered_confirmed_first(session):
+    make_track(session, "Aaa", "Art", album="X")
+    make_track(session, "Aaa", "Art", album="Y")
+    z1 = make_track(session, "Zzz", "Art", album="X")
+    z2 = make_track(session, "Zzz", "Art", album="Y")
+    # Confirm the Zzz page; though its key sorts last, confirmed pages lead.
+    make_dedup_group(session, [(z1, None), (z2, z1)], label="stored")
+
+    d = Deduplicator(session)
+    d.fill_state()
+
+    assert [(p.tracks[0].title, p.confirmed) for _, p in d.state.pages_iter] == [
+        ("Zzz", True),
+        ("Aaa", False),
+    ]
+
+
 def test_fill_state_uses_all_column_sets(session):
     # Pair only via artist+title:
     a1 = make_track(session, "Song1", "A", album="P")
