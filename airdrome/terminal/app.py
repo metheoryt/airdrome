@@ -30,7 +30,11 @@ def main(ctx: typer.Context):
         console.print(ctx.get_help())
         return
     upgrade_to_head()
-    session = ctx.with_resource(Session(engine))
+    # expire_on_commit=False keeps ORM objects populated after a commit. The
+    # interactive deduplicator commits repeatedly within one session; without
+    # this, the second commit re-loads every track one-by-one to recompute
+    # duplicate_hash (an N+1 storm that looks like a freeze on a large library).
+    session = ctx.with_resource(Session(engine, expire_on_commit=False))
     ctx.obj = AppState(session=session, dry_run=False)
 
     def _finalize():
