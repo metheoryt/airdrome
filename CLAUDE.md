@@ -40,7 +40,7 @@ uv run alembic downgrade -1                             # roll back one migratio
 1. **Import** — `airdrome import <path>...` auto-detects each source (Apple XML/Media Services, Spotify, Last.fm, ListenBrainz, local music folder) and writes raw `SourceTrack`/`SourcePlaylist`/`TrackFile` and `TrackAlias`/`TrackAliasScrobble` rows. Dumb and per-source; repeat or pass many paths.
 2. **Resolve** — `airdrome resolve` builds the canonical graph from *everything imported* (run once, after all imports): unify source tracks/playlists into `Track`/`Playlist` + bind files, then augment, fuzzy-match (`pg_trgm`), and copy scrobbles into `TrackPlay` history. Idempotent; needs the full picture (see `library/unify.py` for the file-binding/playlist-resolution dependencies).
 3. **Organize** — move/copy bound files into a structured directory (`library organize`)
-4. **Deduplicate** — group duplicate tracks via trigram fuzzy matching (`library deduplicate` / `auto-deduplicate`); duplicates link to a canonical track via `Track.canon_id`
+4. **Deduplicate** — group duplicate tracks via trigram fuzzy matching (`library deduplicate` / `auto-deduplicate`); duplicates link to a canonical track via `Track.canon_id`. Both commands share one grouping engine (`compute_auto_dedup_groups` + `merge_overlapping_groups`) and the same `--set`/`--canon {added,year}` flags; `deduplicate` is the interactive TUI (defaults to three loose single-field sets), `auto-deduplicate` is the batch rebuild (defaults to one all-fields set). Confirmed groups live in `dedupgroup`/`dedupgroupmember`; `library {export,import}-duplicates` round-trip them to a portable JSON file (identity = member-hash multiset) so they survive a DB rebuild
 5. **Sync** — push matched play counts + ratings (`navidrome push`) and 3-way-merge playlists (`navidrome playlists`) to Navidrome's SQLite database
 
 ### Key models (`airdrome/models.py`)
@@ -75,7 +75,7 @@ Each platform has its own `scrobbles.py` (and `ingest.py` for Apple). They parse
 | `DB_DSN` | `PostgresDsn` | — | PostgreSQL connection string (required) |
 | `DB_ECHO` | `bool` | `False` | SQLAlchemy query logging |
 | `LIBRARY_DIR` | `Path` | — | Target root for organized music files (required; must be empty on first run) |
-| `DUPLICATES_FILEPATH` | `Path` | `data/duplicates.json` | Output path for deduplication results |
+| `DUPLICATES_FILEPATH` | `Path` | `data/duplicates.json` | Default file for `library {import,export}-duplicates` (confirmed dedup groups) |
 | `NAVIDROME_DB_DSN` | `str \| None` | `None` | Path to Navidrome's SQLite database |
 
 PostgreSQL runs on port **5437** (see `compose.yml`). The `initdb/` directory contains DB initialization scripts.

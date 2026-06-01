@@ -1,14 +1,25 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar
 
-from sqlalchemy import Column, func, select
 from sqlalchemy.orm import Session
 
 from airdrome.models import Track
 
-from .grouping import merge_overlapping_groups
+from .auto import compute_auto_dedup_groups
+from .grouping import CanonStrategy, flag_set, merge_overlapping_groups
 from .persistence import load_confirmed_groups, save_confirmed_groups
+
+
+# Loose defaults for human review: three single-field sets (artist | album_artist
+# | album, each + title), union-merged for broad recall. Override with --set.
+_DEFAULT_FLAG_SETS = [flag_set("artist"), flag_set("album_artist"), flag_set("album")]
+
+
+def _group_label(tracks: list[Track]) -> str:
+    """Readable page title derived from the canon candidate (group[0])."""
+    t = tracks[0]
+    who = t.artist_norm or t.album_artist_norm or "?"
+    return f"{who} — {t.title_norm}"
 
 
 class FilterMode(Enum):
@@ -129,62 +140,36 @@ class DeduplicatorState:
 
 
 class Deduplicator:
-    COLUMN_SETS: ClassVar[list[list[Column]]] = [
-        [Track.artist_norm, Track.title_norm],
-        [Track.album_artist_norm, Track.title_norm],
-        [Track.album_norm, Track.title_norm],
-    ]
-
-    def __init__(self, s: Session, partial_match: str = ""):
+    def __init__(
+        self,
+        s: Session,
+        flag_sets: list[dict[str, bool]] | None = None,
+        strategy: CanonStrategy = CanonStrategy.ADDED,
+        partial_match: str = "",
+    ):
         self.s = s
+        self.flag_sets = flag_sets or _DEFAULT_FLAG_SETS
+        self.strategy = strategy
         self.state = DeduplicatorState(partial_match=partial_match)
 
-    def get_track_groups(self, cols: list[Column]) -> list[tuple[str, list[Track]]]:
-        # Skip empty normalized keys: an empty artist/album/title would
-        # otherwise collapse every unrelated track sharing that blank into
-        # one giant bogus group.
-        non_empty = [col != "" for col in cols]
-        combinations = self.s.execute(
-            select(*cols, func.count(Track.id).label("count"))
-            # do not exclude them, since they can appear in a broader group
-            # .where(Track.canon_id.is_(None))  # exclude tracks already marked as twins
-            .where(*non_empty)
-            .group_by(*cols)
-            .having(func.count(Track.id) > 1)
-            .order_by(*cols)
-        )
-        groups = []
-        for *col_vals, _count in combinations:
-            col_to_val = list(zip(cols, col_vals, strict=False))
-            key = ",".join(f"{c.name}={v}" for c, v in col_to_val)
-            track_group = list(
-                self.s.scalars(
-                    select(Track)
-                    .where(
-                        # Track.canon_id.is_(None),
-                        *[col == val for col, val in col_to_val]
-                    )
-                    .order_by(
-                        Track.date_added.asc().nulls_last(),
-                        Track.year.asc().nulls_last(),
-                        Track.loved.desc().nulls_last(),
-                        Track.id,
-                    )
-                )
-            )
-            groups.append((key, track_group))
-        return groups
-
-    def dedup_pages(self, groups: list[tuple[str, list[Track]]]) -> list[tuple[str, list[Track]]]:
-        return merge_overlapping_groups(self.s, groups)
-
     def fill_state(self) -> None:
-        groups = []
-        for cols in self.COLUMN_SETS:
-            for key, tracks in self.get_track_groups(cols):
-                groups.append((key, tracks))
-        groups = self.dedup_pages(groups)
-        pages = {key: Page(tracks=tracks) for key, tracks in groups}
+        # Same grouping engine as auto-dedup: bucket per flag-set, then
+        # union-merge overlapping groups so a track lands on a single page.
+        raw: list[tuple[str, list[Track]]] = []
+        for flags in self.flag_sets:
+            for group in compute_auto_dedup_groups(self.s, strategy=self.strategy, **flags):
+                raw.append((_group_label(group), group))
+        merged = merge_overlapping_groups(self.s, raw, self.strategy)
+
+        pages: dict[str, Page] = {}
+        for key, tracks in merged:
+            # Labels are derived from the canon track, so disjoint groups can
+            # collide; disambiguate so no page is silently dropped.
+            uniq, n = key, 2
+            while uniq in pages:
+                uniq, n = f"{key} #{n}", n + 1
+            pages[uniq] = Page(tracks=tracks)
+
         self.state = DeduplicatorState(pages=pages, current_idx=0, partial_match=self.state.partial_match)
         load_confirmed_groups(self.s, self.state.pages)
 

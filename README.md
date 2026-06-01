@@ -42,6 +42,7 @@ All settings load from a `.env` file at the project root (`airdrome/conf.py`).
 | `DB_DSN`           | ✅        | —       | PostgreSQL connection string, e.g. `postgresql+psycopg://postgres:postgres@localhost:5437/postgres` |
 | `DB_ECHO`          |          | `False` | Log every SQL statement (debugging)                                                                 |
 | `LIBRARY_DIR`      | ✅        | —       | Destination root for organized files. Must be empty on a fresh install.                             |
+| `DUPLICATES_FILEPATH` |       | `data/duplicates.json` | Default file for `library export-duplicates` / `import-duplicates`                   |
 | `NAVIDROME_DB_DSN` |          | `None`  | Path to Navidrome's SQLite database (required for the `navidrome` commands)                         |
 | `NAVIDROME_USER`   |          | `None`  | Navidrome username that play counts / ratings are written for                                       |
 | `NAVIDROME_PORT`   |          | `4533`  | Port Airdrome probes to refuse syncing while Navidrome is running                                   |
@@ -81,6 +82,7 @@ airdrome library organize          # add --copy to copy, --reset to redo from sc
 # 4. Deduplicate canonical tracks (fuzzy trigram matching)
 airdrome library auto-deduplicate              # automatic, flag-set driven
 airdrome library deduplicate                   # interactive review/override
+airdrome library export-duplicates             # back up confirmed groups to JSON (re-import after a DB rebuild)
 
 # 5. Push to Navidrome (stop Navidrome first — these write its SQLite DB directly)
 airdrome navidrome push             # play counts + ratings
@@ -114,8 +116,14 @@ fuzzy-matches, and materializes scrobbles into `TrackPlay` play history. Idempot
 
 - `organize` — move/copy bound files into `LIBRARY_DIR` (`--copy`, `--reset`)
 - `auto-deduplicate` — rebuild `canon_id` automatically; `--set "artist,album,year"` defines a
-  comparison flag-set (repeatable; multiple sets union-merge their groups)
-- `deduplicate` — interactive duplicate review (`--match <substring>` to filter)
+  comparison flag-set (repeatable; multiple sets union-merge their groups). `--canon`/`-c`
+  picks which group member becomes canon: `added` (earliest added, default) or `year` (oldest release)
+- `deduplicate` — interactive duplicate review (TUI). Shares `--set`/`--canon` with `auto-deduplicate`
+  (defaults to three loose single-field sets — `artist`, `album_artist`, `album` — for broad recall);
+  `--match <substring>` filters the groups shown
+- `export-duplicates` / `import-duplicates` — round-trip confirmed duplicate groups to a portable
+  JSON file (default `DUPLICATES_FILEPATH`). Import is idempotent and matches groups by their member
+  set, so your manual decisions survive a database rebuild
 - `renormalize` — recompute the `_norm` text fields for tracks, aliases, and files
 
 ### `airdrome navidrome`
