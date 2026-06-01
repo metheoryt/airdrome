@@ -118,7 +118,9 @@ fuzzy-matches, and materializes scrobbles into `TrackPlay` play history. Idempot
 - `auto-deduplicate` — rebuild `canon_id` automatically; `--set "artist,album,year"` defines a
   comparison flag-set (repeatable; multiple sets union-merge their groups). `--canon`/`-c`
   picks which group member becomes canon: `added` (earliest added, default) or `year` (oldest release)
-- `deduplicate` — interactive duplicate review (`--match <substring>` to filter)
+- `deduplicate` — interactive duplicate review (TUI). Shares `--set`/`--canon` with `auto-deduplicate`
+  (defaults to three loose single-field sets — `artist`, `album_artist`, `album` — for broad recall);
+  `--match <substring>` filters the groups shown
 - `export-duplicates` / `import-duplicates` — round-trip confirmed duplicate groups to a portable
   JSON file (default `DUPLICATES_FILEPATH`). Import is idempotent and matches groups by their member
   set, so your manual decisions survive a database rebuild

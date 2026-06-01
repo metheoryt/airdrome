@@ -7,11 +7,13 @@ from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.library.organize import organize_library
 from airdrome.normalize.dedup import (
+    FIELDS,
     CanonStrategy,
     Deduplicator,
     DeduplicatorUI,
     auto_deduplicate,
     export_dedup_groups,
+    flag_set,
     import_dedup_groups,
 )
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
@@ -36,47 +38,50 @@ def library_organize(
     organize_library(state.session, dst_dir=settings.library_dir, copy=copy, reset=reset)
 
 
+def _parse_set(spec: str) -> dict[str, bool]:
+    """Parse a comma-separated `--set` spec into a compute flag-set."""
+    fields = {f.strip() for f in spec.split(",") if f.strip()}
+    unknown = fields - set(FIELDS)
+    if unknown:
+        raise typer.BadParameter(
+            f"Unknown field(s): {', '.join(sorted(unknown))}. Valid: {', '.join(sorted(FIELDS))}"
+        )
+    return flag_set(*fields)
+
+
+_SET_HELP = (
+    'Flag-set as comma-separated fields (repeatable). Example: --set "artist,album,year". '
+    "Listed fields are included; title is always implicit. Multiple --sets union-find-merge "
+    "their groups."
+)
+_CANON_HELP = "Which member of each group becomes canon: 'added' (earliest added) or 'year' (oldest release)."
+
+
 @library_app.command("deduplicate")
 def deduplicate_cli(
     ctx: typer.Context,
+    sets: list[str] = typer.Option(
+        None,
+        "--set",
+        "-s",
+        help=f"{_SET_HELP} Defaults to three single-field sets (artist/album_artist/album).",
+    ),
+    canon: CanonStrategy = typer.Option(CanonStrategy.ADDED, "--canon", "-c", help=_CANON_HELP),
     match: str = typer.Option("", "--match", help="Filter by a substring"),
 ):
+    """Interactively review duplicate groups and pick canons (TUI)."""
     state: AppState = ctx.obj
-    Deduplicator(state.session, partial_match=match).run()
-
-
-_VALID_FIELDS = {"artist", "album_artist", "album", "track_n", "disc_n", "duration", "year"}
-
-
-def _parse_set(spec: str) -> dict[str, bool]:
-    fields = {f.strip() for f in spec.split(",") if f.strip()}
-    unknown = fields - _VALID_FIELDS
-    if unknown:
-        raise typer.BadParameter(
-            f"Unknown field(s): {', '.join(sorted(unknown))}. Valid: {', '.join(sorted(_VALID_FIELDS))}"
-        )
-    return {f"with_{f}": (f in fields) for f in _VALID_FIELDS}
+    flag_sets = [_parse_set(s) for s in sets] if sets else None
+    Deduplicator(state.session, flag_sets=flag_sets, strategy=canon, partial_match=match).run()
 
 
 @library_app.command("auto-deduplicate")
 def auto_deduplicate_cli(
     ctx: typer.Context,
     sets: list[str] = typer.Option(
-        None,
-        "--set",
-        "-s",
-        help=(
-            'Flag-set as comma-separated fields (repeatable). Example: --set "artist,album,year". '
-            "Listed fields are included; title is always implicit. No --set means one set with all "
-            "fields on. Multiple --sets union-find-merge their groups."
-        ),
+        None, "--set", "-s", help=f"{_SET_HELP} No --set means one set with all fields on."
     ),
-    canon: CanonStrategy = typer.Option(
-        CanonStrategy.ADDED,
-        "--canon",
-        "-c",
-        help="Which member of each group becomes canon: 'added' (earliest added) or 'year' (oldest release).",
-    ),
+    canon: CanonStrategy = typer.Option(CanonStrategy.ADDED, "--canon", "-c", help=_CANON_HELP),
 ):
     """Rebuild Track.canon_id from N flag-sets + stored manual overrides.
 

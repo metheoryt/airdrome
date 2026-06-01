@@ -3,7 +3,8 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
-from airdrome.models import DedupGroup, Track
+from airdrome.models import DedupGroup
+from airdrome.normalize.dedup.grouping import flag_set
 from airdrome.normalize.dedup.manual import Deduplicator, DeduplicatorState, FilterMode, Page
 
 from factories import make_dedup_group, make_page, make_track
@@ -233,17 +234,19 @@ def test_state_go_next_prev_clamps_at_bounds():
 # --- Deduplicator ---
 
 
-def test_get_track_groups_excludes_singletons(session):
+def test_fill_state_excludes_singletons(session):
     make_track(session, "Solo", "A")
 
     d = Deduplicator(session)
-    assert d.get_track_groups([Track.artist_norm, Track.title_norm]) == []
+    d.fill_state()
+
+    assert d.state.pages == {}
 
 
-def test_get_track_groups_skips_empty_norm_fields(session):
-    # Two tracks share title "A" but have no artist/album_artist/album.
-    # Without the skip-empty guard, they'd collapse into a giant group
-    # keyed by (artist_norm="", title_norm="a").
+def test_fill_state_skips_empty_norm_fields(session):
+    # Two tracks share title "A" but have no artist/album_artist/album. The
+    # default single-field sets each require their field, so the all-blank
+    # tracks never bucket into a giant bogus group.
     make_track(session, "A")
     make_track(session, "A")
 
@@ -253,17 +256,31 @@ def test_get_track_groups_skips_empty_norm_fields(session):
     assert d.state.pages == {}
 
 
-def test_get_track_groups_sort_order_canon_first(session):
+def test_fill_state_canon_first_ordering(session):
     early = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
     late = make_track(session, "S", "A", date_added=datetime(2024, 1, 1, tzinfo=UTC), album="X")
 
     d = Deduplicator(session)
-    groups = d.get_track_groups([Track.artist_norm, Track.title_norm])
+    d.fill_state()
 
-    assert len(groups) == 1
-    [(_, tracks)] = groups
-    assert tracks[0].id == early.id
-    assert tracks[1].id == late.id
+    [page] = d.state.pages.values()
+    assert page.tracks[0].id == early.id
+    assert page.tracks[1].id == late.id
+
+
+def test_custom_flag_sets_override_defaults(session):
+    # Same title+artist but different albums: the default artist set groups
+    # them, but an album-only set must not (different albums).
+    t1 = make_track(session, "Song", "A", album="X")
+    t2 = make_track(session, "Song", "A", album="Y")
+
+    grouped = Deduplicator(session)  # defaults include the artist set
+    grouped.fill_state()
+    assert any({t.id for t in p.tracks} == {t1.id, t2.id} for p in grouped.state.pages.values())
+
+    split = Deduplicator(session, flag_sets=[flag_set("album")])
+    split.fill_state()
+    assert split.state.pages == {}  # different albums ⇒ no album-keyed group
 
 
 def test_fill_state_uses_all_column_sets(session):

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from airdrome.normalize.dedup.auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
-from airdrome.normalize.dedup.grouping import CanonStrategy
+from airdrome.normalize.dedup.grouping import CanonStrategy, flag_set
 
 from factories import make_dedup_group, make_track
 
@@ -47,6 +47,21 @@ def test_compute_groups_excludes_singletons(session):
     make_track(session, "Solo", "A")
 
     assert compute_auto_dedup_groups(session) == []
+
+
+def test_compute_groups_skips_blank_active_key_field(session):
+    # A single-field {album} set must not collapse same-title tracks that both
+    # lack an album into one bogus group keyed by (title, blank).
+    make_track(session, "S", "A")  # album is None
+    make_track(session, "S", "B")  # album is None
+
+    assert compute_auto_dedup_groups(session, **flag_set("album")) == []
+
+    # With a real (shared) album, the same set groups them.
+    make_track(session, "S", "C", album="Shared")
+    make_track(session, "S", "D", album="Shared")
+    [g] = compute_auto_dedup_groups(session, **flag_set("album"))
+    assert {t.album for t in g} == {"Shared"}
 
 
 def test_compute_groups_skips_empty_title(session):

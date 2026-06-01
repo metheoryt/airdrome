@@ -13,6 +13,16 @@ class CanonStrategy(StrEnum):
     YEAR = "year"  # the earliest-released copy wins
 
 
+# The optional bucket-key fields (title is always implicit). Single source of
+# truth for both the CLI flag parsing and the manual deduplicator's defaults.
+FIELDS = ("artist", "album_artist", "album", "year", "track_n", "disc_n", "duration")
+
+
+def flag_set(*active: str) -> dict[str, bool]:
+    """Build a `compute_auto_dedup_groups` flag-set with only `active` fields on."""
+    return {f"with_{f}": (f in active) for f in FIELDS}
+
+
 def canon_order(strategy: CanonStrategy = CanonStrategy.ADDED) -> list:
     """Return order_by clauses placing the preferred canon first.
 

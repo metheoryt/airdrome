@@ -1,5 +1,5 @@
 from .auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
-from .grouping import CanonStrategy, canon_order
+from .grouping import FIELDS, CanonStrategy, canon_order, flag_set
 from .manual import Deduplicator
 from .persistence import (
     apply_manual_overrides,
@@ -11,6 +11,7 @@ from .tui import DeduplicatorUI
 
 
 __all__ = [
+    "FIELDS",
     "AutoDedupResult",
     "CanonStrategy",
     "Deduplicator",
@@ -20,6 +21,7 @@ __all__ = [
     "canon_order",
     "compute_auto_dedup_groups",
     "export_dedup_groups",
+    "flag_set",
     "flatten_canon_chains",
     "import_dedup_groups",
 ]

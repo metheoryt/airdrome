@@ -28,29 +28,38 @@ def compute_auto_dedup_groups(
     """
     tracks = list(session.scalars(select(Track).order_by(*canon_order(strategy))))
 
-    def group_key(t: Track) -> tuple:
-        key: list = [t.title_norm]
+    def is_blank(v: object) -> bool:
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    def key_parts(t: Track) -> list:
+        parts: list = []
         if with_artist:
-            key.append(t.artist_norm)
+            parts.append(t.artist_norm)
         if with_album_artist:
-            key.append(t.album_artist_norm)
+            parts.append(t.album_artist_norm)
         if with_album:
-            key.append(t.album_norm)
+            parts.append(t.album_norm)
         if with_track_n:
-            key.append(t.track_n)
+            parts.append(t.track_n)
         if with_disc_n:
-            key.append(t.disc_n)
+            parts.append(t.disc_n)
         if with_duration:
-            key.append(round(t.duration / 5) * 5 if t.duration is not None else None)
+            parts.append(round(t.duration / 5) * 5 if t.duration is not None else None)
         if with_year:
-            key.append(t.year)
-        return tuple(key)
+            parts.append(t.year)
+        return parts
 
     bucketed: dict[tuple, list[Track]] = {}
     for t in tracks:
-        if not t.title_norm:  # title is the always-required key; skip blanks
+        if is_blank(t.title_norm):  # title is the always-required key
             continue
-        bucketed.setdefault(group_key(t), []).append(t)
+        parts = key_parts(t)
+        # If every selected field is blank, the key degenerates to ~title alone
+        # and would collapse unrelated same-title tracks into one bogus group;
+        # skip this track for this set (a looser set may still surface it).
+        if parts and all(is_blank(p) for p in parts):
+            continue
+        bucketed.setdefault((t.title_norm, *parts), []).append(t)
 
     return [g for g in bucketed.values() if len(g) >= 2]
 
