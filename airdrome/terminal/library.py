@@ -1,9 +1,19 @@
+import json
+from pathlib import Path
+
 import typer
 
 from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.library.organize import organize_library
-from airdrome.normalize.dedup import Deduplicator, DeduplicatorUI, auto_deduplicate
+from airdrome.normalize.dedup import (
+    CanonStrategy,
+    Deduplicator,
+    DeduplicatorUI,
+    auto_deduplicate,
+    export_dedup_groups,
+    import_dedup_groups,
+)
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
 from .state import AppState
@@ -61,6 +71,12 @@ def auto_deduplicate_cli(
             "fields on. Multiple --sets union-find-merge their groups."
         ),
     ),
+    canon: CanonStrategy = typer.Option(
+        CanonStrategy.ADDED,
+        "--canon",
+        "-c",
+        help="Which member of each group becomes canon: 'added' (earliest added) or 'year' (oldest release).",
+    ),
 ):
     """Rebuild Track.canon_id from N flag-sets + stored manual overrides.
 
@@ -71,7 +87,7 @@ def auto_deduplicate_cli(
     state: AppState = ctx.obj
 
     flag_sets = [_parse_set(s) for s in sets] if sets else None
-    result = auto_deduplicate(state.session, flag_sets=flag_sets)
+    result = auto_deduplicate(state.session, flag_sets=flag_sets, strategy=canon)
 
     for group in result.groups:
         canons = [None] + [group[0].id] * (len(group) - 1)
@@ -81,6 +97,38 @@ def auto_deduplicate_cli(
         f"[green]{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
         f" + {result.manual_changes} manual override(s) from stored choices.[/green]"
     )
+
+
+@library_app.command("export-duplicates")
+def export_duplicates_cli(
+    ctx: typer.Context,
+    path: Path = typer.Argument(None, help="Output JSON file (default: DUPLICATES_FILEPATH)."),
+):
+    """Dump confirmed dedup groups from the DB to a portable JSON file."""
+    state: AppState = ctx.obj
+    dest = path or settings.duplicates_filepath
+    data = export_dedup_groups(state.session)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    console.print(f"[green]Exported {len(data)} group(s) to {dest}[/green]")
+
+
+@library_app.command("import-duplicates")
+def import_duplicates_cli(
+    ctx: typer.Context,
+    path: Path = typer.Argument(None, help="Input JSON file (default: DUPLICATES_FILEPATH)."),
+    dry_run: bool = _DRY_RUN,
+):
+    """Load confirmed dedup groups from a JSON file into the DB (idempotent)."""
+    state: AppState = ctx.obj
+    state.dry_run = dry_run
+    src = path or settings.duplicates_filepath
+    if not src.exists():
+        console.print(f"[red]No such file: {src}[/red]")
+        raise typer.Exit(1)
+    data = json.loads(src.read_text(encoding="utf-8"))
+    created, updated = import_dedup_groups(state.session, data)
+    console.print(f"[green]Imported {created} new + {updated} updated group(s) from {src}[/green]")
 
 
 @library_app.command()

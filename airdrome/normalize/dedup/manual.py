@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from airdrome.models import Track
 
-from .grouping import merge_overlapping_groups
+from .grouping import canon_order, merge_overlapping_groups
 from .persistence import load_confirmed_groups, save_confirmed_groups
 
 
@@ -164,12 +164,7 @@ class Deduplicator:
                         # Track.canon_id.is_(None),
                         *[col == val for col, val in col_to_val]
                     )
-                    .order_by(
-                        Track.date_added.asc().nulls_last(),
-                        Track.year.asc().nulls_last(),
-                        Track.loved.desc().nulls_last(),
-                        Track.id,
-                    )
+                    .order_by(*canon_order())
                 )
             )
             groups.append((key, track_group))

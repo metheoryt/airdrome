@@ -4,7 +4,9 @@ from sqlalchemy import select
 from airdrome.models import DedupGroup
 from airdrome.normalize.dedup.persistence import (
     apply_manual_overrides,
+    export_dedup_groups,
     flatten_canon_chains,
+    import_dedup_groups,
     load_confirmed_groups,
     save_confirmed_groups,
 )
@@ -253,6 +255,56 @@ def test_overrides_overrides_existing_canon_id(session):
     session.refresh(t2)
     assert t1.canon_id is None
     assert t2.canon_id == t1.id
+
+
+# --- export / import ---
+
+
+def test_export_then_import_round_trips(session):
+    t1 = make_track(session, "Song", "Artist", "Album A")
+    t2 = make_track(session, "Song", "Artist", "Album B")
+    make_dedup_group(session, [(t1, None), (t2, t1)], label="round-trip")
+
+    data = export_dedup_groups(session)
+    assert data["round-trip"]["members"] == sorted([t1.duplicate_hash, t2.duplicate_hash])
+    by_member = dict(zip(data["round-trip"]["members"], data["round-trip"]["canon_hashes"], strict=True))
+    assert by_member[t1.duplicate_hash] is None
+    assert by_member[t2.duplicate_hash] == t1.duplicate_hash
+
+    # Wipe stored groups, then re-import the dumped data.
+    for g in session.scalars(select(DedupGroup)).all():
+        session.delete(g)
+    session.flush()
+
+    created, updated = import_dedup_groups(session, data)
+    assert (created, updated) == (1, 0)
+    [g] = session.scalars(select(DedupGroup)).all()
+    assert g.label == "round-trip"
+    restored = {m.member_hash: m.canon_hash for m in g.members}
+    assert restored[t1.duplicate_hash] is None
+    assert restored[t2.duplicate_hash] == t1.duplicate_hash
+
+
+def test_import_upserts_existing_group_by_member_multiset(session):
+    t1 = make_track(session, "Song", "Artist", "Album A")
+    t2 = make_track(session, "Song", "Artist", "Album B")
+    make_dedup_group(session, [(t1, None), (t2, t1)], label="original")
+
+    # Same member multiset, but the canon pick is flipped to t2.
+    data = {
+        "flipped": {
+            "members": [t1.duplicate_hash, t2.duplicate_hash],
+            "canon_hashes": [t2.duplicate_hash, None],
+        }
+    }
+    created, updated = import_dedup_groups(session, data)
+
+    assert (created, updated) == (0, 1)  # matched the existing group, not a new one
+    [g] = session.scalars(select(DedupGroup)).all()
+    assert g.label == "flipped"
+    by_member = {m.member_hash: m.canon_hash for m in g.members}
+    assert by_member[t1.duplicate_hash] == t2.duplicate_hash
+    assert by_member[t2.duplicate_hash] is None
 
 
 # --- flatten_canon_chains ---

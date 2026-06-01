@@ -1,12 +1,37 @@
+from enum import StrEnum
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from airdrome.models import Track
 
 
+class CanonStrategy(StrEnum):
+    """Which track in a duplicate group is preferred as canon (group[0])."""
+
+    ADDED = "added"  # the copy added earliest wins
+    YEAR = "year"  # the earliest-released copy wins
+
+
+def canon_order(strategy: CanonStrategy = CanonStrategy.ADDED) -> list:
+    """Return order_by clauses placing the preferred canon first.
+
+    `loved` is intentionally excluded: a group's loved status is derived from
+    the whole group, so it must not decide which member is canon. `id` is the
+    final, stable tiebreaker. The chosen strategy's key leads; the other date
+    key follows as a tiebreaker.
+    """
+    added = Track.date_added.asc().nulls_last()
+    year = Track.year.asc().nulls_last()
+    if strategy is CanonStrategy.YEAR:
+        return [year, added, Track.id]
+    return [added, year, Track.id]
+
+
 def merge_overlapping_groups(
     session: Session,
     groups: list[tuple[str, list[Track]]],
+    strategy: CanonStrategy = CanonStrategy.ADDED,
 ) -> list[tuple[str, list[Track]]]:
     """Union-find over groups: any two sharing a track collapse into one page.
 
@@ -61,16 +86,7 @@ def merge_overlapping_groups(
             continue
         ids = {t.id for idx in member_idxs for t in groups[idx][1] if t.id is not None}
         tracks = list(
-            session.scalars(
-                select(Track)
-                .where(Track.id.in_(ids))
-                .order_by(
-                    Track.date_added.asc().nulls_last(),
-                    Track.year.asc().nulls_last(),
-                    Track.loved.desc().nulls_last(),
-                    Track.id,
-                )
-            )
+            session.scalars(select(Track).where(Track.id.in_(ids)).order_by(*canon_order(strategy)))
         )
         merged.append((key, tracks))
 

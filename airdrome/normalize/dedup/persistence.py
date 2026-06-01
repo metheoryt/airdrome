@@ -22,6 +22,58 @@ def _load_stored_index(session: Session) -> dict[tuple[str, ...], DedupGroup]:
     return index
 
 
+def export_dedup_groups(session: Session) -> dict[str, dict]:
+    """Serialize all stored dedup groups to the portable duplicates.json shape.
+
+    Keyed by group label (decorative only); each value holds the members'
+    `duplicate_hash` values and their parallel `canon_hash` picks. Members are
+    sorted so output is deterministic. Re-import identity is the member-hash
+    multiset, not the label, so a rare duplicate label is disambiguated here
+    purely to avoid dropping a group from the dict.
+    """
+    out: dict[str, dict] = {}
+    for group in session.scalars(select(DedupGroup).order_by(DedupGroup.id)):
+        members = sorted(group.members, key=lambda m: m.member_hash)
+        label = group.label or f"group-{group.id}"
+        key, n = label, 2
+        while key in out:
+            key = f"{label}#{n}"
+            n += 1
+        out[key] = {
+            "members": [m.member_hash for m in members],
+            "canon_hashes": [m.canon_hash for m in members],
+        }
+    return out
+
+
+def import_dedup_groups(session: Session, data: dict[str, dict]) -> tuple[int, int]:
+    """Upsert dedup groups from the portable shape; identity = member-hash multiset.
+
+    An entry whose member-hash multiset already matches a stored group replaces
+    that group's members/canon picks; otherwise a new group is created. Returns
+    (created, updated). Caller is responsible for committing.
+    """
+    index = _load_stored_index(session)
+    created = updated = 0
+    for label, entry in data.items():
+        members, canons = entry["members"], entry["canon_hashes"]
+        key = tuple(sorted(members))
+        existing = index.get(key)
+        group = existing if existing is not None else DedupGroup()
+        group.label = label
+        group.members = [
+            DedupGroupMember(member_hash=m, canon_hash=c) for m, c in zip(members, canons, strict=True)
+        ]
+        session.add(group)
+        if existing is not None:
+            updated += 1
+        else:
+            created += 1
+            index[key] = group  # collapse duplicate entries within the same file
+    session.flush()
+    return created, updated
+
+
 def save_confirmed_groups(session: Session, pages: dict[str, Page]) -> None:
     """Persist confirmed picks to the DB, keyed by member-hash multiset.
 

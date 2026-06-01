@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from airdrome.normalize.dedup.auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
+from airdrome.normalize.dedup.grouping import CanonStrategy
 
 from factories import make_dedup_group, make_track
 
@@ -73,7 +74,7 @@ def test_compute_groups_duration_buckets_separate_when_far_apart(session):
 
 
 def test_compute_groups_sort_order_canon_first(session):
-    # canon priority: date_added asc, year asc, loved desc, id asc
+    # canon priority (ADDED): date_added asc, year asc, id asc
     early = make_track(
         session,
         "S",
@@ -90,6 +91,28 @@ def test_compute_groups_sort_order_canon_first(session):
     [g] = compute_auto_dedup_groups(session)
     assert g[0].id == early.id
     assert g[1].id == late.id
+
+
+def test_canon_strategy_year_prefers_oldest_release(session):
+    # A was added earlier but released later; B was added later but released earlier.
+    a = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC), year=2010)
+    b = make_track(session, "S", "A", date_added=datetime(2024, 1, 1, tzinfo=UTC), year=2000)
+
+    # Exclude year from the bucket key so the differing years still group.
+    no_year = {"with_year": False}
+
+    # ADDED (default): earliest date_added is canon.
+    [g_added] = compute_auto_dedup_groups(session, **no_year)
+    assert g_added[0].id == a.id
+
+    # YEAR: earliest release leads, overriding date_added.
+    [g_year] = compute_auto_dedup_groups(session, strategy=CanonStrategy.YEAR, **no_year)
+    assert g_year[0].id == b.id
+
+    # auto_deduplicate threads the strategy through to canon_id assignment.
+    auto_deduplicate(session, flag_sets=[no_year], strategy=CanonStrategy.YEAR)
+    assert b.canon_id is None
+    assert a.canon_id == b.id
 
 
 # --- auto_deduplicate ---
