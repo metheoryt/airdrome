@@ -158,9 +158,14 @@ tunable via CLI flag.
 `Annotation`, `Playlist`, …). Sync writes to `Annotation` to record play counts and
 ratings per user. WAL is checkpointed before writes.
 
-Track-sync is dedup-group-aware (`sync/tracks.py`): organize leaves exactly one
-`is_main` file per dedup group, owned by whichever member had the best copy (often a
-twin, not the canon). The MediaFile is keyed off that owner, but plays are summed and
+Track-sync is dedup-group-aware (`sync/tracks.py`): exactly one `is_main` file exists
+per dedup group, owned by whichever member had the best copy (often a twin, not the
+canon). Both writers keep this invariant: organize picks it across canon + twins, and
+`recompute_main_files` re-picks it whenever the canon graph changes (end of
+`auto_deduplicate`, interactive `apply_changes`) so a merge never leaves two mains.
+Selection is the shared `TrackGroup.select_main_file` (bitrate, then container). It only
+flips the flag — files already on disk are not relocated (that is the reconcile roadmap).
+The MediaFile is keyed off that owner, but plays are summed and
 rating/loved are aggregated (max rating, any-loved) across the **whole group**
 (`_group_members` = canon + twins) — otherwise plays attached to other members would be
 dropped. Playlist sync resolves canon separately via `_resolve_canonical`.

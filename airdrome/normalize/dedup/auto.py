@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from airdrome.models import Track
 
 from .grouping import CanonStrategy, canon_order, merge_overlapping_groups
-from .persistence import apply_manual_overrides, flatten_canon_chains
+from .persistence import apply_manual_overrides, flatten_canon_chains, recompute_main_files
 
 
 def compute_auto_dedup_groups(
@@ -117,6 +117,8 @@ def auto_deduplicate(
 
     manual_changes = apply_manual_overrides(session)
     flatten_canon_chains(session)
+    # The graph was fully rebuilt; re-pick each group's main across canon + twins.
+    recompute_main_files(session)
 
     return AutoDedupResult(
         groups=out_groups,

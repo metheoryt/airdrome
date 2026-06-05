@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_progress
 from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
-from airdrome.models import Track, TrackFile
+from airdrome.models import Track, TrackFile, TrackGroup
 
 
 class FileOrganizer:
@@ -17,24 +17,8 @@ class FileOrganizer:
 
     @classmethod
     def select_main(cls, files: list[TrackFile]) -> TrackFile:
-        """
-        Select the most suitable file for a track.
-
-        Look for higher kbps.
-        """
-        # for the same bitrate, prefer m4a over mp3
-        ext_priority = {
-            "flac": 3,
-            "m4a": 2,
-            "mp3": 1,
-        }
-
-        selected = sorted(
-            files,
-            key=lambda tf: (tf.bitrate // 1000, ext_priority[tf.source_path.suffix[1:].lower()]),
-            reverse=True,
-        )[0]
-        return selected
+        """Select the most suitable file for a track (highest bitrate, then container)."""
+        return TrackGroup.select_main_file(files)
 
     def split_main_copies(self, files: list[TrackFile]) -> tuple[TrackFile | None, list[TrackFile]]:
         if not len(files):
@@ -50,7 +34,11 @@ class FileOrganizer:
         else:
             main_tf, copies = files[0], []
 
-        main_tf.is_main = True  # mark the main file
+        # Set the flag authoritatively over the group's files so a re-organize
+        # after a dedup change can never leave two files marked main.
+        main_tf.is_main = True
+        for tf in copies:
+            tf.is_main = False
         return main_tf, copies
 
     def transfer(self, src_abs: Path, dst_abs: Path) -> Path | None:

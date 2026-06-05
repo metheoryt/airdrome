@@ -396,6 +396,39 @@ class TrackGroup:
         canon = track.canon or track
         return cls(main=track, canon=canon, members=[canon, *canon.twins])
 
+    @staticmethod
+    def select_main_file(files: list[TrackFile]) -> TrackFile:
+        """Pick the best copy among `files`: highest bitrate, then by container.
+
+        Shared by organize (placing the main vs copies on disk) and dedup's
+        main-file recompute, so both agree on which file leads a group.
+        """
+        # For equal bitrate, prefer the richer container: flac > m4a > mp3.
+        # Unknown extensions sort last (0) instead of raising KeyError.
+        ext_priority = {"flac": 3, "m4a": 2, "mp3": 1}
+        return sorted(
+            files,
+            key=lambda tf: (tf.bitrate // 1000, ext_priority.get(tf.source_path.suffix[1:].lower(), 0)),
+            reverse=True,
+        )[0]
+
+    def recompute_main(self) -> TrackFile | None:
+        """Re-mark the single best file across the whole group as `is_main`.
+
+        Gathers every file of the canon and its twins, picks the best via
+        `select_main_file`, flags exactly that file and clears the rest. Returns
+        the chosen file, or None when the group owns no files. Run after the
+        canon graph changes so a merged or re-rooted group never keeps a stale
+        or duplicate main.
+        """
+        files = [f for m in self.members for f in m.files]
+        if not files:
+            return None
+        best = self.select_main_file(files)
+        for f in files:
+            f.is_main = f is best  # identity, not id: files may be unflushed
+        return best
+
     @property
     def ids(self) -> list[int]:
         return [m.id for m in self.members]

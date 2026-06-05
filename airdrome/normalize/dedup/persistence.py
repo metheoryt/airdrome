@@ -6,7 +6,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased
 
 from airdrome.console import console
-from airdrome.models import DedupGroup, DedupGroupMember, Track
+from airdrome.models import DedupGroup, DedupGroupMember, Track, TrackGroup
 
 
 if TYPE_CHECKING:
@@ -222,4 +222,29 @@ def flatten_canon_chains(session: Session) -> int:
         .where(canon.canon_id.is_not(None))
     )
     assert remaining == 0, f"canon chains remain after flatten: {remaining}"
+    return changed
+
+
+def recompute_main_files(session: Session) -> int:
+    """Re-pick the single `is_main` file for every dedup group.
+
+    A group's main file must be the best copy across the canon and all its
+    twins; when the canon graph changes (auto or interactive dedup) a merge can
+    leave two already-organized files marked main, or the best copy can land on
+    a member that no longer owns the flag. Walk every canon root (canon_id IS
+    NULL — true canons and singletons alike) and let `TrackGroup.recompute_main`
+    re-mark exactly one file per group. Returns the number of groups whose main
+    file changed; caller commits. (This only updates the flag — files already on
+    disk are not relocated; physical re-placement is the reconcile roadmap.)
+    """
+    session.flush()  # make pending canon_id writes visible to the root query
+    changed = 0
+    for root in session.scalars(select(Track).where(Track.canon_id.is_(None))):
+        group = TrackGroup.of(root)
+        # Compare the full set so a cleared stale second main also counts.
+        before = {f.id for m in group.members for f in m.files if f.is_main}
+        chosen = group.recompute_main()
+        if chosen is not None and before != {chosen.id}:
+            changed += 1
+    session.flush()
     return changed

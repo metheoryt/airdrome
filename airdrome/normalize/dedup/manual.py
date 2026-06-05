@@ -7,7 +7,7 @@ from airdrome.models import Track
 
 from .auto import compute_auto_dedup_groups
 from .grouping import CanonStrategy, flag_set, merge_overlapping_groups
-from .persistence import load_confirmed_groups, save_confirmed_groups
+from .persistence import load_confirmed_groups, recompute_main_files, save_confirmed_groups
 
 
 # Loose defaults for human review: three single-field sets (artist | album_artist
@@ -200,6 +200,9 @@ class Deduplicator:
                     self.s.add(track)
                     changed += 1
         save_confirmed_groups(self.s, self.state.pages)
+        if changed:
+            # Canon picks moved; re-pick each group's main across canon + twins.
+            recompute_main_files(self.s)
         return changed
 
     def run(self) -> None:

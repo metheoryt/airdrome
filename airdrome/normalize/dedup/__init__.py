@@ -6,6 +6,7 @@ from .persistence import (
     export_dedup_groups,
     flatten_canon_chains,
     import_dedup_groups,
+    recompute_main_files,
 )
 from .tui import DeduplicatorUI
 
@@ -24,4 +25,5 @@ __all__ = [
     "flag_set",
     "flatten_canon_chains",
     "import_dedup_groups",
+    "recompute_main_files",
 ]
