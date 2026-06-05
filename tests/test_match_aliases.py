@@ -51,19 +51,6 @@ def test_already_matched_aliases_are_skipped(session):
     assert unmatched == 0
 
 
-def test_reset_clears_existing_matches(session):
-    track = _make_track(session, "Hotel California", "Eagles")
-    alias = _make_alias(session, "Hotel California", "Eagles")
-    alias.track = track
-    session.flush()
-
-    matched, unmatched = do_match_aliases(session, reset=True)
-
-    # after reset, all aliases are unmatched first, then re-matched
-    assert matched == 1
-    assert unmatched == 0
-
-
 def test_returns_counts(session):
     _make_track(session, "Song A", "Artist A")
     _make_track(session, "Song B", "Artist B")

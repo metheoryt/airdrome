@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
@@ -354,13 +354,8 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
 # ── Orchestration ───────────────────────────────────────────────────────────────
 
 
-def do_unify(s: Session, reset_playlists: bool = False):
+def do_unify(s: Session):
     """Run the three unify stages and print a per-stage summary."""
-    if reset_playlists:
-        s.execute(delete(Playlist))
-        s.flush()
-        console.print("[yellow]Canonical playlists reset[/yellow]")
-
     track_count = s.scalars(
         select(func.count()).select_from(SourceTrack).where(SourceTrack.track_id.is_(None))
     ).one()

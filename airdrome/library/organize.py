@@ -2,7 +2,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_progress
@@ -128,16 +128,12 @@ class FileOrganizer:
             self.transfer_file(copy_tf, dst_rel=Path(COPIES_SUBDIR) / MUSIC_SUBDIR / dst_rel)
         return new_path
 
-    def organize(self, s: Session, reset: bool = False, _on_item: Callable[[int], None] | None = None) -> int:
+    def organize(self, s: Session, _on_item: Callable[[int], None] | None = None) -> int:
         """
         Core organize logic. Returns number of tracks transferred.
 
         Testable directly — no session creation, no progress output.
         """
-        if reset:
-            s.execute(update(TrackFile).values(library_path=None, is_main=False))
-            s.flush()
-
         pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
         i = 0
         for track in s.scalars(pending_stmt.order_by(Track.artist_norm, Track.album_norm, Track.title_norm)):
@@ -157,22 +153,18 @@ def organize_library(
     s: Session,
     dst_dir: Path,
     copy: bool = False,
-    reset: bool = False,
 ):
     mover = FileOrganizer(dst_dir=dst_dir, copy=copy)
     verb = "copied" if copy else "moved"
 
-    if reset:
-        console.print("[yellow]library paths reset[/yellow]")
-
     pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
     total = s.scalars(select(func.count()).select_from(pending_stmt.subquery())).one()
-    if not total and not reset:
+    if not total:
         console.print("[dim]Nothing to do.[/dim]")
         return
 
     with make_progress() as progress:
         task = progress.add_task(f"Organizing library ({verb})", total=total)
-        i = mover.organize(s, reset=reset, _on_item=lambda _: progress.advance(task))
+        i = mover.organize(s, _on_item=lambda _: progress.advance(task))
 
     console.print(f"[green]{i} tracks {verb}[/green]")
