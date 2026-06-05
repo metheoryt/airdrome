@@ -108,6 +108,12 @@ class Album(NVSQLModel):
     media_files: Mapped[list[MediaFile]] = relationship(back_populates="album_model")
 
 
+class Artist(NVSQLModel):
+    __tablename__ = "artist"
+    id: Mapped[str] = mapped_column(primary_key=True, default=generate_id)
+    name: Mapped[str] = mapped_column(default="")
+
+
 class AlbumArtist(NVSQLModel):
     __tablename__ = "album_artists"
     album_id: Mapped[str] = mapped_column(ForeignKey("album.id"), primary_key=True)

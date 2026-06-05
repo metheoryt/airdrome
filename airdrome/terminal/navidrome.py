@@ -58,14 +58,13 @@ def sync_playlists_cmd(ctx: typer.Context, yes: bool = _YES_OPT):
 @navidrome_app.command("push")
 def push_tracks(
     ctx: typer.Context,
-    reset: bool = typer.Option(False, "--reset", "-r"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped confirmation"),
 ):
-    """Push play counts and ratings for NAVIDROME_USER into Navidrome (`--reset` rewrites all)."""
+    """Push play counts and ratings for NAVIDROME_USER into Navidrome."""
     username = _require_user()
     _guard_navidrome_stopped(yes)
     checkpoint_wal()
     console.print("[bold green]Pushing tracks and scrobbles to Navidrome[/bold green]")
     state: AppState = ctx.obj
-    sync_tracks_plays_to_navi(state.session, username, reset)
+    sync_tracks_plays_to_navi(state.session, username)
     console.print("[bold green]Done[/bold green]")

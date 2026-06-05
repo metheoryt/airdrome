@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from rich.progress import TextColumn
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_progress
@@ -11,19 +11,36 @@ from airdrome.models import Track, TrackFile, TrackPlay
 from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, get_nv_engine
 
 
-def sync_tracks_plays_to_navi(s: Session, username: str, reset: bool):
+def sync_tracks_plays_to_navi(s: Session, username: str):
     with Session(get_nv_engine()) as nvs:
-        TrackSyncer(username, reset).sync_all(s, nvs)
+        TrackSyncer(username).sync_all(s, nvs)
 
 
 def _normalize_dates(dts: list[datetime | None]) -> list[datetime]:
     return [v.replace(tzinfo=UTC) for v in dts if v]
 
 
+def _group_members(track: Track) -> list[Track]:
+    """Return every Track in `track`'s dedup group: the canon plus all its twins.
+
+    organize() combines a dedup group's files and marks the single best copy as
+    `is_main`; that file may belong to any member, so plays and ratings must be
+    aggregated across the whole group, not just the main-file owner. canon_id is
+    terminal (flatten_canon_chains), so a single hop reaches the root.
+    """
+    root = track.canon or track
+    return [root, *root.twins]
+
+
+def _max_rating(members: list[Track], attr: str) -> int | None:
+    """Highest non-zero rating for `attr` across the group, or None if unrated."""
+    ratings = [r for m in members if (r := getattr(m, attr))]
+    return max(ratings) if ratings else None
+
+
 class TrackSyncer:
-    def __init__(self, username: str, reset: bool):
+    def __init__(self, username: str):
         self.username = username
-        self.reset = reset
         self._user: User | None = None
         self._item_play_count: dict[str, int] = defaultdict(int)
         self._item_latest_play: dict[str, datetime] = {}
@@ -66,11 +83,11 @@ class TrackSyncer:
             ann.play_date = self._item_latest_play[ann.item_id]
 
     def update_scrobbles(
-        self, mf: MediaFile, track: Track, s: Session, nvs: Session
+        self, mf: MediaFile, group_ids: list[int], s: Session, nvs: Session
     ) -> tuple[int, datetime | None, datetime | None]:
         user = self.get_user(nvs)
 
-        for play in s.scalars(select(TrackPlay).where(TrackPlay.track_id == track.id)):
+        for play in s.scalars(select(TrackPlay).where(TrackPlay.track_id.in_(group_ids))):
             submission_time = int(play.played_at.timestamp())
             exists = nvs.scalars(
                 select(Scrobbles).where(
@@ -97,13 +114,16 @@ class TrackSyncer:
     def update_media_file(
         self,
         mf: MediaFile,
-        track: Track,
+        members: list[Track],
         nvs: Session,
         play_count: int,
         latest_play: datetime | None,
         first_play: datetime | None,
     ):
-        date_candidates = [mf.created_at, first_play, track.date_added]
+        # The group has existed since its earliest member was added; use that as
+        # the representative "added" date for created_at and rating timestamps.
+        added = min(m.date_added for m in members)
+        date_candidates = [mf.created_at, first_play, added]
         valid_dates = _normalize_dates(date_candidates)
         if valid_dates:
             earliest = min(valid_dates)
@@ -114,23 +134,25 @@ class TrackSyncer:
         track_ann.play_count = play_count
         track_ann.play_date = latest_play
 
-        if track.rating:
-            track_ann.rating = track.rating
-            track_ann.rated_at = track.date_added
-        if track.loved:
+        rating = _max_rating(members, "rating")
+        if rating:
+            track_ann.rating = rating
+            track_ann.rated_at = added
+        if any(m.loved for m in members):
             track_ann.starred = True
-            track_ann.starred_at = track.date_added
+            track_ann.starred_at = added
 
     def update_album_annotation(
         self,
         mf: MediaFile,
-        track: Track,
+        members: list[Track],
         nvs: Session,
         play_count: int,
         latest_play: datetime | None,
         first_play: datetime | None,
     ):
-        date_candidates = [mf.album_model.created_at, first_play, track.date_added]
+        added = min(m.date_added for m in members)
+        date_candidates = [mf.album_model.created_at, first_play, added]
         valid_dates = _normalize_dates(date_candidates)
         if valid_dates:
             mf.album_model.created_at = min(valid_dates)
@@ -138,12 +160,13 @@ class TrackSyncer:
         album_ann, _ = self._goc_annotation(mf.album_id, Annotation.ItemType.ALBUM, nvs)
         self._add_play_count_date(album_ann, play_count, latest_play)
 
-        if not album_ann.rating and track.album_rating:
-            album_ann.rating = track.album_rating
-            album_ann.rated_at = track.date_added
-        if not album_ann.starred and track.album_loved:
+        album_rating = _max_rating(members, "album_rating")
+        if not album_ann.rating and album_rating:
+            album_ann.rating = album_rating
+            album_ann.rated_at = added
+        if not album_ann.starred and any(m.album_loved for m in members):
             album_ann.starred = True
-            album_ann.rated_at = track.date_added
+            album_ann.rated_at = added
 
     def update_artist_annotations(
         self, mf: MediaFile, nvs: Session, play_count: int, latest_play: datetime | None
@@ -157,30 +180,22 @@ class TrackSyncer:
             self._add_play_count_date(artist_ann, play_count, latest_play)
 
     def update_track(self, track: Track, s: Session, nvs: Session) -> int:
+        # `track` owns the organized main file; the MediaFile is keyed off it, but
+        # plays and ratings are aggregated across its whole dedup group.
         mf = self._get_mediafile(track, nvs)
         if not mf:
             return 0
 
-        play_count, latest_play, first_play = self.update_scrobbles(mf, track, s, nvs)
-        self.update_media_file(mf, track, nvs, play_count, latest_play, first_play)
-        self.update_album_annotation(mf, track, nvs, play_count, latest_play, first_play)
+        members = _group_members(track)
+        group_ids = [m.id for m in members]
+        play_count, latest_play, first_play = self.update_scrobbles(mf, group_ids, s, nvs)
+        self.update_media_file(mf, members, nvs, play_count, latest_play, first_play)
+        self.update_album_annotation(mf, members, nvs, play_count, latest_play, first_play)
         self.update_artist_annotations(mf, nvs, play_count, latest_play)
         nvs.flush()
         return play_count
 
     def sync_all(self, s: Session, nvs: Session):
-        if self.reset:
-            latest_play = s.scalars(select(TrackPlay).order_by(TrackPlay.played_at.desc())).first()
-            if latest_play:
-                res = nvs.execute(
-                    delete(Scrobbles).where(Scrobbles.submission_time < latest_play.played_at.timestamp())
-                )
-                nvs.commit()
-                console.print(
-                    f"[yellow]deleted {res.rowcount} scrobbles older than "
-                    f"{latest_play.played_at.isoformat()}[/yellow]"
-                )
-
         stmt = (
             select(Track)
             .join(TrackFile, (TrackFile.track_id == Track.id) & (TrackFile.is_main.is_(True)))
