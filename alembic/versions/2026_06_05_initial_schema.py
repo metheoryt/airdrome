@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: a13ba8ad6fb7
+Revision ID: bc7f40a34db0
 Revises:
-Create Date: 2026-05-31 15:21:48.206718
+Create Date: 2026-06-05 20:21:58.744478
 
 """
 
@@ -16,7 +16,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = "a13ba8ad6fb7"
+revision: str = "bc7f40a34db0"
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -56,7 +56,7 @@ def upgrade() -> None:
         sa.Column("date_added", sa.DateTime(timezone=True), nullable=True),
         sa.Column("date_modified", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("name"),
+        sa.UniqueConstraint("platform", "source_id"),
     )
     op.create_table(
         "source_playlist",

@@ -214,15 +214,91 @@ def _gather_source_playlists(s: Session) -> list[_SourcePlaylist]:
     return result
 
 
-def unify_source_playlists(
-    s: Session, progress: Progress | None = None, task: TaskID | None = None
-) -> tuple[int, int]:
-    """Create deduplicated canonical Playlists from source playlists.
+def _append_tracks(s: Session, canonical: Playlist, existing_ids: set[int], track_ids: list[int]) -> int:
+    """Append ``track_ids`` not already in ``existing_ids`` after the canonical's last position.
 
-    Processes newest-to-oldest by date_modified; same-name playlists merge (unique tracks
-    appended); playlists whose track set duplicates an existing canonical are skipped.
+    Mutates ``existing_ids`` in place. Returns the number of tracks linked. Shared by both unify
+    modes — the merge accumulator and the per-source no-merge path link tracks the same way.
+    """
+    max_pos_row = s.scalars(
+        select(PlaylistTrack)
+        .where(PlaylistTrack.playlist_id == canonical.id)
+        .order_by(PlaylistTrack.position.desc())
+    ).first()
+    next_pos = (max_pos_row.position + 1) if max_pos_row else 1
+
+    linked = 0
+    for track_id in track_ids:
+        if track_id not in existing_ids:
+            s.add(PlaylistTrack(playlist_id=canonical.id, track_id=track_id, position=next_pos))
+            existing_ids.add(track_id)
+            next_pos += 1
+            linked += 1
+    return linked
+
+
+def _unify_per_source(
+    s: Session, sources: list[_SourcePlaylist], progress: Progress | None, task: TaskID | None
+) -> tuple[int, int]:
+    """No-merge mode: each source playlist becomes its own canonical, keyed on (platform, source_id).
+
+    Same-name playlists from different sources coexist; re-running only appends missing tracks.
     Returns ``(playlists_created, tracks_linked)``.
     """
+    playlists_created = tracks_linked = 0
+    for src in sources:
+        if not src.track_ids:
+            if progress is not None:
+                progress.update(task, advance=1)
+            continue
+
+        canonical, created = Playlist.get_or_create(
+            s,
+            defaults={
+                "name": src.name,
+                "description": src.description,
+                "date_added": src.date_added,
+                "date_modified": src.date_modified,
+            },
+            platform=src.platform,
+            source_id=src.source_id,
+        )
+        playlists_created += created
+        # On re-run the canonical already exists; skip track_ids it already holds.
+        existing_ids = {
+            pt.track_id
+            for pt in s.scalars(select(PlaylistTrack).where(PlaylistTrack.playlist_id == canonical.id))
+        }
+        tracks_linked += _append_tracks(s, canonical, existing_ids, src.track_ids)
+
+        s.flush()
+        if progress is not None:
+            progress.update(task, advance=1, pl_created=playlists_created, tr_linked=tracks_linked)
+
+    return playlists_created, tracks_linked
+
+
+def unify_source_playlists(
+    s: Session,
+    progress: Progress | None = None,
+    task: TaskID | None = None,
+    *,
+    merge_by_name: bool = False,
+) -> tuple[int, int]:
+    """Create canonical Playlists from source playlists. Returns ``(playlists_created, tracks_linked)``.
+
+    Default (``merge_by_name=False``): each source playlist becomes its own canonical keyed on
+    (platform, source_id); same-name playlists coexist.
+
+    ``merge_by_name=True``: processes newest-to-oldest by date_modified and collapses same-name
+    playlists into one canonical (the newest anchors; unique tracks from older ones appended);
+    playlists whose track set duplicates an existing canonical are skipped.
+    """
+    sources = _gather_source_playlists(s)
+
+    if not merge_by_name:
+        return _unify_per_source(s, sources, progress, task)
+
     existing = list(s.scalars(select(Playlist)))
     name_to_canonical: dict[str, Playlist] = {pl.name: pl for pl in existing}
 
@@ -234,7 +310,6 @@ def unify_source_playlists(
         for pl in existing
     }
 
-    sources = _gather_source_playlists(s)
     # Newest date_modified first; nulls sorted last
     sources.sort(
         key=lambda p: (p.date_modified is None, -p.date_modified.timestamp() if p.date_modified else 0)
@@ -250,21 +325,7 @@ def unify_source_playlists(
 
         if src.name in name_to_canonical:
             canonical = name_to_canonical[src.name]
-            existing_ids = canonical_track_ids[canonical.id]
-
-            max_pos_row = s.scalars(
-                select(PlaylistTrack)
-                .where(PlaylistTrack.playlist_id == canonical.id)
-                .order_by(PlaylistTrack.position.desc())
-            ).first()
-            next_pos = (max_pos_row.position + 1) if max_pos_row else 1
-
-            for track_id in src.track_ids:
-                if track_id not in existing_ids:
-                    s.add(PlaylistTrack(playlist_id=canonical.id, track_id=track_id, position=next_pos))
-                    existing_ids.add(track_id)
-                    next_pos += 1
-                    tracks_linked += 1
+            tracks_linked += _append_tracks(s, canonical, canonical_track_ids[canonical.id], src.track_ids)
 
         else:
             src_track_set = frozenset(src.track_ids)
@@ -354,8 +415,12 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
 # ── Orchestration ───────────────────────────────────────────────────────────────
 
 
-def do_unify(s: Session):
-    """Run the three unify stages and print a per-stage summary."""
+def do_unify(s: Session, *, merge_playlists: bool = False):
+    """Run the three unify stages and print a per-stage summary.
+
+    ``merge_playlists`` collapses same-name source playlists into one canonical (see
+    ``unify_source_playlists``); off by default, so each source playlist stays its own.
+    """
     track_count = s.scalars(
         select(func.count()).select_from(SourceTrack).where(SourceTrack.track_id.is_(None))
     ).one()
@@ -378,7 +443,7 @@ def do_unify(s: Session):
         "[magenta]{task.fields[pl_created]} playlists[/magenta]  [blue]{task.fields[tr_linked]} linked[/blue]"
     ) as progress:
         task = progress.add_task("Playlists", total=pl_count, pl_created=0, tr_linked=0)
-        pl_created, tr_linked = unify_source_playlists(s, progress, task)
+        pl_created, tr_linked = unify_source_playlists(s, progress, task, merge_by_name=merge_playlists)
 
     with _progress(
         "[green]{task.fields[created]} new[/green]  [yellow]{task.fields[updated]} updated[/yellow]"

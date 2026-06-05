@@ -551,7 +551,10 @@ class TrackPlay(Base):
 
 class Playlist(Base):
     __tablename__ = "playlist"
-    __table_args__ = (UniqueConstraint("name"),)
+    # Keyed on source identity, not name: two same-name playlists from different sources must
+    # be able to coexist (name-merge is now opt-in, see unify_source_playlists). A merged
+    # canonical keeps its anchor's (platform, source_id), so this stays unique in merge mode too.
+    __table_args__ = (UniqueConstraint("platform", "source_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]

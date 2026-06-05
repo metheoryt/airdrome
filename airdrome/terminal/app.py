@@ -119,6 +119,12 @@ def import_(
 def resolve(
     ctx: typer.Context,
     threshold: float = typer.Option(0.4, "--threshold", "-t", help="Fuzzy alias-match similarity threshold."),
+    merge_playlists: bool = typer.Option(
+        False,
+        "--merge-playlists",
+        "-m",
+        help="Merge same-name playlists into one canonical (newest anchors, duplicate tracks skipped).",
+    ),
     dry_run: bool = _DRY_RUN,
 ):
     """Build the canonical graph from everything imported.
@@ -130,7 +136,7 @@ def resolve(
     """
     state: AppState = ctx.obj
     state.dry_run = dry_run
-    do_unify(state.session)
+    do_unify(state.session, merge_playlists=merge_playlists)
     augment_aliases(state.session)
     match_aliases(state.session, threshold=threshold)
     copy_plays(state.session)

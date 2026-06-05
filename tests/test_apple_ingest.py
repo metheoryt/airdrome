@@ -288,3 +288,61 @@ def test_unify_playlists_idempotent(session):
     assert first_pl == 1
     assert second_pl == 0
     assert second_tr == 0
+
+
+def _canonical_track_id(session, name: str) -> int:
+    return session.scalars(select(Track).where(Track.title == name)).one().id
+
+
+def test_unify_playlists_default_keeps_same_name_separate(session):
+    a = _track_data(name="A")
+    b = _track_data(name="B")
+    do_import_tracks(session, {str(a["Track ID"]): a, str(b["Track ID"]): b})
+    unify_source_tracks(session)
+
+    # Two distinct source playlists (distinct persistent IDs) sharing a name.
+    do_import_playlists(
+        session,
+        [
+            _playlist_data(name="Dup", track_ids=[a["Track ID"]]),
+            _playlist_data(name="Dup", track_ids=[b["Track ID"]]),
+        ],
+    )
+
+    pl_created, _ = unify_source_playlists(session)  # default: no name merge
+
+    assert pl_created == 2
+    canonicals = session.scalars(select(Playlist).where(Playlist.name == "Dup")).all()
+    assert len(canonicals) == 2
+    # Each canonical carries only its own source's track.
+    members = {frozenset(pt.track_id for pt in pl.tracks) for pl in canonicals}
+    assert members == {
+        frozenset({_canonical_track_id(session, "A")}),
+        frozenset({_canonical_track_id(session, "B")}),
+    }
+
+
+def test_unify_playlists_merge_by_name_collapses(session):
+    a = _track_data(name="A")
+    b = _track_data(name="B")
+    do_import_tracks(session, {str(a["Track ID"]): a, str(b["Track ID"]): b})
+    unify_source_tracks(session)
+
+    # Overlapping membership: the shared track B must not be linked twice.
+    do_import_playlists(
+        session,
+        [
+            _playlist_data(name="Dup", track_ids=[a["Track ID"], b["Track ID"]]),
+            _playlist_data(name="Dup", track_ids=[b["Track ID"]]),
+        ],
+    )
+
+    pl_created, tracks_linked = unify_source_playlists(session, merge_by_name=True)
+
+    assert pl_created == 1
+    assert tracks_linked == 2  # A and B once each, no duplicate B
+    canonical = session.scalars(select(Playlist).where(Playlist.name == "Dup")).one()
+    assert {pt.track_id for pt in canonical.tracks} == {
+        _canonical_track_id(session, "A"),
+        _canonical_track_id(session, "B"),
+    }
