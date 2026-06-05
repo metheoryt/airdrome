@@ -55,9 +55,9 @@ Four core verbs plus two maintenance groups. End-to-end flow:
 - **`airdrome resolve`** — build the canonical graph from *everything imported*
   (run once, after all imports). Runs in dependency order: `do_unify` →
   `augment_aliases` → `match_aliases` → `copy_plays`. Idempotent; re-running only
-  fills gaps. Flags: `--threshold`/`-t` (default 0.4), `--reset`/`-r`, `--dry-run`.
+  fills gaps. Flags: `--threshold`/`-t` (default 0.4), `--dry-run`.
 - **`airdrome library`**
-  - `organize` — move (default) or `--copy` bound files into the structured library; `--reset`.
+  - `organize` — move (default) or `--copy` bound files into the structured library.
   - `deduplicate` — interactive TUI to review duplicate groups and pick canons.
     Defaults to three loose single-field sets (artist / album_artist / album).
   - `auto-deduplicate` — batch rebuild of `Track.canon_id` from N flag-sets +
@@ -72,7 +72,7 @@ Four core verbs plus two maintenance groups. End-to-end flow:
   `--canon`/`-c` (`added` = earliest added, `year` = oldest release) flags.
 - **`airdrome navidrome`** (both commands require Navidrome stopped; they guard on
   the port and prompt unless `--yes`/`-y`)
-  - `push` — push play counts + ratings for `NAVIDROME_USER`; `--reset` rewrites all.
+  - `push` — push play counts + ratings for `NAVIDROME_USER`.
   - `playlists` — 3-way-merge every playlist between Airdrome and Navidrome.
 
 ## Architecture
@@ -158,6 +158,13 @@ tunable via CLI flag.
 `Annotation`, `Playlist`, …). Sync writes to `Annotation` to record play counts and
 ratings per user. WAL is checkpointed before writes.
 
+Track-sync is dedup-group-aware (`sync/tracks.py`): organize leaves exactly one
+`is_main` file per dedup group, owned by whichever member had the best copy (often a
+twin, not the canon). The MediaFile is keyed off that owner, but plays are summed and
+rating/loved are aggregated (max rating, any-loved) across the **whole group**
+(`_group_members` = canon + twins) — otherwise plays attached to other members would be
+dropped. Playlist sync resolves canon separately via `_resolve_canonical`.
+
 ### Migrations
 
 No production DB exists — recreate on schema change. All prior migrations are
@@ -237,8 +244,8 @@ Settled decisions:
 - Source-of-truth is **both** copy and move, configurable; reconcile must work either way.
 - Idempotent/self-repairing organize via a per-file location state machine: compute
   `desired` from Track metadata + role (`is_main`); move from `absolute_path` (current
-  location), not always `source_path` — this fixes the move-mode `--reset` crash and
-  enables self-heal. If a file is nowhere, **report missing — do not fabricate**.
+  location), not always `source_path` — this enables re-organizing already-placed files
+  and self-heal. If a file is nowhere, **report missing — do not fabricate**.
   Self-heal (re-copy from source) only works in copy mode.
 - Optional `copies_dir: Path | None` setting (default `library_dir/Copies`).
 - Quality upgrades fall out for free: a higher-bitrate drop with identical tags hits

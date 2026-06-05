@@ -119,9 +119,6 @@ def import_(
 def resolve(
     ctx: typer.Context,
     threshold: float = typer.Option(0.4, "--threshold", "-t", help="Fuzzy alias-match similarity threshold."),
-    reset: bool = typer.Option(
-        False, "--reset", "-r", help="Rebuild canonical playlists and re-match scrobbles from scratch."
-    ),
     dry_run: bool = _DRY_RUN,
 ):
     """Build the canonical graph from everything imported.
@@ -133,10 +130,10 @@ def resolve(
     """
     state: AppState = ctx.obj
     state.dry_run = dry_run
-    do_unify(state.session, reset_playlists=reset)
+    do_unify(state.session)
     augment_aliases(state.session)
-    match_aliases(state.session, reset=reset, threshold=threshold)
-    copy_plays(state.session, reset=reset)
+    match_aliases(state.session, threshold=threshold)
+    copy_plays(state.session)
     console.print("[bold green]Resolve complete[/bold green]")
 
 

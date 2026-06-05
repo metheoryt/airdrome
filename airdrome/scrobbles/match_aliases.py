@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console
@@ -11,7 +11,6 @@ from airdrome.models import TrackAlias
 
 def do_match_aliases(
     s: Session,
-    reset: bool = False,
     threshold: float = 0.4,
     on_progress: Callable[[int, int], None] | None = None,
     log: Callable[[str], None] | None = None,
@@ -22,10 +21,6 @@ def do_match_aliases(
     on_progress(matched, unmatched) is called after each alias is processed.
     Testable directly — no session creation, no progress output.
     """
-    if reset:
-        s.execute(update(TrackAlias).values(track_id=None))
-        s.flush()
-
     aliases = s.scalars(select(TrackAlias).where(TrackAlias.track_id.is_(None))).all()
     matched = unmatched = 0
 
@@ -48,7 +43,7 @@ def do_match_aliases(
     return matched, unmatched
 
 
-def match_aliases(s: Session, reset: bool = False, threshold: float = 0.4):
+def match_aliases(s: Session, threshold: float = 0.4):
     progress = Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -57,13 +52,7 @@ def match_aliases(s: Session, reset: bool = False, threshold: float = 0.4):
         TimeElapsedColumn(),
     )
 
-    if reset:
-        console.print("[yellow]dropping all alias-track links[/yellow]")
-
-    count_stmt = select(func.count(TrackAlias.id))
-    if not reset:
-        count_stmt = count_stmt.where(TrackAlias.track_id.is_(None))
-    total = s.scalars(count_stmt).one()
+    total = s.scalars(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_(None))).one()
 
     with progress:
         task = progress.add_task(f"Matching {total} aliases", total=total, match=0, mismatch=0)
@@ -73,7 +62,6 @@ def match_aliases(s: Session, reset: bool = False, threshold: float = 0.4):
 
         matched, unmatched = do_match_aliases(
             s,
-            reset=reset,
             threshold=threshold,
             on_progress=_on_progress,
             log=progress.console.print,

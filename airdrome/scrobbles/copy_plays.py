@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console
@@ -10,7 +10,6 @@ from airdrome.models import TrackAlias, TrackPlay
 
 def do_copy_plays(
     s: Session,
-    reset: bool = False,
     on_progress: Callable[[int], None] | None = None,
 ) -> int:
     """
@@ -19,10 +18,6 @@ def do_copy_plays(
     on_progress(aliases_processed) is called after each alias is processed.
     Testable directly — no session creation, no progress output.
     """
-    if reset:
-        s.execute(delete(TrackPlay).where(TrackPlay.source_scrobble_id.is_not(None)))
-        s.flush()
-
     aliases = s.scalars(select(TrackAlias).where(TrackAlias.track_id.is_not(None))).all()
     total = 0
 
@@ -53,16 +48,13 @@ def do_copy_plays(
     return total
 
 
-def copy_plays(s: Session, reset: bool = False):
+def copy_plays(s: Session):
     progress = Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TextColumn("{task.completed}/{task.total} aliases  "),
         TimeElapsedColumn(),
     )
-
-    if reset:
-        console.print("[yellow]dropping all scrobble-derived plays[/yellow]")
 
     total = s.scalars(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_not(None))).one()
 
@@ -72,6 +64,6 @@ def copy_plays(s: Session, reset: bool = False):
         def _on_progress(aliases_done: int):
             progress.update(task, completed=aliases_done)
 
-        plays = do_copy_plays(s, reset=reset, on_progress=_on_progress)
+        plays = do_copy_plays(s, on_progress=_on_progress)
 
     console.print(f"[green]plays copied: {plays}[/green]")

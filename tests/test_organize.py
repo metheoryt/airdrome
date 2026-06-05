@@ -1,4 +1,3 @@
-import shutil
 from pathlib import Path
 
 from airdrome.library.organize import FileOrganizer
@@ -67,27 +66,6 @@ def test_organize_skips_already_organized(session, tmp_path):
 
     assert n_first == 1
     assert n_second == 0  # already organized, nothing to do
-
-
-def test_organize_reset_re_organizes(session, tmp_path):
-    src_dir = tmp_path / "source"
-    dst_dir = tmp_path / "library"
-    src_dir.mkdir()
-    dst_dir.mkdir()
-
-    _track, tf = _make_track_with_file(session, src_dir, "Test Song", ext="mp3")
-    organizer = FileOrganizer(dst_dir=dst_dir)
-    organizer.organize(session)
-
-    session.refresh(tf)
-    old_path = tf.library_path
-
-    # move the file back to source for re-organization
-    shutil.move(dst_dir / old_path, tf.source_path)
-
-    n = organizer.organize(session, reset=True)
-
-    assert n == 1
 
 
 def test_on_item_callback_called(session, tmp_path):

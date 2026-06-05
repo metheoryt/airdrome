@@ -30,12 +30,11 @@ _DRY_RUN = typer.Option(False, "--dry-run", "-n", help="Roll back all changes af
 def library_organize(
     ctx: typer.Context,
     copy: bool = typer.Option(False, "--copy", "-c"),
-    reset: bool = typer.Option(False, "--reset", "-r"),
     dry_run: bool = _DRY_RUN,
 ):
     state: AppState = ctx.obj
     state.dry_run = dry_run
-    organize_library(state.session, dst_dir=settings.library_dir, copy=copy, reset=reset)
+    organize_library(state.session, dst_dir=settings.library_dir, copy=copy)
 
 
 def _parse_set(spec: str) -> dict[str, bool]:
