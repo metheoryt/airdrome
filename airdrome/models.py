@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -233,6 +234,11 @@ class Track(Base):
         return next((t for t in self.files if t.is_main), None)
 
     @property
+    def group(self) -> TrackGroup:
+        """This track's dedup group, viewed through it as the main-file owner."""
+        return TrackGroup.of(self)
+
+    @property
     def path_artist(self):
         if self.compilation:
             return "Compilations"
@@ -368,6 +374,61 @@ class TrackFile(Base):
         self.date = get("TDRC", "TDOR", "©day")
         self.duration = audio.info.length
         self.bitrate = getattr(audio.info, "bitrate", 0)
+
+
+@dataclass(frozen=True)
+class TrackGroup:
+    """A dedup group viewed through its organized main file.
+
+    `main` owns the `is_main` TrackFile (the entry point when syncing) and need
+    not be the canon; `canon` is the group root. Plays and ratings aggregate
+    across `members` (canon + twins), while the synced MediaFile is keyed off
+    `main`. canon_id is terminal (flatten_canon_chains), so one hop reaches the
+    root.
+    """
+
+    main: Track  # owner of the is_main file
+    canon: Track  # group root
+    members: list[Track]  # [canon, *canon.twins]
+
+    @classmethod
+    def of(cls, track: Track) -> TrackGroup:
+        canon = track.canon or track
+        return cls(main=track, canon=canon, members=[canon, *canon.twins])
+
+    @property
+    def ids(self) -> list[int]:
+        return [m.id for m in self.members]
+
+    @property
+    def main_file(self) -> TrackFile | None:
+        return self.main.main_file
+
+    @property
+    def date_added(self) -> datetime:
+        """When the group first appeared: its earliest member's added date."""
+        return min(m.date_added for m in self.members)
+
+    @property
+    def rating(self) -> int | None:
+        return self._max_rating("rating")
+
+    @property
+    def album_rating(self) -> int | None:
+        return self._max_rating("album_rating")
+
+    @property
+    def loved(self) -> bool:
+        return any(m.loved for m in self.members)
+
+    @property
+    def album_loved(self) -> bool:
+        return any(m.album_loved for m in self.members)
+
+    def _max_rating(self, attr: str) -> int | None:
+        """Highest non-zero rating for `attr` across the group, or None if unrated."""
+        ratings = [r for m in self.members if (r := getattr(m, attr))]
+        return max(ratings) if ratings else None
 
 
 class TrackAlias(Base):

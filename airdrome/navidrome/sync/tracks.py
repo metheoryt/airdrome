@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console, make_progress
-from airdrome.models import Track, TrackFile, TrackPlay
+from airdrome.models import Track, TrackFile, TrackGroup, TrackPlay
 
 from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, get_nv_engine
 
@@ -18,24 +18,6 @@ def sync_tracks_plays_to_navi(s: Session, username: str):
 
 def _normalize_dates(dts: list[datetime | None]) -> list[datetime]:
     return [v.replace(tzinfo=UTC) for v in dts if v]
-
-
-def _group_members(track: Track) -> list[Track]:
-    """Return every Track in `track`'s dedup group: the canon plus all its twins.
-
-    organize() combines a dedup group's files and marks the single best copy as
-    `is_main`; that file may belong to any member, so plays and ratings must be
-    aggregated across the whole group, not just the main-file owner. canon_id is
-    terminal (flatten_canon_chains), so a single hop reaches the root.
-    """
-    root = track.canon or track
-    return [root, *root.twins]
-
-
-def _max_rating(members: list[Track], attr: str) -> int | None:
-    """Highest non-zero rating for `attr` across the group, or None if unrated."""
-    ratings = [r for m in members if (r := getattr(m, attr))]
-    return max(ratings) if ratings else None
 
 
 class TrackSyncer:
@@ -51,8 +33,8 @@ class TrackSyncer:
         return self._user
 
     @staticmethod
-    def _get_mediafile(track: Track, nvs: Session) -> MediaFile | None:
-        mf = track.main_file
+    def _get_mediafile(group: TrackGroup, nvs: Session) -> MediaFile | None:
+        mf = group.main_file
         if not mf or not mf.navidrome_path:
             return None
         return nvs.scalars(select(MediaFile).where(MediaFile.path == mf.navidrome_path)).one_or_none()
@@ -114,7 +96,7 @@ class TrackSyncer:
     def update_media_file(
         self,
         mf: MediaFile,
-        members: list[Track],
+        group: TrackGroup,
         nvs: Session,
         play_count: int,
         latest_play: datetime | None,
@@ -122,7 +104,7 @@ class TrackSyncer:
     ):
         # The group has existed since its earliest member was added; use that as
         # the representative "added" date for created_at and rating timestamps.
-        added = min(m.date_added for m in members)
+        added = group.date_added
         date_candidates = [mf.created_at, first_play, added]
         valid_dates = _normalize_dates(date_candidates)
         if valid_dates:
@@ -134,24 +116,23 @@ class TrackSyncer:
         track_ann.play_count = play_count
         track_ann.play_date = latest_play
 
-        rating = _max_rating(members, "rating")
-        if rating:
-            track_ann.rating = rating
+        if group.rating:
+            track_ann.rating = group.rating
             track_ann.rated_at = added
-        if any(m.loved for m in members):
+        if group.loved:
             track_ann.starred = True
             track_ann.starred_at = added
 
     def update_album_annotation(
         self,
         mf: MediaFile,
-        members: list[Track],
+        group: TrackGroup,
         nvs: Session,
         play_count: int,
         latest_play: datetime | None,
         first_play: datetime | None,
     ):
-        added = min(m.date_added for m in members)
+        added = group.date_added
         date_candidates = [mf.album_model.created_at, first_play, added]
         valid_dates = _normalize_dates(date_candidates)
         if valid_dates:
@@ -160,11 +141,10 @@ class TrackSyncer:
         album_ann, _ = self._goc_annotation(mf.album_id, Annotation.ItemType.ALBUM, nvs)
         self._add_play_count_date(album_ann, play_count, latest_play)
 
-        album_rating = _max_rating(members, "album_rating")
-        if not album_ann.rating and album_rating:
-            album_ann.rating = album_rating
+        if not album_ann.rating and group.album_rating:
+            album_ann.rating = group.album_rating
             album_ann.rated_at = added
-        if not album_ann.starred and any(m.album_loved for m in members):
+        if not album_ann.starred and group.album_loved:
             album_ann.starred = True
             album_ann.rated_at = added
 
@@ -182,15 +162,14 @@ class TrackSyncer:
     def update_track(self, track: Track, s: Session, nvs: Session) -> int:
         # `track` owns the organized main file; the MediaFile is keyed off it, but
         # plays and ratings are aggregated across its whole dedup group.
-        mf = self._get_mediafile(track, nvs)
+        group = track.group
+        mf = self._get_mediafile(group, nvs)
         if not mf:
             return 0
 
-        members = _group_members(track)
-        group_ids = [m.id for m in members]
-        play_count, latest_play, first_play = self.update_scrobbles(mf, group_ids, s, nvs)
-        self.update_media_file(mf, members, nvs, play_count, latest_play, first_play)
-        self.update_album_annotation(mf, members, nvs, play_count, latest_play, first_play)
+        play_count, latest_play, first_play = self.update_scrobbles(mf, group.ids, s, nvs)
+        self.update_media_file(mf, group, nvs, play_count, latest_play, first_play)
+        self.update_album_annotation(mf, group, nvs, play_count, latest_play, first_play)
         self.update_artist_annotations(mf, nvs, play_count, latest_play)
         nvs.flush()
         return play_count
