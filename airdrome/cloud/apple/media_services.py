@@ -98,7 +98,13 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
         # clear all playlist members to insert again
         s.execute(delete(SourcePlaylistTrack).where(SourcePlaylistTrack.playlist_id == pl_db.id))
 
-    member_source_ids = [str(i) for i in item_identifiers]
+    # Apple's "Playlist Item Identifiers" can be badly inflated: an export was seen
+    # listing 36,797 identifiers for a 206-track playlist (each early track repeated up
+    # to 384x, a doubling artifact of Apple concatenating version snapshots). Dedup by
+    # first occurrence — keeps order, kills the corruption. This loses any intentional
+    # in-playlist repeat, but those are indistinguishable from the corruption and absent
+    # in practice. dict.fromkeys preserves insertion order.
+    member_source_ids = list(dict.fromkeys(str(i) for i in item_identifiers))
     ms_tracks = s.scalars(
         select(SourceTrack).where(
             SourceTrack.provider == Source.APPLE_MS, SourceTrack.source_id.in_(member_source_ids)
@@ -107,8 +113,8 @@ def import_ms_playlist(s: Session, pl: dict) -> bool:
     ms_tracks_by_source_id = {t.source_id: t for t in ms_tracks}
 
     pos = 0
-    for track_identifier in item_identifiers:
-        if (ms_track := ms_tracks_by_source_id.get(str(track_identifier))) is None:
+    for track_identifier in member_source_ids:
+        if (ms_track := ms_tracks_by_source_id.get(track_identifier)) is None:
             # the track referenced in the playlist is not in the library, skip it
             continue
 

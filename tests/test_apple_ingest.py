@@ -3,8 +3,9 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from airdrome.cloud.apple.media_services import import_ms_playlist, import_ms_track
 from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
-from airdrome.cloud.sources import SourcePlaylist, SourceTrack
+from airdrome.cloud.sources import SourcePlaylist, SourcePlaylistTrack, SourceTrack
 from airdrome.enums import Source
 from airdrome.library.unify import do_unify, unify_source_playlists, unify_source_tracks
 from airdrome.models import Backend, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
@@ -346,6 +347,91 @@ def test_unify_playlists_merge_by_name_collapses(session):
         _canonical_track_id(session, "A"),
         _canonical_track_id(session, "B"),
     }
+
+
+# ── Apple Media Services playlist import ──────────────────────────────────────
+
+
+def _ms_track_data(title: str = "MS Song", artist: str = "MS Artist") -> dict:
+    uid = next(_COUNTER)
+    return {"Track Identifier": uid, "Title": title, "Artist": artist}
+
+
+def _ms_playlist_data(name: str, item_identifiers: list[int]) -> dict:
+    uid = next(_COUNTER)
+    return {
+        "Container Identifier": uid,
+        "Container Type": "Playlist",
+        "Title": name,
+        "Playlist Item Identifiers": item_identifiers,
+    }
+
+
+def test_import_ms_playlist_dedups_inflated_item_identifiers(session):
+    """Apple-MS exports can list a track many times over; the importer keeps it once.
+
+    Mirrors the real defect: an export repeated playlist members (a doubling artifact of
+    concatenated version snapshots). Members are deduped by first occurrence, preserving order.
+    """
+    a, b, c = _ms_track_data("A"), _ms_track_data("B"), _ms_track_data("C")
+    for t in (a, b, c):
+        import_ms_track(session, t)
+    session.flush()
+
+    ai, bi, ci = a["Track Identifier"], b["Track Identifier"], c["Track Identifier"]
+    # b repeated 192x, a a few times — the kind of inflation Apple emits, interleaved.
+    inflated = [ai, bi, ai, ci] + [bi] * 191 + [ai]
+    pl = _ms_playlist_data("Inflated", inflated)
+
+    assert import_ms_playlist(session, pl) is True
+    session.flush()
+
+    pl_db = session.scalars(select(SourcePlaylist).where(SourcePlaylist.name == "Inflated")).one()
+    members = session.scalars(
+        select(SourcePlaylistTrack)
+        .where(SourcePlaylistTrack.playlist_id == pl_db.id)
+        .order_by(SourcePlaylistTrack.position)
+    ).all()
+    # One row per distinct track, in first-seen order, positions contiguous from 1.
+    assert [m.track.source_id for m in members] == [str(ai), str(bi), str(ci)]
+    assert [m.position for m in members] == [1, 2, 3]
+
+
+def test_import_ms_playlist_skips_unknown_members(session):
+    """Identifiers with no imported SourceTrack are silently skipped, not errored."""
+    a = _ms_track_data("A")
+    import_ms_track(session, a)
+    session.flush()
+
+    pl = _ms_playlist_data("Mixed", [a["Track Identifier"], 999_999])
+    import_ms_playlist(session, pl)
+    session.flush()
+
+    pl_db = session.scalars(select(SourcePlaylist).where(SourcePlaylist.name == "Mixed")).one()
+    members = session.scalars(
+        select(SourcePlaylistTrack).where(SourcePlaylistTrack.playlist_id == pl_db.id)
+    ).all()
+    assert [m.track.source_id for m in members] == [str(a["Track Identifier"])]
+
+
+def test_import_ms_playlist_idempotent_reimport(session):
+    """Re-importing the same container deletes and reinserts members, not doubling them."""
+    a, b = _ms_track_data("A"), _ms_track_data("B")
+    for t in (a, b):
+        import_ms_track(session, t)
+    session.flush()
+
+    pl = _ms_playlist_data("Repeat", [a["Track Identifier"], b["Track Identifier"]])
+    assert import_ms_playlist(session, pl) is True
+    session.flush()
+    assert import_ms_playlist(session, pl) is False  # existing container → not recreated
+    session.flush()
+
+    pl_db = session.scalars(select(SourcePlaylist).where(SourcePlaylist.name == "Repeat")).one()
+    members = session.scalars(
+        select(SourcePlaylistTrack).where(SourcePlaylistTrack.playlist_id == pl_db.id)
+    ).all()
+    assert len(members) == 2
 
 
 def test_do_unify_rebuild_playlists_drops_and_recreates(session):
