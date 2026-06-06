@@ -7,6 +7,7 @@ either side stay put on whichever side holds them — see `PlaylistLink`
 docstring for the rule on what makes it into the snapshot.
 """
 
+from collections import Counter
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
@@ -31,6 +32,24 @@ def _resolve_canonical(s: Session, track_id: int) -> int:
     return track.canon_id
 
 
+def _dedup(ids: list[int]) -> list[int]:
+    """Drop duplicate IDs, preserving first-seen order.
+
+    Every list the merge engine handles is conceptually a *set* of canonical
+    track IDs — a playlist holds a track at most once. Dedup collapse can make
+    several distinct source rows resolve to the same canon, so without this the
+    duplicates compound on every sync (the bug that inflated synced playlists
+    to ~100x their real size).
+    """
+    seen: set[int] = set()
+    out: list[int] = []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out
+
+
 def _three_way_merge(base: list[int], ours: list[int], theirs: list[int]) -> list[int]:
     """Merge two ordered ID lists against a common base.
 
@@ -53,6 +72,12 @@ def _three_way_merge(base: list[int], ours: list[int], theirs: list[int]) -> lis
 
 
 def _airdrome_canonical_ids(s: Session, playlist_id: int) -> list[int]:
+    """Resolved canonical IDs of an Airdrome playlist, in order, *with* duplicates.
+
+    Callers dedup for the merge; the raw (possibly duplicate-bearing) sequence is
+    also what `changed_airdrome` is compared against so a bloated table gets
+    rewritten clean on the next sync.
+    """
     rows = s.scalars(
         select(PlaylistTrack).where(PlaylistTrack.playlist_id == playlist_id).order_by(PlaylistTrack.position)
     ).all()
@@ -73,44 +98,81 @@ def _sync_pair(
     playlist: Playlist,
     ext: ExternalPlaylist,
     link: PlaylistLink | None,
+    reset: bool = False,
 ) -> bool:
     """3-way merge one playlist with its backend mirror, applying deltas to both sides.
 
+    The merge runs on deduplicated canonical-ID *sets*, and the backend write-back
+    reconciles by backend ref identity (not canon membership) so it is idempotent
+    even when `to_canonical_track`/`from_canonical_track` are not perfect inverses.
+    `reset` rebuilds the backend from Airdrome's list, discarding the merge base and
+    any backend-only additions (the force-resync escape hatch).
+
     Returns True if any change reached either side.
     """
-    base = link.synced_track_ids if link else []
-    ours = _airdrome_canonical_ids(s, playlist.id)
+    base = [] if reset else _dedup(link.synced_track_ids if link else [])
+    raw_ours = _airdrome_canonical_ids(s, playlist.id)
+    ours = _dedup(raw_ours)
 
     refs = adapter.get_track_refs(ext.id)
-    ref_to_canon: dict[ExternalTrackRef, int | None] = {r: adapter.to_canonical_track(r) for r in refs}
-    theirs_canon: list[int] = [c for c in ref_to_canon.values() if c is not None]
-    canon_to_ref: dict[int, ExternalTrackRef] = {c: r for r, c in ref_to_canon.items() if c is not None}
+    ref_by_id: dict[str, ExternalTrackRef] = {r.id: r for r in refs}
+    current_counts = Counter(r.id for r in refs)
+    ref_to_canon: dict[str, int | None] = {rid: adapter.to_canonical_track(r) for rid, r in ref_by_id.items()}
+    # On reset we ignore the backend's current contents for the merge so the result
+    # is purely Airdrome's list; we still need `refs` above to clear stale rows.
+    canon_to_ref: dict[int, ExternalTrackRef] = (
+        {} if reset else {c: ref_by_id[rid] for rid, c in ref_to_canon.items() if c is not None}
+    )
+    theirs_canon = [] if reset else _dedup([c for c in ref_to_canon.values() if c is not None])
 
     merged = _three_way_merge(base, ours, theirs_canon)
 
-    placed: list[int] = []
-    theirs_set = set(theirs_canon)
-    merged_set = set(merged)
-
+    # Resolve the merged canon set to the backend refs it should be represented by.
+    # Reuse the ref already in the backend when present (stable), else materialise one.
+    desired_ids: list[str] = []
+    desired_seen: set[str] = set()
     for canon in merged:
-        if canon in theirs_set:
-            placed.append(canon)
-            continue
-        ref = adapter.from_canonical_track(canon)
+        ref = canon_to_ref.get(canon) or adapter.from_canonical_track(canon)
         if ref is None:
-            # Airdrome has the track but the backend can't represent it.
-            # Skip — it stays in Airdrome only and won't pollute the snapshot.
+            # Airdrome has the track but the backend can't represent it — leave it
+            # Airdrome-only; it stays out of the snapshot so it reads as steady state.
             continue
-        adapter.add_track(ext.id, ref)
-        placed.append(canon)
+        if ref.id not in desired_seen:
+            desired_seen.add(ref.id)
+            ref_by_id.setdefault(ref.id, ref)
+            desired_ids.append(ref.id)
 
-    for canon in theirs_set - merged_set:
-        adapter.remove_track(ext.id, canon_to_ref[canon])
+    # Reconcile the backend to exactly `desired_ids` (one row each), keyed on ref id.
+    added = removed = 0
+    for rid in current_counts:
+        if rid not in desired_seen:
+            adapter.remove_track(ext.id, ref_by_id[rid])  # drops every row of this ref
+            removed += 1
+    for rid in desired_ids:
+        count = current_counts.get(rid, 0)
+        if count == 0:
+            adapter.add_track(ext.id, ref_by_id[rid])
+            added += 1
+        elif count > 1:
+            # Already present but duplicated — collapse to a single row.
+            adapter.remove_track(ext.id, ref_by_id[rid])
+            adapter.add_track(ext.id, ref_by_id[rid])
+            removed += 1
+            added += 1
 
-    changed_backend = len(placed) != len(theirs_canon) or set(placed) != theirs_set
-    changed_airdrome = merged != ours
+    # Snapshot the canon set *as the backend now reports it*, so next run's `theirs`
+    # matches `base` and an imperfect round-trip can't read as a one-sided delete.
+    snapshot: list[int] = []
+    for rid in desired_ids:
+        canon = ref_to_canon[rid] if rid in ref_to_canon else adapter.to_canonical_track(ref_by_id[rid])
+        if canon is not None:
+            snapshot.append(canon)
+    placed = _dedup(snapshot)
 
-    if changed_backend or not link:
+    changed_backend = added > 0 or removed > 0
+    changed_airdrome = merged != raw_ours
+
+    if changed_backend or not link or reset:
         adapter.commit()
     if changed_airdrome:
         _apply_to_airdrome(s, playlist.id, merged)
@@ -135,8 +197,14 @@ def _sync_pair(
     return changed_backend or changed_airdrome
 
 
-def sync(s: Session, adapter: PlaylistAdapter) -> None:
-    """Run one bidirectional sync pass between Airdrome and a backend."""
+def sync(s: Session, adapter: PlaylistAdapter, reset: bool = False) -> None:
+    """Run one bidirectional sync pass between Airdrome and a backend.
+
+    When `reset` is set, every linked playlist is rebuilt from Airdrome's
+    (deduplicated) canonical list instead of 3-way merged — the recovery lever
+    for backend playlists that drifted or bloated. Backend-only playlists are
+    still pulled in normally.
+    """
 
     airdrome_playlist_ids = list(s.scalars(select(Playlist.id).order_by(Playlist.name)).all())
     seen_external: set[str] = set()
@@ -169,7 +237,7 @@ def sync(s: Session, adapter: PlaylistAdapter) -> None:
 
         seen_external.add(ext.id)
         try:
-            had_changes = _sync_pair(s, adapter, playlist, ext, link)
+            had_changes = _sync_pair(s, adapter, playlist, ext, link, reset=reset)
         except Exception:
             adapter.rollback()
             s.rollback()

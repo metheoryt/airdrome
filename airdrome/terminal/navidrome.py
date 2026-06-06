@@ -43,7 +43,16 @@ _YES_OPT = typer.Option(False, "--yes", "-y", help="Skip the Navidrome-stopped c
 
 
 @navidrome_app.command("playlists")
-def sync_playlists_cmd(ctx: typer.Context, yes: bool = _YES_OPT):
+def sync_playlists_cmd(
+    ctx: typer.Context,
+    yes: bool = _YES_OPT,
+    reset: bool = typer.Option(
+        False,
+        "--reset",
+        help="Force-rebuild every linked Navidrome playlist from Airdrome's list, "
+        "discarding backend-only additions. Use to clean up bloated/drifted playlists.",
+    ),
+):
     """3-way merge every playlist between Airdrome and Navidrome."""
     username = _require_user()
     _guard_navidrome_stopped(yes)
@@ -51,7 +60,7 @@ def sync_playlists_cmd(ctx: typer.Context, yes: bool = _YES_OPT):
     console.print("[bold green]Syncing playlists with Navidrome[/bold green]")
     state: AppState = ctx.obj
     with NavidromeAdapter(state.session, username) as adapter:
-        sync_playlists(state.session, adapter)
+        sync_playlists(state.session, adapter, reset=reset)
     console.print("[bold green]Done[/bold green]")
 
 
