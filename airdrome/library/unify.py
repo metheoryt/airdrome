@@ -40,13 +40,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.console import console
 from airdrome.enums import Source
-from airdrome.models import AwareDatetime, Playlist, PlaylistTrack, Track, TrackFile
+from airdrome.models import AwareDatetime, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
 
 
 def _progress(summary: str) -> Progress:
@@ -415,11 +415,32 @@ def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[i
 # ── Orchestration ───────────────────────────────────────────────────────────────
 
 
-def do_unify(s: Session, *, merge_playlists: bool = False):
+def _reset_canonical_playlists(s: Session) -> tuple[int, int]:
+    """Drop every canonical ``Playlist`` so the playlist stage rebuilds them from source data.
+
+    The playlist stage is append-only (it only fills gaps), so changed merge/dedup logic never
+    reshapes playlists that already exist. Wiping them first forces a clean rebuild. Deleting a
+    ``Playlist`` cascades (FK ``ON DELETE CASCADE``) to its ``PlaylistTrack`` rows *and* to any
+    ``PlaylistLink`` backend-sync snapshots — so this also discards e.g. Navidrome sync state, and
+    the rebuilt playlists get new IDs. A backend re-sync afterwards therefore re-pushes from
+    scratch. Returns ``(playlists_dropped, links_dropped)``.
+    """
+    playlists = s.scalars(select(func.count()).select_from(Playlist)).one()
+    links = s.scalars(select(func.count()).select_from(PlaylistLink)).one()
+    s.execute(delete(Playlist))
+    s.flush()
+    return playlists, links
+
+
+def do_unify(s: Session, *, merge_playlists: bool = False, rebuild_playlists: bool = False):
     """Run the three unify stages and print a per-stage summary.
 
     ``merge_playlists`` collapses same-name source playlists into one canonical (see
     ``unify_source_playlists``); off by default, so each source playlist stays its own.
+
+    ``rebuild_playlists`` drops all canonical playlists first (see ``_reset_canonical_playlists``)
+    so the playlist stage recreates them from scratch — needed because the stage is otherwise
+    append-only. Off by default; note it also discards backend-sync links.
     """
     track_count = s.scalars(
         select(func.count()).select_from(SourceTrack).where(SourceTrack.track_id.is_(None))
@@ -438,6 +459,13 @@ def do_unify(s: Session, *, merge_playlists: bool = False):
     ) as progress:
         task = progress.add_task("Tracks", total=track_count, created=0, updated=0, files_bound=0)
         created, updated, files_bound = unify_source_tracks(s, progress, task)
+
+    if rebuild_playlists:
+        dropped, links = _reset_canonical_playlists(s)
+        console.print(
+            f"  [yellow]Rebuild:[/yellow] dropped [magenta]{dropped}[/magenta] canonical "
+            f"playlists and [red]{links}[/red] backend link(s)"
+        )
 
     with _progress(
         "[magenta]{task.fields[pl_created]} playlists[/magenta]  [blue]{task.fields[tr_linked]} linked[/blue]"

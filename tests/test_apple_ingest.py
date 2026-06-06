@@ -6,8 +6,8 @@ from sqlalchemy import select
 from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.enums import Source
-from airdrome.library.unify import unify_source_playlists, unify_source_tracks
-from airdrome.models import Playlist, PlaylistTrack, Track, TrackFile
+from airdrome.library.unify import do_unify, unify_source_playlists, unify_source_tracks
+from airdrome.models import Backend, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
 
 
 def _xml_track(session, source_id):
@@ -346,3 +346,35 @@ def test_unify_playlists_merge_by_name_collapses(session):
         _canonical_track_id(session, "A"),
         _canonical_track_id(session, "B"),
     }
+
+
+def test_do_unify_rebuild_playlists_drops_and_recreates(session):
+    track_data = _track_data()
+    do_import_tracks(session, {str(track_data["Track ID"]): track_data})
+    do_import_playlists(session, [_playlist_data(name="Real", track_ids=[track_data["Track ID"]])])
+
+    # First pass builds the source-backed canonical, then we attach a backend link and a
+    # stale canonical that no source claims — both must not survive a rebuild.
+    do_unify(session)
+    real = session.scalars(select(Playlist).where(Playlist.name == "Real")).one()
+    session.add(
+        PlaylistLink(
+            playlist_id=real.id,
+            backend=Backend.NAVIDROME,
+            external_id="nd-1",
+            synced_track_ids=[],
+            synced_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+    )
+    stale = Playlist(name="Stale", platform=Source.NAVIDROME, source_id="gone")
+    session.add(stale)
+    session.flush()
+
+    do_unify(session, rebuild_playlists=True)
+
+    # The source-backed playlist is rebuilt; the stale one and the link are gone.
+    names = set(session.scalars(select(Playlist.name)).all())
+    assert names == {"Real"}
+    assert session.scalars(select(PlaylistLink)).all() == []
+    rebuilt = session.scalars(select(Playlist).where(Playlist.name == "Real")).one()
+    assert {pt.track_id for pt in rebuilt.tracks} == {_canonical_track_id(session, "Test Track")}

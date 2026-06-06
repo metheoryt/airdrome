@@ -125,6 +125,11 @@ def resolve(
         "-m",
         help="Merge same-name playlists into one canonical (newest anchors, duplicate tracks skipped).",
     ),
+    rebuild_playlists: bool = typer.Option(
+        False,
+        "--rebuild-playlists",
+        help="Drop all canonical playlists first and rebuild from source. Also discards backend-sync links.",
+    ),
     dry_run: bool = _DRY_RUN,
 ):
     """Build the canonical graph from everything imported.
@@ -136,7 +141,7 @@ def resolve(
     """
     state: AppState = ctx.obj
     state.dry_run = dry_run
-    do_unify(state.session, merge_playlists=merge_playlists)
+    do_unify(state.session, merge_playlists=merge_playlists, rebuild_playlists=rebuild_playlists)
     augment_aliases(state.session)
     match_aliases(state.session, threshold=threshold)
     copy_plays(state.session)
