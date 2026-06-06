@@ -1,19 +1,20 @@
 """Playlist sync engine tests.
 
 Exercise the backend-agnostic merge in `airdrome.playlists.sync` through an
-in-memory `FakeBackend`, so duplication/idempotency behaviour can be asserted
-without a real Navidrome SQLite file. The regression these guard against:
-synced playlists inflating to ~100x their real size, one extra copy per run.
+in-memory `FakeBackend`, so multiplicity/idempotency behaviour can be asserted
+without a real Navidrome SQLite file. Two things these guard against:
+the runaway duplication that inflated synced playlists to ~100x their size, and
+the inverse over-correction (silently stripping a playlist's intentional dupes).
 """
 
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from airdrome.enums import Source
 from airdrome.models import Backend, Playlist, PlaylistLink, PlaylistTrack
 from airdrome.playlists.adapter import ExternalPlaylist, ExternalTrackRef, PlaylistAdapter
-from airdrome.playlists.sync import _dedup, _sync_pair, _three_way_merge
+from airdrome.playlists.sync import _sync_pair, _three_way_merge
 
 from factories import make_track
 
@@ -23,6 +24,7 @@ class FakeBackend(PlaylistAdapter):
 
     `canon_of` (to_canonical) and `ref_of` (from_canonical) are set
     independently so a *non-invertible* round-trip can be modelled directly.
+    Playlist rows are a plain list, so multiplicity is observable.
     """
 
     backend = Backend.NAVIDROME
@@ -75,8 +77,8 @@ class FakeBackend(PlaylistAdapter):
 
 
 def _playlist(s, tracks: list) -> Playlist:
-    """Create an Airdrome playlist holding `tracks` in order (duplicates allowed)."""
-    pl = Playlist(name="P", platform=Source.NAVIDROME, source_id=f"src-{id(tracks)}")
+    """Create a playlist holding `tracks` in order (duplicates allowed)."""
+    pl = Playlist(name="P", platform=Source.SPOTIFY, source_id=f"src-{id(tracks)}")
     s.add(pl)
     s.flush()
     for pos, t in enumerate(tracks, start=1):
@@ -85,7 +87,7 @@ def _playlist(s, tracks: list) -> Playlist:
     return pl
 
 
-def _link(s, pl: Playlist, ext_id: str):
+def _link(s, pl: Playlist):
     return s.scalars(
         select(PlaylistLink).where(
             PlaylistLink.playlist_id == pl.id, PlaylistLink.backend == Backend.NAVIDROME
@@ -93,20 +95,46 @@ def _link(s, pl: Playlist, ext_id: str):
     ).one_or_none()
 
 
-def _pt_count(s, pl: Playlist) -> int:
-    return s.scalar(select(func.count()).select_from(PlaylistTrack).where(PlaylistTrack.playlist_id == pl.id))
+def _seed_link(s, pl: Playlist, ext_id: str, synced: list[int]) -> None:
+    s.add(
+        PlaylistLink(
+            playlist_id=pl.id,
+            backend=Backend.NAVIDROME,
+            external_id=ext_id,
+            synced_track_ids=synced,
+            synced_at=datetime.now(UTC),
+        )
+    )
+    s.flush()
 
 
-# ── pure helpers ───────────────────────────────────────────────────────────
+def _pt_rows(s, pl: Playlist) -> list[int]:
+    return list(
+        s.scalars(
+            select(PlaylistTrack.track_id)
+            .where(PlaylistTrack.playlist_id == pl.id)
+            .order_by(PlaylistTrack.position)
+        )
+    )
 
 
-def test_dedup_preserves_first_seen_order():
-    assert _dedup([3, 1, 3, 2, 1, 3]) == [3, 1, 2]
+def _never(*_a, **_k):
+    raise AssertionError("make_ext should not have been called")
 
 
-def test_three_way_merge_dedups_result():
-    # ours carries duplicates; merged must not.
-    assert _dedup(_three_way_merge([], [1, 1, 2], [2, 3])) == [1, 2, 3]
+# ── multiset merge ─────────────────────────────────────────────────────────
+
+
+def test_merge_additive_with_base_applies_both_deltas():
+    # base says one copy synced; ours added a 2nd; theirs unchanged -> two copies.
+    assert _three_way_merge([1, 2], [1, 1, 2], [1, 2]) == [1, 1, 2]
+    # theirs removed its only copy of 2 -> 2 drops out entirely.
+    assert _three_way_merge([1, 2], [1, 2], [1]) == [1]
+
+
+def test_merge_unions_by_max_when_no_base():
+    # First sync of a pair: can't tell adds from shared history, so union by count.
+    assert _three_way_merge([], [1, 1], [1, 2]) == [1, 1, 2]
 
 
 # ── engine behaviour ───────────────────────────────────────────────────────
@@ -121,41 +149,29 @@ def test_initial_push_then_idempotent(session):
     ext = be.seed("e", "P")
     pl = _playlist(session, [t1, t2])
 
-    assert _sync_pair(session, be, pl, ext, link=None) is True
+    assert _sync_pair(session, be, pl, ext, None, _never) is True
     assert be.tracks["e"] == ["r1", "r2"]
 
-    link = _link(session, pl, "e")
-    assert _sync_pair(session, be, pl, ext, link=link) is False
+    assert _sync_pair(session, be, pl, ext, _link(session, pl), _never) is False
     assert be.tracks["e"] == ["r1", "r2"]  # no growth
 
 
-def test_collapses_pre_existing_backend_duplicates(session):
-    """A backend playlist already bloated with N copies collapses to one each."""
-    t1, t2 = make_track(session, "a"), make_track(session, "b")
-    be = FakeBackend()
-    be.register(t1.id, "r1")
-    be.register(t2.id, "r2")
-    ext = be.seed("e", "P", rows=["r1"] * 50 + ["r2"] * 50)
-    pl = _playlist(session, [t1, t2])
-
-    _sync_pair(session, be, pl, ext, link=None)
-
-    assert sorted(be.tracks["e"]) == ["r1", "r2"]
-
-
-def test_collapses_pre_existing_airdrome_duplicates(session):
-    """A bloated Airdrome playlisttrack table is rewritten down to distinct tracks."""
+def test_intentional_duplicates_are_mirrored_and_stable(session):
+    """A track listed twice in Airdrome reaches Navidrome twice and stays put."""
     t1, t2 = make_track(session, "a"), make_track(session, "b")
     be = FakeBackend()
     be.register(t1.id, "r1")
     be.register(t2.id, "r2")
     ext = be.seed("e", "P")
-    pl = _playlist(session, [t1] * 80 + [t2] * 80)
-    assert _pt_count(session, pl) == 160
+    pl = _playlist(session, [t1, t1, t2])  # deliberate dup of t1
 
-    _sync_pair(session, be, pl, ext, link=None)
+    _sync_pair(session, be, pl, ext, None, _never)
+    assert be.tracks["e"] == ["r1", "r1", "r2"]
 
-    assert _pt_count(session, pl) == 2
+    # Idempotent: the dup is preserved, not collapsed, and nothing grows.
+    assert _sync_pair(session, be, pl, ext, _link(session, pl), _never) is False
+    assert be.tracks["e"] == ["r1", "r1", "r2"]
+    assert _pt_rows(session, pl) == [t1.id, t1.id, t2.id]  # Airdrome untouched too
 
 
 def test_non_invertible_mapping_is_stable(session):
@@ -172,10 +188,8 @@ def test_non_invertible_mapping_is_stable(session):
     ext = be.seed("e", "P")
     pl = _playlist(session, [t])
 
-    link = None
     for _ in range(3):
-        _sync_pair(session, be, pl, ext, link=link)
-        link = _link(session, pl, "e")
+        _sync_pair(session, be, pl, ext, _link(session, pl), _never)
 
     assert be.tracks["e"] == ["r1"]  # exactly one copy after three runs, never growing
 
@@ -188,49 +202,45 @@ def test_pulls_backend_only_addition_into_airdrome(session):
     be.register(t2.id, "r2")
     ext = be.seed("e", "P", rows=["r1", "r2"])  # last sync left r1; user added r2
     pl = _playlist(session, [t1])
-    # Last sync settled on just t1, so t2 reads as a genuine backend-side add.
-    session.add(
-        PlaylistLink(
-            playlist_id=pl.id,
-            backend=Backend.NAVIDROME,
-            external_id="e",
-            synced_track_ids=[t1.id],
-            synced_at=datetime.now(UTC),
-        )
-    )
-    session.flush()
-    link = _link(session, pl, "e")
+    _seed_link(session, pl, "e", [t1.id])  # base: only t1 was synced
 
-    _sync_pair(session, be, pl, ext, link=link)
+    _sync_pair(session, be, pl, ext, _link(session, pl), _never)
 
-    airdrome_ids = set(
-        session.scalars(select(PlaylistTrack.track_id).where(PlaylistTrack.playlist_id == pl.id))
-    )
-    assert airdrome_ids == {t1.id, t2.id}
+    assert set(_pt_rows(session, pl)) == {t1.id, t2.id}
     assert sorted(be.tracks["e"]) == ["r1", "r2"]
 
 
-def test_reset_rebuilds_backend_from_airdrome(session):
-    """`reset` drops backend-only rows and rebuilds purely from Airdrome's list."""
+def test_missing_file_track_preserved_not_deleted(session):
+    """A track with no backend representation stays in Airdrome and is never pushed.
+
+    Across a sync-back it must not read as a one-sided delete — it simply waits
+    for its file to appear.
+    """
     t1, t2 = make_track(session, "a"), make_track(session, "b")
     be = FakeBackend()
-    be.register(t1.id, "r1")
-    be.register(t2.id, "r2")
-    # Backend bloated + carrying orphan refs Airdrome doesn't know about.
-    ext = be.seed("e", "P", rows=["r1"] * 10 + ["orphan", "orphan", "r2"])
+    be.register(t1.id, "r1")  # t2 has no ref — its file is "missing"
     pl = _playlist(session, [t1, t2])
-    session.add(
-        PlaylistLink(
-            playlist_id=pl.id,
-            backend=Backend.NAVIDROME,
-            external_id="e",
-            synced_track_ids=[t1.id, t2.id],
-            synced_at=datetime.now(UTC),
-        )
-    )
-    session.flush()
-    link = _link(session, pl, "e")
 
-    _sync_pair(session, be, pl, ext, link=link, reset=True)
+    # First sync creates the backend playlist with only t1; t2 stays Airdrome-only.
+    _sync_pair(session, be, pl, ext=None, link=None, make_ext=lambda: be.create(pl))
+    ext_id = _link(session, pl).external_id
+    assert be.tracks[ext_id] == ["r1"]
+    assert _pt_rows(session, pl) == [t1.id, t2.id]  # t2 kept
 
-    assert sorted(be.tracks["e"]) == ["r1", "r2"]  # orphan gone, dups collapsed
+    # Sync back: t2 is absent from the snapshot/backend but must not be deleted.
+    _sync_pair(session, be, pl, be.get(ext_id), _link(session, pl), _never)
+    assert be.tracks[ext_id] == ["r1"]
+    assert _pt_rows(session, pl) == [t1.id, t2.id]  # still kept, never pushed
+
+
+def test_no_empty_backend_playlist_created(session):
+    """A playlist with nothing representable spawns no backend playlist or link."""
+    t = make_track(session, "a")  # no ref registered -> from_canonical returns None
+    be = FakeBackend()
+    pl = _playlist(session, [t])
+
+    had_changes = _sync_pair(session, be, pl, ext=None, link=None, make_ext=lambda: be.create(pl))
+
+    assert had_changes is False
+    assert be.tracks == {}  # create() never fired
+    assert _link(session, pl) is None
