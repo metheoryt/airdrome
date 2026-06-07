@@ -1,0 +1,130 @@
+# Airdrome Roadmap
+
+The single place to track to-do ideas, open design questions, and agreed-but-unbuilt
+work. Code-level "how it works today" lives in [AGENTS.md](AGENTS.md); this file is for
+what we *want to do next*.
+
+**For agents:** skim this file at the start of any non-trivial task so suggestions line
+up with the plan. When a new idea surfaces in conversation — a feature, a "we should
+eventually…", a design we settle on but won't build yet — **ask whether to add it here**,
+and if yes, drop it under the right section with a status marker. When an item ships,
+fold the durable design into AGENTS.md and remove it here.
+
+Status legend: 💡 idea (unscoped) · 🧭 designed (settled, not built) · 🔨 in progress ·
+🅿️ parked. Done items are deleted, not checked off — git history is the archive.
+
+---
+
+## Now
+
+The immediate, next-up work.
+
+- 💡 **Merge specified playlists.** Some playlists are different versions of the same
+  list under slightly different names. Need a way to point at two (or more) playlists by
+  name and merge them into one. Falls under *Playlist management* below — this is the
+  first concrete slice of it. Open questions: which name/identity survives, dedup of
+  members on merge, whether it's a new CLI verb (`library playlists merge <a> <b>...`)
+  or part of a broader playlist toolset.
+
+---
+
+## Playlist management
+
+Navidrome is a player, not a library manager, and playlists are the one entity Airdrome
+can't shape indirectly through file tags (unlike track metadata). So playlists need a
+first-class management story of their own. Today the only playlist operation is
+`navidrome playlists` (3-way merge against the backend, see `airdrome/playlists/`) and
+`resolve --rebuild-playlists`. The open question is *how the user edits and curates
+playlists*.
+
+Candidate directions (not mutually exclusive — pick per use case):
+
+- 💡 **m3u round-trip.** Export resolved playlists as `.m3u`, edit in any external tool,
+  re-import. Pro: zero bespoke UI, works with existing editors. Con: needs stable
+  file-path ↔ Track resolution on re-import, and the on-disk paths must match the
+  organized library.
+- 💡 **A small subset of playlist tools in the CLI.** Merge (the *Now* item), rename,
+  dedup members, split, reorder. Keeps everything in the canonical model; no external
+  format to keep in sync.
+- 💡 **Hand resolved playlists to an external manager** and let it own editing, with
+  Airdrome syncing back. Heaviest integration; only worth it if a good external tool fits.
+
+Decide the editing model before building beyond merge — it determines whether playlists
+stay canonical-model-only or gain an interchange format.
+
+---
+
+## Telegram bot
+
+A bot to manage the Airdrome library from the phone. Built incrementally, one feature at
+a time.
+
+### Feature 1 — "Upload a file for a track" 💡
+
+Goal: fill in missing audio files for tracks that have play history but no file on disk
+(the long tail of "I listened to this a lot but never had the file").
+
+Flow:
+
+1. User uploads a music file to the bot.
+2. Bot downloads it, analyzes it (Mutagen tags, same path as `TrackFile.enrich()` /
+   the folder scanner), and verifies/updates the file's tags.
+3. System searches for a matching `Track`. A match can also be **pre-selected** before
+   upload — the user picks the target track first, then sends the file for it.
+4. Track discovery in the bot, two ways:
+   - **Search** by title/artist.
+   - **Browse handy lists**, e.g. *"top listens without any file"* — high-play-count
+     tracks that have no bound `TrackFile`. (Feasible against current models: `Track`
+     play history via `TrackPlay`/aliases, file presence via `TrackFile`.)
+5. If the track **already has a file**, the bot sends the existing file back with its
+   metadata and prompts for what to do with the *uploaded* one:
+   - **Delete** the upload,
+   - **Move to Copies** (ties into the `copies_dir` concept from the reconcile design), or
+   - **Leave** — keep the existing file, discard the upload.
+
+Open questions: where uploaded files land before binding (a staging/watch folder?
+overlaps with the reconcile `watch` design), how tag verification decides accept vs.
+correct, auth (single-user — lock to one Telegram user id), and how this rides on the
+not-yet-built `ingest_one()` per-file pipeline.
+
+Later bot features: TBD — capture them here as they come up.
+
+---
+
+## Filesystem ⇄ Airdrome reconcile (🧭 designed, not built)
+
+A settled design for self-repairing organize, a watch folder, and a tag `reconcile`
+pipeline. Core mental model is three hops; organize is only the last:
+`file tags --enrich--> TrackFile metadata --unify--> Track identity --organize--> disk location`.
+Tag changes do nothing physical until they reach the Track.
+
+Settled decisions:
+
+- Source roots are **not** stored; `import <path>` stays stateless. Re-scan = re-run
+  import. Adds-only re-scan already works; delete/move detection is deferred.
+- Source-of-truth is **both** copy and move, configurable; reconcile must work either way.
+- Idempotent/self-repairing organize via a per-file location state machine: compute
+  `desired` from Track metadata + role (`is_main`); move from `absolute_path` (current
+  location), not always `source_path` — this enables re-organizing already-placed files
+  and self-heal. If a file is nowhere, **report missing — do not fabricate**.
+  Self-heal (re-copy from source) only works in copy mode.
+- Optional `copies_dir: Path | None` setting (default `library_dir/Copies`).
+- Quality upgrades fall out for free: a higher-bitrate drop with identical tags hits
+  the existing Track via `get_or_create`, attaches as a 2nd `TrackFile`, and organize
+  promotes it. No fuzzy match involved.
+- Watch matching uses strict full-metadata identity, **no trigram** (trigram dedup
+  stays a separate batch step).
+- Add a `content_hash` column on `TrackFile` (full-file md5, computed in enrich) for
+  watch idempotency. Consequence: "same audio, corrected tags" is treated as a new file.
+- `watch <folder>`: poll-on-a-timer first (move mode, drains the folder), real-time
+  `watchdog` later behind the same function.
+- Re-enrich is its own pass (iterate existing `TrackFile`s, re-read from
+  `absolute_path`), not via the `source_path`-keyed `scan_file` (post-move source_path
+  is stale → spurious duplicate files).
+- unify re-bind is deferred: re-enrich only updates `TrackFile` fields; an in-place
+  tag edit that changes identity won't relocate the file until re-bind exists.
+
+Build order (each its own branch + tests): (1) self-repairing organize state machine,
+(2) `content_hash` column, (3) `ingest_one()` per-file pipeline + `watch` + `reconcile`.
+This pipeline underpins the Telegram bot's upload feature — the bot is one front-end to
+`ingest_one()`.
