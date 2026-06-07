@@ -55,30 +55,50 @@ The immediate, next-up work.
 
 Navidrome is a player, not a library manager, and playlists are the one entity Airdrome
 can't shape indirectly through file tags (unlike track metadata). So playlists need a
-first-class management story of their own. Today the only playlist operation is
-`navi push` (3-way merge against the backend, see `airdrome/playlists/`) and
-`land --rebuild-playlists`. The open question is *how the user edits and curates
-playlists*.
+first-class management story of their own. Today: `navi push` (bidirectional 3-way merge
+against the backend, see `airdrome/playlists/`) and `land --rebuild-playlists`.
 
-Candidate directions (not mutually exclusive — pick per use case):
+### 🧭 Hub + remotes: reconcile-with-base (settled 2026-06-08)
 
-- 💡 **Replace the 3-way merge with explicit push/pull.** The playlist 3-way merge is the
-  most complex logic in the codebase. `navi push` showed how much simpler a one-directional
-  model reads. Consider splitting playlist sync into explicit `push` (Airdrome → Navidrome)
-  and `pull` (Navidrome → Airdrome) instead of reconciling both ends. This decides whether
-  the merge engine survives at all, so settle it before investing further in the merge.
+Long-form design in the `project_playlist_reconcile` memory; summary:
+
+- **Airdrome is the source of truth (the hub).** Peers are *remotes*: sources (Apple,
+  Spotify) are **read-only** (fetch only — no API to write back); backends (Navidrome,
+  future Plex) are **read-write**. Only a hub-as-SoT lets every remote be a symmetric peer
+  and makes a new destination "just another remote" (neither a source nor a single backend
+  can be SoT without breaking the others).
+- **One mechanism** for both of today's boundaries — source→canonical (in `unify`,
+  currently append-only) and canonical↔backend (in `playlists/sync.py`, a real 3-way
+  merge): *reconcile against a remote with a per-`(playlist, remote)` **base snapshot***
+  (multiset 3-way of base/ours/theirs). Generalize `PlaylistLink` into a per-`(playlist,
+  remote)` row with `base_track_ids` + nullable `external_id` (writable backends only).
+- **Kills the re-import resurrection bug.** Boundary A has no base today, so re-importing a
+  newer snapshot re-adds a track you deleted downstream (it's in the source, absent from
+  canonical → blind union restores it → next push sends it back). A source-side base makes
+  source deletes propagate and downstream deletes stick.
+- **Keeps & generalizes the 3-way merge** — *supersedes* the earlier "replace with
+  push/pull" idea. push/pull survive as directional shortcuts over the one engine (push =
+  reconcile favoring ours→backend; pull = favoring backend→ours), not a separate path.
+- **Interactive resolution** like `dedup`: auto 3-way is the silent default; a **hard
+  conflict** (contradictory edits from >1 remote since each last reconciled) forces those
+  playlists into a resolver; `--review` opens it for every changed playlist. Strategies
+  **per playlist**: take theirs / keep ours / auto 3-way / edit manually.
+- Decisions locked: (1) source `source_id` is stable across snapshots → base keys off
+  remote identity, no name fallback; (2) **drop ordering as a semantic but no reshuffle** —
+  the merge is a minimal diff against the canonical's current order (removes in place, adds
+  appended), deterministic + idempotent; (3) **reconcile is its own step, not folded into
+  `land`** — importing a snapshot never silently mutates curated playlists.
+- 🅿️ **Parked (own discussion): extend the same model to tracks** (metadata, ratings,
+  loved, play history reconciled per-remote against a base). Same engine, richer conflict
+  surface. Play counts already flow one-way via `navi push` stats.
+
+### Complementary editing tools (independent of the above)
+
 - 💡 **m3u round-trip.** Export resolved playlists as `.m3u`, edit in any external tool,
-  re-import. Pro: zero bespoke UI, works with existing editors. Con: needs stable
-  file-path ↔ Track resolution on re-import, and the on-disk paths must match the
-  organized library.
+  re-import. Pro: zero bespoke UI. Con: needs stable file-path ↔ Track resolution on
+  re-import, and on-disk paths must match the organized library.
 - 💡 **A small subset of playlist tools in the CLI.** Merge (the *Now* item), rename,
-  dedup members, split, reorder. Keeps everything in the canonical model; no external
-  format to keep in sync.
-- 💡 **Hand resolved playlists to an external manager** and let it own editing, with
-  Airdrome syncing back. Heaviest integration; only worth it if a good external tool fits.
-
-Decide the editing model before building beyond merge — it determines whether playlists
-stay canonical-model-only or gain an interchange format.
+  dedup members, split, reorder. Keeps everything in the canonical model.
 
 ---
 
