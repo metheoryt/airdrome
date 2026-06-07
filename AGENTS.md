@@ -169,7 +169,10 @@ round-trip correctness matters.
 
 ## Workflow
 
-- For any task beyond a simple bugfix, start a new branch from `main`.
+- Solo project, no PRs. Work directly on `main` by default. Branch from `main` only when the
+  task is serious/risky or there is already a lot of uncommitted work in progress; when done and
+  confirmed, **squash-merge** the branch back into `main` and delete it.
+- Always `git push` after committing/merging to `main`; **never force-push**.
 - Cover changes with meaningful tests; lean on pytest fixtures heavily.
 - Give every function and method a one-line docstring.
 - Comment non-obvious code, explaining the decision — the more complicated, the more explicit.
