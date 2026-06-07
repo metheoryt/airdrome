@@ -19,6 +19,19 @@ Status legend: 💡 idea (unscoped) · 🧭 designed (settled, not built) · �
 
 The immediate, next-up work.
 
+- 🧭 **Auto-managed dedup JSON (drop manual export/import).** Confirmed dedup groups
+  (`dedupgroup`/`dedupgroupmember`) are real human work, but the Postgres DB is disposable
+  (recreated on schema change), so today they survive a rebuild only if you remember to run
+  `dedup-export` before and `dedup-import` after. Replace the two manual commands with
+  automatic persistence: mirror confirmed groups to a JSON file whenever they change (TUI
+  confirm), and restore from it into an empty DB on startup. One-directional (DB = working
+  copy, JSON = durable mirror); atomic write (temp file + rename) to survive a crash.
+  **Colocate the file with the library** — `LIBRARY_DIR/.airdrome/duplicates.json` — so it's
+  per-library by construction (no two-library clobber), travels and backs up *with* the
+  library, and needs no library→file mapping. `DUPLICATES_FILEPATH` stays as an override.
+  Keep `dedup-export`/`dedup-import` until this lands — otherwise a schema rebuild silently
+  loses canons. Leans into the self-repairing reconcile direction below.
+
 - 💡 **Merge specified playlists.** Some playlists are different versions of the same
   list under slightly different names. Need a way to point at two (or more) playlists by
   name and merge them into one. Falls under *Playlist management* below — this is the
@@ -43,12 +56,17 @@ The immediate, next-up work.
 Navidrome is a player, not a library manager, and playlists are the one entity Airdrome
 can't shape indirectly through file tags (unlike track metadata). So playlists need a
 first-class management story of their own. Today the only playlist operation is
-`navidrome playlists` (3-way merge against the backend, see `airdrome/playlists/`) and
-`resolve --rebuild-playlists`. The open question is *how the user edits and curates
+`navi push` (3-way merge against the backend, see `airdrome/playlists/`) and
+`land --rebuild-playlists`. The open question is *how the user edits and curates
 playlists*.
 
 Candidate directions (not mutually exclusive — pick per use case):
 
+- 💡 **Replace the 3-way merge with explicit push/pull.** The playlist 3-way merge is the
+  most complex logic in the codebase. `navi push` showed how much simpler a one-directional
+  model reads. Consider splitting playlist sync into explicit `push` (Airdrome → Navidrome)
+  and `pull` (Navidrome → Airdrome) instead of reconciling both ends. This decides whether
+  the merge engine survives at all, so settle it before investing further in the merge.
 - 💡 **m3u round-trip.** Export resolved playlists as `.m3u`, edit in any external tool,
   re-import. Pro: zero bespoke UI, works with existing editors. Con: needs stable
   file-path ↔ Track resolution on re-import, and the on-disk paths must match the

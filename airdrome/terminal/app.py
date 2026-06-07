@@ -3,7 +3,7 @@ from pathlib import Path
 import typer
 from sqlalchemy.orm import Session
 
-from airdrome.console import console, done
+from airdrome.console import console, done, set_verbosity, step
 from airdrome.ingest import BY_NAME, DataKind, Importer, detect
 from airdrome.library.unify import do_unify
 from airdrome.migrations import upgrade_to_head
@@ -12,8 +12,9 @@ from airdrome.scrobbles.augment_aliases import augment_aliases
 from airdrome.scrobbles.copy_plays import copy_plays
 from airdrome.scrobbles.match_aliases import match_aliases
 
-from .library import library_app
-from .navidrome import navidrome_app
+from . import pipeline
+from .maint import maint_app
+from .navi import navi_app
 from .options import DRY_RUN
 from .state import AppState
 
@@ -22,23 +23,28 @@ _HELP = """Airdrome — migrate your music library and listening history into Na
 
 \b
 Typical flow (run in order):
-  import <path>...           ingest exports & music folders
-  resolve                    build the canonical library graph
-  library organize           move/copy files into LIBRARY_DIR
-  library auto-deduplicate    collapse duplicate tracks
-  navidrome push             sync play counts & ratings
-  navidrome playlists        sync playlists
+  import <path>...   ingest exports & music folders
+  land               build the canonical library graph
+  organize           move/copy files into LIBRARY_DIR
+  dedup              collapse duplicate tracks
+  navi push          sync play counts, ratings & playlists
 
 Every write command is idempotent and takes --dry-run/-n. Run any command with --help."""
 
 app = typer.Typer(help=_HELP)
-app.add_typer(library_app, name="library")
-app.add_typer(navidrome_app, name="navidrome")
+pipeline.register(app)
+app.add_typer(navi_app, name="navi")
+app.add_typer(maint_app, name="maint")
 
 
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context):
+def main(
+    ctx: typer.Context,
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show per-item detail (file picks, misses)."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-essential output."),
+):
     """Open the DB session shared by every subcommand and commit (or roll back) on exit."""
+    set_verbosity(1 if verbose else -1 if quiet else 0)
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
         return
@@ -128,8 +134,8 @@ def import_(
         importer_cls(path).ingest(state.session, kinds)
 
 
-@app.command("resolve")
-def resolve(
+@app.command("land")
+def land(
     ctx: typer.Context,
     threshold: float = typer.Option(0.4, "--threshold", "-t", help="Fuzzy alias-match similarity threshold."),
     merge_playlists: bool = typer.Option(
@@ -154,15 +160,19 @@ def resolve(
     """
     state: AppState = ctx.obj
     state.dry_run = dry_run
+    step(1, 4, "Unify source data into canonical records")
     do_unify(state.session, merge_playlists=merge_playlists, rebuild_playlists=rebuild_playlists)
+    step(2, 4, "Augment aliases with missing artist/album")
     augment_aliases(state.session)
+    step(3, 4, "Match aliases to canonical tracks")
     match_aliases(state.session, threshold=threshold)
+    step(4, 4, "Copy plays into history")
     copy_plays(state.session)
     done("Resolve complete")
 
 
-@library_app.callback(invoke_without_command=True)
-@navidrome_app.callback(invoke_without_command=True)
+@navi_app.callback(invoke_without_command=True)
+@maint_app.callback(invoke_without_command=True)
 def sub_callback(ctx: typer.Context):
     """Show the sub-app's help when invoked without a subcommand."""
     if ctx.invoked_subcommand is None:

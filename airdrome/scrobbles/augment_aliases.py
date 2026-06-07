@@ -1,7 +1,8 @@
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import TextColumn
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from airdrome.console import done, make_progress
 from airdrome.models import TrackAlias
 
 
@@ -57,22 +58,18 @@ def maybe_complete_alias(alias: TrackAlias, s: Session):
 
 
 def augment_aliases(s: Session):
+    """Backfill blank artist/album on aliases from sibling aliases, with a progress bar and summary."""
     aliases = s.scalars(
         select(TrackAlias).where(or_(TrackAlias.album_norm == "", TrackAlias.artist_norm == ""))
     ).all()
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("✅ {task.fields[full]}  "),
-        TextColumn("☑️ {task.fields[partial]}  "),
-        TextColumn("🗿 {task.fields[no]}  "),
-        TimeElapsedColumn(),
+    progress = make_progress(
+        TextColumn("[green]{task.fields[full]} full[/green]"),
+        TextColumn("[cyan]{task.fields[partial]} partial[/cyan]"),
+        TextColumn("[dim]{task.fields[no]} unchanged[/dim]"),
     )
     full = partial = no = 0
-    task_id = progress.add_task(
-        f"Augmenting {len(aliases)} aliases", total=len(aliases), full=full, partial=partial, no=no
-    )
     with progress:
+        task_id = progress.add_task("Augmenting aliases", total=len(aliases), full=0, partial=0, no=0)
         for alias in aliases:
             completed = maybe_complete_alias(alias, s)
             if len(completed) == 2:
@@ -82,3 +79,5 @@ def augment_aliases(s: Session):
             else:
                 no += 1
             progress.update(task_id, advance=1, full=full, partial=partial, no=no)
+
+    done(f"augmented {full} fully, {partial} partially ({no} unchanged)")

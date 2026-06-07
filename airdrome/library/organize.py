@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import console, done, make_progress
+from airdrome.console import console, detail, done, make_progress
 from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
 from airdrome.models import Track, TrackFile, TrackGroup
 
@@ -27,10 +27,12 @@ class FileOrganizer:
         if len(files) > 1:
             main_tf = self.select_main(files)
             copies = [tf for tf in files if tf.id != main_tf.id]
-            console.print("[dim]multiple files — picking best:[/dim]")
+            # Per-file detail is verbose-only: on a large library this fires for many tracks and
+            # would bury the progress bar. The chosen main is recorded on disk regardless.
+            detail("[dim]multiple files — picking best:[/dim]")
             for tf in files:
                 marker = "[green]✓[/green]" if tf.id == main_tf.id else " "
-                console.print(f"[dim]  {marker} {tf.source_path}[/dim]")
+                detail(f"[dim]  {marker} {tf.source_path}[/dim]")
         else:
             main_tf, copies = files[0], []
 

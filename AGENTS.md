@@ -28,38 +28,44 @@ airdrome --help
 
 ## CLI surface
 
-End-to-end flow: `import <path>...` → `resolve` → `library organize` → `library
-auto-deduplicate` → `navidrome push` / `navidrome playlists`. Every write command is
-idempotent and takes `--dry-run`/`-n` (rolls back instead of committing). Run any command
-with `--help` for flags.
+End-to-end flow: `import <path>...` → `land` → `organize` → `dedup` → `navi push`. Every
+write command is idempotent and takes `--dry-run`/`-n` (rolls back instead of committing).
+Global `-v/--verbose` shows per-item detail (file picks, misses); `-q/--quiet` suppresses
+non-essential output (both on the root callback, set via `console.set_verbosity`). Run any
+command with `--help` for flags.
+
+The top level is exactly the pipeline; two groups hold the rest — `navi` (sync destinations)
+and `maint` (housekeeping).
 
 - **`import <path>...`** — auto-detect each source and ingest its tracks/playlists/scrobbles.
   Per-source and dumb; pass many paths or a directory. `--as <source>` forces a source for
   every path; `--no-tracks`/`--no-playlists`/`--no-scrobbles` skip a kind. All importers
   resolve up front, so an unrecognized/ambiguous path fails before anything is written.
-- **`resolve`** — build the canonical graph from *everything imported* (run once, after all
-  imports). Order: `do_unify` → `augment_aliases` → `match_aliases` → `copy_plays`.
-  `-t/--threshold` (fuzzy alias match, default 0.4); `-m/--merge-playlists` (collapse
-  same-name playlists, newest anchors); `--rebuild-playlists` (drop + rebuild canonical
-  playlists from source, discarding backend-sync links).
-- **`library`**
-  - `organize` — copy (default) or `--move`/`-m` bound files into `LIBRARY_DIR`. `select_main`
-    picks the best copy (bitrate, then container). (The `FileOrganizer`/`organize_library`
-    engine still defaults to *move*; only the CLI defaults to copy — the safer, non-destructive
-    user default.)
-  - `deduplicate` — interactive TUI to review duplicate groups and pick canons.
-  - `auto-deduplicate` — batch rebuild of `Track.canon_id` from N flag-sets + stored manual
-    overrides. Shares `-s/--set` (repeatable, comma-separated fields; title always implicit)
-    and `-c/--canon` (`added`/`year`) with `deduplicate`. With no `--set` the CLI uses
-    `RECOMMENDED_SETS` (see *Dedup tuning notes*); the `auto_deduplicate` library function still
-    falls back to a single all-fields set.
-  - `export-duplicates`/`import-duplicates` — round-trip confirmed dedup groups to/from JSON
-    (default `DUPLICATES_FILEPATH`); idempotent upsert keyed on the member set.
-  - `renormalize` — recompute `_norm` fields on tracks, aliases, and files.
-- **`navidrome`** (both require Navidrome stopped; they probe `NAVIDROME_PORT` and prompt
-  unless `-y/--yes`, then write its SQLite DB directly)
-  - `push` — play counts + ratings for `NAVIDROME_USER`.
-  - `playlists` — 3-way merge every playlist between Airdrome and Navidrome.
+- **`land`** — build the canonical graph from *everything imported* (run once, after all
+  imports). Four numbered steps (printed via `console.step`): `do_unify` → `augment_aliases`
+  → `match_aliases` → `copy_plays`. `-t/--threshold` (fuzzy alias match, default 0.4);
+  `-m/--merge-playlists` (collapse same-name playlists, newest anchors); `--rebuild-playlists`
+  (drop + rebuild canonical playlists from source, discarding backend-sync links).
+- **`organize`** — copy (default) or `--move`/`-m` bound files into `LIBRARY_DIR`.
+  `select_main` picks the best copy (bitrate, then container). (The `FileOrganizer`/
+  `organize_library` engine still defaults to *move*; only the CLI defaults to copy — the
+  safer, non-destructive user default.) The per-file "picking best" lines are verbose-only.
+- **`dedup`** — batch rebuild of `Track.canon_id` from N flag-sets + stored manual overrides.
+  `-s/--set` (repeatable, comma-separated fields; title always implicit), `-c/--canon`
+  (`added`/`year`). With no `--set` the CLI uses `RECOMMENDED_SETS` (see *Dedup tuning notes*);
+  the `auto_deduplicate` library function still falls back to a single all-fields set. With
+  `--review`/`-r` the interactive TUI opens *after* the batch pass so you can adjust the
+  proposed canons (`--match` filters the TUI by substring); choices persist as manual
+  overrides feeding the next run.
+- **`dedup-export`/`dedup-import`** — round-trip confirmed dedup groups to/from JSON (default
+  `DUPLICATES_FILEPATH`); idempotent upsert keyed on the member set. These survive the
+  disposable DB across schema rebuilds; slated for automatic management (see ROADMAP.md).
+- **`navi push`** — requires Navidrome stopped (probes `NAVIDROME_PORT`, prompts unless
+  `-y/--yes`, then writes its SQLite DB directly). Pushes play counts + ratings *and*
+  playlists (3-way merge) for `NAVIDROME_USER` under one confirmation; scope to one half with
+  `--only stats` / `--only playlists`.
+- **`maint renormalize`** — recompute `_norm` fields on tracks, aliases, and files (the escape
+  hatch for a normalization-rule change, instead of a full reimport).
 
 ## Architecture
 
@@ -69,7 +75,7 @@ with `--help` for flags.
    `SourceTrack`/`SourcePlaylist`/`TrackFile` + `TrackAlias`/`TrackAliasScrobble` rows.
    Format parsers live under `cloud/` (Spotify, Last.fm, ListenBrainz, iTunes XML, Apple
    Media Services) plus a local folder scanner.
-2. **Resolve** (`library/unify.py`, `scrobbles/`) — unify source rows into canonical
+2. **Land** (`library/unify.py`, `scrobbles/`) — unify source rows into canonical
    `Track`/`Playlist`, bind files, then augment, fuzzy-match (`pg_trgm`), and copy scrobbles
    into `TrackPlay` history. Needs the full picture.
 3. **Organize** (`library/organize.py`) — move/copy bound files into a structured directory.
@@ -158,7 +164,7 @@ singleton is imported wherever config is needed.
 | `DB_DSN` | — | PostgreSQL DSN (required) |
 | `DB_ECHO` | `False` | SQLAlchemy query logging |
 | `LIBRARY_DIR` | — | Root for organized files (required; empty on first run) |
-| `DUPLICATES_FILEPATH` | `data/duplicates.json` | Default file for `library {im,ex}port-duplicates` |
+| `DUPLICATES_FILEPATH` | `data/duplicates.json` | Default file for `dedup-export`/`dedup-import` |
 | `NAVIDROME_DB_DSN` | `None` | Path to Navidrome's SQLite DB |
 | `NAVIDROME_USER` | `None` | Navidrome user that owns synced play counts/ratings |
 | `NAVIDROME_PORT` | `4533` | Port the `navidrome` commands probe to confirm the server is stopped |
@@ -190,7 +196,7 @@ round-trip correctness matters.
 
 ## Dedup tuning notes
 
-- Recommended `auto-deduplicate` sets (precise yet mass): `-s "artist,duration" -s
+- Recommended `dedup` sets (precise yet mass): `-s "artist,duration" -s
   "artist,year" -s "album_artist,duration"` — reaches ~98% of the reckless `artist`-only
   ceiling while gating every merge on a matching duration OR year, so edits/remixes/live cuts
   don't collapse. These are codified as `RECOMMENDED_SETS` (`normalize/dedup/grouping.py`) and

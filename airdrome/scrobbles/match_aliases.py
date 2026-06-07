@@ -4,7 +4,7 @@ from rich.progress import TextColumn
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import done, make_progress
+from airdrome.console import done, is_verbose, make_progress
 from airdrome.match import find_best_track
 from airdrome.models import TrackAlias
 
@@ -62,7 +62,8 @@ def match_aliases(s: Session, threshold: float = 0.4):
             s,
             threshold=threshold,
             on_progress=_on_progress,
-            log=progress.console.print,
+            # Per-alias match reasoning is verbose-only; otherwise it floods the bar.
+            log=progress.console.print if is_verbose() else None,
         )
 
     done(f"matched {matched}, unmatched {unmatched}")

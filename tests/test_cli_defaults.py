@@ -1,7 +1,7 @@
 """CLI wiring tests: lock in the user-facing defaults that differ from the engine defaults.
 
 These guard intent, not mechanics — `organize` must default to the non-destructive *copy*, and
-`auto-deduplicate` with no `--set` must use `RECOMMENDED_SETS` (not the near-useless all-fields
+`dedup` with no `--set` must use `RECOMMENDED_SETS` (not the near-useless all-fields
 fallback the library function keeps). The app callback's DB session is stubbed so no real DB or
 migration runs; the business functions are stubbed so we can inspect exactly how they were called.
 """
@@ -26,33 +26,33 @@ def stub_session(monkeypatch):
 
 
 def test_organize_defaults_to_copy(stub_session, monkeypatch):
-    """`library organize` with no flag copies (safe default); `--move` flips it to a move."""
+    """`organize` with no flag copies (safe default); `--move` flips it to a move."""
     spy = MagicMock()
-    monkeypatch.setattr("airdrome.terminal.library.organize_library", spy)
+    monkeypatch.setattr("airdrome.terminal.pipeline.organize_library", spy)
 
-    assert runner.invoke(app, ["library", "organize"]).exit_code == 0
+    assert runner.invoke(app, ["organize"]).exit_code == 0
     assert spy.call_args.kwargs["copy"] is True
 
     spy.reset_mock()
-    assert runner.invoke(app, ["library", "organize", "--move"]).exit_code == 0
+    assert runner.invoke(app, ["organize", "--move"]).exit_code == 0
     assert spy.call_args.kwargs["copy"] is False
 
 
-def test_auto_deduplicate_defaults_to_recommended_sets(stub_session, monkeypatch):
-    """`library auto-deduplicate` with no `--set` uses RECOMMENDED_SETS."""
+def test_dedup_defaults_to_recommended_sets(stub_session, monkeypatch):
+    """`dedup` with no `--set` uses RECOMMENDED_SETS."""
     spy = MagicMock(return_value=AutoDedupResult(groups=[], auto_twins=0, manual_changes=0))
-    monkeypatch.setattr("airdrome.terminal.library.auto_deduplicate", spy)
+    monkeypatch.setattr("airdrome.terminal.pipeline.auto_deduplicate", spy)
 
-    assert runner.invoke(app, ["library", "auto-deduplicate"]).exit_code == 0
+    assert runner.invoke(app, ["dedup"]).exit_code == 0
     assert spy.call_args.kwargs["flag_sets"] == RECOMMENDED_SETS
 
 
-def test_auto_deduplicate_explicit_set_overrides_default(stub_session, monkeypatch):
+def test_dedup_explicit_set_overrides_default(stub_session, monkeypatch):
     """An explicit `--set` is parsed and used instead of the recommended default."""
     spy = MagicMock(return_value=AutoDedupResult(groups=[], auto_twins=0, manual_changes=0))
-    monkeypatch.setattr("airdrome.terminal.library.auto_deduplicate", spy)
+    monkeypatch.setattr("airdrome.terminal.pipeline.auto_deduplicate", spy)
 
-    result = runner.invoke(app, ["library", "auto-deduplicate", "--set", "artist,album"])
+    result = runner.invoke(app, ["dedup", "--set", "artist,album"])
     assert result.exit_code == 0
     assert spy.call_args.kwargs["flag_sets"] != RECOMMENDED_SETS
     assert spy.call_args.kwargs["flag_sets"][0]["with_artist"] is True

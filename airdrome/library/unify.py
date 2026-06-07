@@ -44,7 +44,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
-from airdrome.console import console, make_progress
+from airdrome.console import console, detail, make_progress
 from airdrome.enums import Source
 from airdrome.models import AwareDatetime, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
 
@@ -144,7 +144,8 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
         # file, leaving none for the second. Checking ``track.files`` — populated by that sibling —
         # avoids a spurious "not found" for a file that is, in fact, already bound to this track.
         if not tfs and not track.files and expects_local_file(st):
-            console.print(f"[dim yellow]not found: {st.possible_locations()[0]!r}[/dim yellow]")
+            # Verbose-only: a large XML import misses many files, which would swamp the bar.
+            detail(f"[dim yellow]not found: {st.possible_locations()[0]!r}[/dim yellow]")
 
         s.flush()
         yield created, updated, len(tfs)
