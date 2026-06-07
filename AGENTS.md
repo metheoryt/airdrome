@@ -34,9 +34,14 @@ Global `-v/--verbose` shows per-item detail (file picks, misses); `-q/--quiet` s
 non-essential output (both on the root callback, set via `console.set_verbosity`). Run any
 command with `--help` for flags.
 
-The top level is exactly the pipeline; two groups hold the rest — `navi` (sync destinations)
-and `maint` (housekeeping).
+The top level is the pipeline plus `status`; two groups hold the rest — `navi` (sync
+destinations) and `maint` (housekeeping).
 
+- **`status`** — read-only "where am I?" snapshot: config sanity (DB connectivity, `LIBRARY_DIR`
+  state, Navidrome config + whether it's running) and per-stage counts (imported / landed /
+  files / dedup / synced). Bypasses the root callback's session setup (early return keyed on the
+  command name) and opens its own session, so it reports an unreachable DB instead of crashing —
+  and never applies migrations. Lives in `terminal/status.py`.
 - **`import <path>...`** — auto-detect each source and ingest its tracks/playlists/scrobbles.
   Per-source and dumb; pass many paths or a directory. `--as <source>` forces a source for
   every path; `--no-tracks`/`--no-playlists`/`--no-scrobbles` skip a kind. All importers

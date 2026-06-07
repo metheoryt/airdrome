@@ -17,6 +17,7 @@ from .maint import maint_app
 from .navi import navi_app
 from .options import DRY_RUN
 from .state import AppState
+from .status import status
 
 
 _HELP = """Airdrome — migrate your music library and listening history into Navidrome.
@@ -29,9 +30,11 @@ Typical flow (run in order):
   dedup              collapse duplicate tracks
   navi push          sync play counts, ratings & playlists
 
+Run `status` anytime for a read-only snapshot of config and pipeline progress.
 Every write command is idempotent and takes --dry-run/-n. Run any command with --help."""
 
 app = typer.Typer(help=_HELP)
+app.command("status")(status)
 pipeline.register(app)
 app.add_typer(navi_app, name="navi")
 app.add_typer(maint_app, name="maint")
@@ -47,6 +50,10 @@ def main(
     set_verbosity(1 if verbose else -1 if quiet else 0)
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
+        return
+    # `status` is a read-only diagnostic that opens its own (defensive) session, so it can
+    # report an unreachable DB or un-applied migrations instead of crashing in the setup below.
+    if ctx.invoked_subcommand == "status":
         return
     upgrade_to_head()
     # expire_on_commit=False keeps ORM objects populated after a commit. The

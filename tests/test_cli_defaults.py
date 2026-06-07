@@ -9,6 +9,7 @@ migration runs; the business functions are stubbed so we can inspect exactly how
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 from typer.testing import CliRunner
 
 from airdrome.normalize.dedup import RECOMMENDED_SETS, AutoDedupResult
@@ -58,3 +59,22 @@ def test_dedup_explicit_set_overrides_default(stub_session, monkeypatch):
     assert spy.call_args.kwargs["flag_sets"][0]["with_artist"] is True
     assert spy.call_args.kwargs["flag_sets"][0]["with_album"] is True
     assert spy.call_args.kwargs["flag_sets"][0]["with_year"] is False
+
+
+def test_status_reports_unreachable_db(monkeypatch):
+    """`status` reports an unreachable DB instead of crashing — and never runs migrations.
+
+    This is the whole point of the command's defensive, self-managed session (it bypasses the
+    root callback's session setup), so it must survive a database that other commands can't.
+    """
+    migrate = MagicMock()
+    monkeypatch.setattr("airdrome.terminal.app.upgrade_to_head", migrate)
+
+    broken = MagicMock()
+    broken.execute.side_effect = SQLAlchemyError("connection refused")
+    monkeypatch.setattr("airdrome.terminal.status.Session", lambda *a, **k: broken)
+
+    result = runner.invoke(app, ["status"])
+    assert result.exit_code == 0
+    assert "unreachable" in result.stdout
+    migrate.assert_not_called()

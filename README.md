@@ -92,6 +92,14 @@ airdrome navi push                  # play counts + ratings + playlists (one con
 
 Run any command with `--help` for its full options.
 
+### `airdrome status`
+
+Read-only snapshot of where you are. Shows config sanity (database connectivity, `LIBRARY_DIR`
+state, whether Navidrome is configured and currently running) and per-stage counts (imported
+sources, canonical tracks/aliases/plays/playlists, files bound and organized, dedup groups,
+backend playlist links). Never writes and never applies migrations — safe to run anytime, and
+it reports an unreachable database instead of failing.
+
 ### `airdrome import <path>...`
 
 Auto-detect the source at each `<path>` and import its tracks, playlists, and scrobbles.
