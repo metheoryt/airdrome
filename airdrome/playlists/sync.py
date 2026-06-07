@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import console
+from airdrome.console import console, done
 from airdrome.enums import Source
 from airdrome.models import Playlist, PlaylistLink, PlaylistTrack, Track
 
@@ -283,4 +283,4 @@ def sync(s: Session, adapter: PlaylistAdapter) -> None:
         console.print(f"  [cyan]<[/cyan]  {playlist.name}")
         total += 1
 
-    console.print(f"[green]{changed}/{total} playlists updated[/green]")
+    done(f"{changed}/{total} playlists updated")

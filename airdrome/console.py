@@ -5,6 +5,15 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, T
 console = Console()
 
 
+def done(summary: str) -> None:
+    """Print the standard command-completion line: a green check plus a one-line summary.
+
+    Every command ends with this so success output reads the same everywhere. Reserve the
+    green check for completion; announce in-progress work with plain/bold text instead.
+    """
+    console.print(f"[green]✓[/green] {summary}")
+
+
 def make_progress(*extra_columns, transient: bool = False) -> Progress:
     """Standard progress bar. Pass extra TextColumn instances for custom fields.
 

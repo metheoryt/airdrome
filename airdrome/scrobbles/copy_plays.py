@@ -1,10 +1,9 @@
 from collections.abc import Callable
 
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import console
+from airdrome.console import done, make_progress
 from airdrome.models import TrackAlias, TrackPlay
 
 
@@ -49,21 +48,15 @@ def do_copy_plays(
 
 
 def copy_plays(s: Session):
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total} aliases  "),
-        TimeElapsedColumn(),
-    )
-
+    """Materialize TrackPlay history from matched aliases, with a progress bar and summary."""
     total = s.scalars(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_not(None))).one()
 
-    with progress:
-        task = progress.add_task(f"Copying plays from {total} matched aliases", total=total)
+    with make_progress() as progress:
+        task = progress.add_task("Copying plays from matched aliases", total=total)
 
         def _on_progress(aliases_done: int):
             progress.update(task, completed=aliases_done)
 
         plays = do_copy_plays(s, on_progress=_on_progress)
 
-    console.print(f"[green]plays copied: {plays}[/green]")
+    done(f"{plays} plays copied")

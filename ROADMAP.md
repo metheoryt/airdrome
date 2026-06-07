@@ -26,6 +26,16 @@ The immediate, next-up work.
   members on merge, whether it's a new CLI verb (`library playlists merge <a> <b>...`)
   or part of a broader playlist toolset.
 
+- 💡 **`organize --dry-run` isn't actually dry.** `FileOrganizer.transfer` runs
+  `shutil.move`/`shutil.copy` unconditionally; `--dry-run` only rolls back the DB
+  (`library_path` writes), so files are *already relocated on disk* when the rollback
+  happens. The CLI summary also still says "moved/copied" under dry-run. Default-copy
+  softens it (originals survive a dry-run move… because nothing moved), but it's still
+  misleading. Fix: gate the filesystem op on `dry_run` and have the summary say "would
+  copy/move N" — needs `dry_run` threaded into `organize_library`/`FileOrganizer`. Ties
+  into the self-repairing organize state machine in the reconcile design below; do it
+  there or as a standalone correctness fix first.
+
 ---
 
 ## Playlist management

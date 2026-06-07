@@ -23,6 +23,17 @@ def flag_set(*active: str) -> dict[str, bool]:
     return {f"with_{f}": (f in active) for f in FIELDS}
 
 
+# Recommended auto-dedup flag-sets: precise yet mass. Each gates every merge on a matching
+# duration OR year, so edits/remixes/live cuts don't collapse — reaching ~98% of the reckless
+# artist-only ceiling without its false merges (see AGENTS.md "Dedup tuning notes"). Used as the
+# `auto-deduplicate` CLI default; the library function keeps its own all-fields fallback.
+RECOMMENDED_SETS = [
+    flag_set("artist", "duration"),
+    flag_set("artist", "year"),
+    flag_set("album_artist", "duration"),
+]
+
+
 def canon_order(strategy: CanonStrategy = CanonStrategy.ADDED) -> list:
     """Return order_by clauses placing the preferred canon first.
 

@@ -4,10 +4,11 @@ from pathlib import Path
 import typer
 
 from airdrome.conf import settings
-from airdrome.console import console
+from airdrome.console import console, done
 from airdrome.library.organize import organize_library
 from airdrome.normalize.dedup import (
     FIELDS,
+    RECOMMENDED_SETS,
     CanonStrategy,
     Deduplicator,
     DeduplicatorUI,
@@ -18,23 +19,25 @@ from airdrome.normalize.dedup import (
 )
 from airdrome.normalize.names import normalize_alias_names, normalize_track_file_names, normalize_track_names
 
+from .options import DRY_RUN
 from .state import AppState
 
 
 library_app = typer.Typer(help="Library tools")
 
-_DRY_RUN = typer.Option(False, "--dry-run", "-n", help="Roll back all changes after execution.")
-
 
 @library_app.command("organize")
 def library_organize(
     ctx: typer.Context,
-    copy: bool = typer.Option(False, "--copy", "-c"),
-    dry_run: bool = _DRY_RUN,
+    move: bool = typer.Option(
+        False, "--move", "-m", help="Move files into LIBRARY_DIR instead of copying them."
+    ),
+    dry_run: bool = DRY_RUN,
 ):
+    """Copy (or --move) bound files into LIBRARY_DIR, picking the best copy as each track's main."""
     state: AppState = ctx.obj
     state.dry_run = dry_run
-    organize_library(state.session, dst_dir=settings.library_dir, copy=copy)
+    organize_library(state.session, dst_dir=settings.library_dir, copy=not move)
 
 
 def _parse_set(spec: str) -> dict[str, bool]:
@@ -78,7 +81,11 @@ def deduplicate_cli(
 def auto_deduplicate_cli(
     ctx: typer.Context,
     sets: list[str] = typer.Option(
-        None, "--set", "-s", help=f"{_SET_HELP} No --set means one set with all fields on."
+        None,
+        "--set",
+        "-s",
+        help=f"{_SET_HELP} No --set uses the recommended sets "
+        '("artist,duration" + "artist,year" + "album_artist,duration").',
     ),
     canon: CanonStrategy = typer.Option(CanonStrategy.ADDED, "--canon", "-c", help=_CANON_HELP),
 ):
@@ -87,19 +94,20 @@ def auto_deduplicate_cli(
     Every run is a clean slate: all canon_ids are reset, each --set produces
     its own bucket-grouping, overlapping groups across sets are merged, then
     stored manual choices layer on top and any canon chain is flattened.
+    With no --set, the recommended sets are used (see RECOMMENDED_SETS).
     """
     state: AppState = ctx.obj
 
-    flag_sets = [_parse_set(s) for s in sets] if sets else None
+    flag_sets = [_parse_set(s) for s in sets] if sets else RECOMMENDED_SETS
     result = auto_deduplicate(state.session, flag_sets=flag_sets, strategy=canon)
 
     for group in result.groups:
         canons = [None] + [group[0].id] * (len(group) - 1)
         console.print(DeduplicatorUI.compose_table("auto-dedup", group, canons))
 
-    console.print(
-        f"[green]{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
-        f" + {result.manual_changes} manual override(s) from stored choices.[/green]"
+    done(
+        f"{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
+        f" + {result.manual_changes} manual override(s) from stored choices"
     )
 
 
@@ -114,14 +122,14 @@ def export_duplicates_cli(
     data = export_dedup_groups(state.session)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    console.print(f"[green]Exported {len(data)} group(s) to {dest}[/green]")
+    done(f"Exported {len(data)} group(s) to {dest}")
 
 
 @library_app.command("import-duplicates")
 def import_duplicates_cli(
     ctx: typer.Context,
     path: Path = typer.Argument(None, help="Input JSON file (default: DUPLICATES_FILEPATH)."),
-    dry_run: bool = _DRY_RUN,
+    dry_run: bool = DRY_RUN,
 ):
     """Load confirmed dedup groups from a JSON file into the DB (idempotent)."""
     state: AppState = ctx.obj
@@ -132,13 +140,15 @@ def import_duplicates_cli(
         raise typer.Exit(1)
     data = json.loads(src.read_text(encoding="utf-8"))
     created, updated = import_dedup_groups(state.session, data)
-    console.print(f"[green]Imported {created} new + {updated} updated group(s) from {src}[/green]")
+    done(f"Imported {created} new + {updated} updated group(s) from {src}")
 
 
 @library_app.command()
-def renormalize(ctx: typer.Context, dry_run: bool = _DRY_RUN):
+def renormalize(ctx: typer.Context, dry_run: bool = DRY_RUN):
+    """Recompute the normalized `_norm` fields on tracks, aliases, and files."""
     state: AppState = ctx.obj
     state.dry_run = dry_run
     normalize_track_names(state.session)
     normalize_alias_names(state.session)
     normalize_track_file_names(state.session)
+    done("Renormalized tracks, aliases, and files")

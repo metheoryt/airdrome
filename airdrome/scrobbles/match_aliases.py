@@ -1,10 +1,10 @@
 from collections.abc import Callable
 
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import TextColumn
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import console
+from airdrome.console import done, make_progress
 from airdrome.match import find_best_track
 from airdrome.models import TrackAlias
 
@@ -44,18 +44,16 @@ def do_match_aliases(
 
 
 def match_aliases(s: Session, threshold: float = 0.4):
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("✅ {task.fields[match]}  "),
-        TextColumn("❌ {task.fields[mismatch]}  "),
-        TimeElapsedColumn(),
+    """Match unmatched aliases to canonical tracks, with a progress bar and summary."""
+    progress = make_progress(
+        TextColumn("[green]✓ {task.fields[match]}[/green]"),
+        TextColumn("[red]✗ {task.fields[mismatch]}[/red]"),
     )
 
     total = s.scalars(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_(None))).one()
 
     with progress:
-        task = progress.add_task(f"Matching {total} aliases", total=total, match=0, mismatch=0)
+        task = progress.add_task("Matching aliases", total=total, match=0, mismatch=0)
 
         def _on_progress(matched: int, unmatched: int):
             progress.update(task, advance=1, match=matched, mismatch=unmatched)
@@ -67,4 +65,4 @@ def match_aliases(s: Session, threshold: float = 0.4):
             log=progress.console.print,
         )
 
-    console.print(f"[green]matched: {matched}  unmatched: {unmatched}[/green]")
+    done(f"matched {matched}, unmatched {unmatched}")

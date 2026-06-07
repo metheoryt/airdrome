@@ -43,12 +43,16 @@ with `--help` for flags.
   same-name playlists, newest anchors); `--rebuild-playlists` (drop + rebuild canonical
   playlists from source, discarding backend-sync links).
 - **`library`**
-  - `organize` — move (default) or `--copy` bound files into `LIBRARY_DIR`. `select_main`
-    picks the best copy (bitrate, then container).
+  - `organize` — copy (default) or `--move`/`-m` bound files into `LIBRARY_DIR`. `select_main`
+    picks the best copy (bitrate, then container). (The `FileOrganizer`/`organize_library`
+    engine still defaults to *move*; only the CLI defaults to copy — the safer, non-destructive
+    user default.)
   - `deduplicate` — interactive TUI to review duplicate groups and pick canons.
   - `auto-deduplicate` — batch rebuild of `Track.canon_id` from N flag-sets + stored manual
     overrides. Shares `-s/--set` (repeatable, comma-separated fields; title always implicit)
-    and `-c/--canon` (`added`/`year`) with `deduplicate`.
+    and `-c/--canon` (`added`/`year`) with `deduplicate`. With no `--set` the CLI uses
+    `RECOMMENDED_SETS` (see *Dedup tuning notes*); the `auto_deduplicate` library function still
+    falls back to a single all-fields set.
   - `export-duplicates`/`import-duplicates` — round-trip confirmed dedup groups to/from JSON
     (default `DUPLICATES_FILEPATH`); idempotent upsert keyed on the member set.
   - `renormalize` — recompute `_norm` fields on tracks, aliases, and files.
@@ -186,7 +190,8 @@ round-trip correctness matters.
 - Recommended `auto-deduplicate` sets (precise yet mass): `-s "artist,duration" -s
   "artist,year" -s "album_artist,duration"` — reaches ~98% of the reckless `artist`-only
   ceiling while gating every merge on a matching duration OR year, so edits/remixes/live cuts
-  don't collapse.
+  don't collapse. These are codified as `RECOMMENDED_SETS` (`normalize/dedup/grouping.py`) and
+  are the no-`--set` CLI default.
 - Bare `-s "artist"` is dangerous (no discriminator). "All fields" only finds exact-dup files.
 - `compute_auto_dedup_groups` skips a track when *all* selected non-title key fields are blank.
 - `loved` is deliberately out of canon ordering — a group's loved status is derived from the

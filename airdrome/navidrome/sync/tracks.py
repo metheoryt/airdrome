@@ -5,7 +5,7 @@ from rich.progress import TextColumn
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import console, make_progress
+from airdrome.console import done, make_progress
 from airdrome.models import Track, TrackFile, TrackGroup, TrackPlay
 
 from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, get_nv_engine
@@ -191,4 +191,4 @@ class TrackSyncer:
                 progress.update(task, advance=1, plays=pc)
 
         nvs.commit()
-        console.print(f"[green]{i} tracks synced with {pc} total plays[/green]")
+        done(f"{i} tracks synced with {pc} total plays")

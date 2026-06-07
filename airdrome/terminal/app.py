@@ -3,7 +3,7 @@ from pathlib import Path
 import typer
 from sqlalchemy.orm import Session
 
-from airdrome.console import console
+from airdrome.console import console, done
 from airdrome.ingest import BY_NAME, DataKind, Importer, detect
 from airdrome.library.unify import do_unify
 from airdrome.migrations import upgrade_to_head
@@ -14,18 +14,31 @@ from airdrome.scrobbles.match_aliases import match_aliases
 
 from .library import library_app
 from .navidrome import navidrome_app
+from .options import DRY_RUN
 from .state import AppState
 
 
-app = typer.Typer(help="Airdrome CLI")
+_HELP = """Airdrome — migrate your music library and listening history into Navidrome.
+
+\b
+Typical flow (run in order):
+  import <path>...           ingest exports & music folders
+  resolve                    build the canonical library graph
+  library organize           move/copy files into LIBRARY_DIR
+  library auto-deduplicate    collapse duplicate tracks
+  navidrome push             sync play counts & ratings
+  navidrome playlists        sync playlists
+
+Every write command is idempotent and takes --dry-run/-n. Run any command with --help."""
+
+app = typer.Typer(help=_HELP)
 app.add_typer(library_app, name="library")
 app.add_typer(navidrome_app, name="navidrome")
-
-_DRY_RUN = typer.Option(False, "--dry-run", "-n", help="Roll back all changes after execution.")
 
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
+    """Open the DB session shared by every subcommand and commit (or roll back) on exit."""
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
         return
@@ -40,7 +53,7 @@ def main(ctx: typer.Context):
     def _finalize():
         if ctx.obj.dry_run:
             session.rollback()
-            console.print("[dim]dry run - no changes committed[/dim]")
+            console.print("[yellow]Dry run — rolled back; nothing was committed.[/yellow]")
         else:
             try:
                 session.commit()
@@ -83,7 +96,7 @@ def import_(
     no_tracks: bool = typer.Option(False, "--no-tracks", help="Skip importing tracks"),
     no_playlists: bool = typer.Option(False, "--no-playlists", help="Skip importing playlists"),
     no_scrobbles: bool = typer.Option(False, "--no-scrobbles", help="Skip importing scrobbles"),
-    dry_run: bool = _DRY_RUN,
+    dry_run: bool = DRY_RUN,
 ):
     """Auto-detect the source at each PATH and import its tracks, playlists, and scrobbles."""
     state: AppState = ctx.obj
@@ -130,7 +143,7 @@ def resolve(
         "--rebuild-playlists",
         help="Drop all canonical playlists first and rebuild from source. Also discards backend-sync links.",
     ),
-    dry_run: bool = _DRY_RUN,
+    dry_run: bool = DRY_RUN,
 ):
     """Build the canonical graph from everything imported.
 
@@ -145,12 +158,13 @@ def resolve(
     augment_aliases(state.session)
     match_aliases(state.session, threshold=threshold)
     copy_plays(state.session)
-    console.print("[bold green]Resolve complete[/bold green]")
+    done("Resolve complete")
 
 
 @library_app.callback(invoke_without_command=True)
 @navidrome_app.callback(invoke_without_command=True)
 def sub_callback(ctx: typer.Context):
+    """Show the sub-app's help when invoked without a subcommand."""
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
 

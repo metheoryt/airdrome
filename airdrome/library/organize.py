@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import console, make_progress
+from airdrome.console import console, done, make_progress
 from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
 from airdrome.models import Track, TrackFile, TrackGroup
 
@@ -155,4 +155,4 @@ def organize_library(
         task = progress.add_task(f"Organizing library ({verb})", total=total)
         i = mover.organize(s, _on_item=lambda _: progress.advance(task))
 
-    console.print(f"[green]{i} tracks {verb}[/green]")
+    done(f"{i} tracks {verb}")

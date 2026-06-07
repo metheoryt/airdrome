@@ -39,26 +39,19 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn, TimeElapsedColumn
+from rich.progress import Progress, TaskID, TextColumn
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
-from airdrome.console import console
+from airdrome.console import console, make_progress
 from airdrome.enums import Source
 from airdrome.models import AwareDatetime, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
 
 
 def _progress(summary: str) -> Progress:
-    """A stage progress bar: description, bar, M-of-N, a per-stage summary column, elapsed."""
-    return Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn(summary),
-        TimeElapsedColumn(),
-        console=console,
-    )
+    """A stage progress bar: the standard bar plus a per-stage summary column."""
+    return make_progress(TextColumn(summary))
 
 
 def _upsert_track(s: Session, *, defaults: dict, **key) -> tuple[Track, bool, bool]:
