@@ -158,6 +158,9 @@ flag; files already on disk are not relocated (that is the reconcile roadmap).
 
 ### Playlist reconcile (`playlists/`)
 
+Long-form rationale + rejected alternatives:
+[docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
+
 Airdrome is the source-of-truth **hub**; every peer is a *remote* reconciled against a
 per-`(playlist, remote)` **base** (`PlaylistLink.synced_track_ids`). Sources (Apple) are
 **read-only** remotes — pull-only, never written; backends (Navidrome) are **read-write**.
@@ -210,6 +213,9 @@ round-trip correctness matters.
 - Solo project, no PRs. Work directly on `main` by default. Branch from `main` only when the
   task is serious/risky or there is already a lot of uncommitted work in progress; when done and
   confirmed, **squash-merge** the branch back into `main` and delete it.
+- **Check the current branch before committing** (`git branch --show-current` / `git status`) —
+  don't assume the branch from earlier in the session; a merge between turns can land you back on
+  `main` unexpectedly.
 - Always `git push` after committing/merging to `main`; **never force-push**.
 - Cover changes with meaningful tests; lean on pytest fixtures heavily.
 - Give every function and method a one-line docstring.
@@ -244,6 +250,8 @@ round-trip correctness matters.
 Forward-looking work — to-do ideas, open design questions, and agreed-but-unbuilt designs —
 lives in [ROADMAP.md](ROADMAP.md) (playlist management, a Telegram management bot, and the
 filesystem ⇄ Airdrome reconcile pipeline). Read it at the start of any non-trivial task.
+Long-form design write-ups (full decision lists, rejected alternatives) live in
+[docs/design/](docs/design/); ROADMAP summarizes and links to them.
 
 **When a new idea surfaces** in a dialog — a feature, a "we should eventually…", or a design
 we settle on but won't build now — **ask the user whether to add it to ROADMAP.md**, and

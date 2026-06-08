@@ -57,13 +57,16 @@ Navidrome is a player, not a library manager, and playlists are the one entity A
 can't shape indirectly through file tags (unlike track metadata). So playlists need a
 first-class management story of their own. **Built (2026-06-08):** `airdrome sync` reconciles
 playlists across remotes — Airdrome as hub, every peer a remote with a per-`(playlist, remote)`
-base, interactive resolver on conflicts. Design now lives in AGENTS.md *Playlist reconcile*.
+base, interactive resolver on conflicts. "How it works today" lives in AGENTS.md *Playlist
+reconcile*; the long-form rationale + rejected alternatives are in
+[docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
 `land --rebuild-playlists` still nukes and rebuilds from source.
 
 - 🅿️ **Parked (own discussion): extend the hub/remotes/base model to tracks** (metadata,
   ratings, loved, play history reconciled per-remote against a base). Same engine as the
   playlist reconcile, richer conflict surface (which *field* wins, not just membership). Play
   counts already flow one-way via `navi push` stats; the general version makes that base-aware.
+  See [docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md) for the parked note.
 
 ### Complementary editing tools (independent of the above)
 
@@ -119,33 +122,11 @@ pipeline. Core mental model is three hops; organize is only the last:
 `file tags --enrich--> TrackFile metadata --unify--> Track identity --organize--> disk location`.
 Tag changes do nothing physical until they reach the Track.
 
-Settled decisions:
+Full design — 12 settled decisions and the three-layer build order — lives in
+[docs/design/fs-reconcile.md](docs/design/fs-reconcile.md). Headlines:
 
-- Source roots are **not** stored; `import <path>` stays stateless. Re-scan = re-run
-  import. Adds-only re-scan already works; delete/move detection is deferred.
-- Source-of-truth is **both** copy and move, configurable; reconcile must work either way.
-- Idempotent/self-repairing organize via a per-file location state machine: compute
-  `desired` from Track metadata + role (`is_main`); move from `absolute_path` (current
-  location), not always `source_path` — this enables re-organizing already-placed files
-  and self-heal. If a file is nowhere, **report missing — do not fabricate**.
-  Self-heal (re-copy from source) only works in copy mode.
-- Optional `copies_dir: Path | None` setting (default `library_dir/Copies`).
-- Quality upgrades fall out for free: a higher-bitrate drop with identical tags hits
-  the existing Track via `get_or_create`, attaches as a 2nd `TrackFile`, and organize
-  promotes it. No fuzzy match involved.
-- Watch matching uses strict full-metadata identity, **no trigram** (trigram dedup
-  stays a separate batch step).
-- Add a `content_hash` column on `TrackFile` (full-file md5, computed in enrich) for
-  watch idempotency. Consequence: "same audio, corrected tags" is treated as a new file.
-- `watch <folder>`: poll-on-a-timer first (move mode, drains the folder), real-time
-  `watchdog` later behind the same function.
-- Re-enrich is its own pass (iterate existing `TrackFile`s, re-read from
-  `absolute_path`), not via the `source_path`-keyed `scan_file` (post-move source_path
-  is stale → spurious duplicate files).
-- unify re-bind is deferred: re-enrich only updates `TrackFile` fields; an in-place
-  tag edit that changes identity won't relocate the file until re-bind exists.
-
-Build order (each its own branch + tests): (1) self-repairing organize state machine,
-(2) `content_hash` column, (3) `ingest_one()` per-file pipeline + `watch` + `reconcile`.
-This pipeline underpins the Telegram bot's upload feature — the bot is one front-end to
-`ingest_one()`.
+- Self-repairing organize via a per-file location state machine (move from `absolute_path`,
+  report missing rather than fabricate); ships first as a standalone layer.
+- A `content_hash` (full-file md5) column on `TrackFile` for watch idempotency.
+- `ingest_one()` per-file pipeline + `watch` (poll first, `watchdog` later) + a `reconcile`
+  command (re-enrich → unify → organize). This underpins the Telegram bot's upload feature.
