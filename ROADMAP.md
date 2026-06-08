@@ -32,12 +32,13 @@ The immediate, next-up work.
   Keep `dedup-export`/`dedup-import` until this lands — otherwise a schema rebuild silently
   loses canons. Leans into the self-repairing reconcile direction below.
 
-- 💡 **Merge specified playlists.** Some playlists are different versions of the same
-  list under slightly different names. Need a way to point at two (or more) playlists by
-  name and merge them into one. Falls under *Playlist management* below — this is the
-  first concrete slice of it. Open questions: which name/identity survives, dedup of
-  members on merge, whether it's a new CLI verb (`library playlists merge <a> <b>...`)
-  or part of a broader playlist toolset.
+- 🧭 **Playlist editing tools (`merge` + `dedup-members`).** A new `playlists` command
+  group: `merge <base> <other>...` folds human-specified near-duplicate playlists into one
+  (tombstone table keeps it durable across re-`land`); `merge --same-name` auto-groups by
+  name (newest anchors), replacing `land --merge-playlists`; `dedup-members [<name>...]`
+  collapses canon-duplicate member rows. Pure canonical-hub edits — `sync` carries them out.
+  Full design + the data that scoped it:
+  [docs/design/playlist-tools.md](docs/design/playlist-tools.md).
 
 - 💡 **`organize --dry-run` isn't actually dry.** `FileOrganizer.transfer` runs
   `shutil.move`/`shutil.copy` unconditionally; `--dry-run` only rolls back the DB
@@ -62,6 +63,12 @@ reconcile*; the long-form rationale + rejected alternatives are in
 [docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
 `land --rebuild-playlists` still nukes and rebuilds from source.
 
+- 💡 **Backend orphan cleanup after merge.** When `playlists merge` absorbs a playlist, its
+  Navidrome counterpart is left as a stale orphan (its `PlaylistLink` is gone, so `sync` neither
+  updates nor deletes it). Deleting backend playlists that no longer map to any canonical is its own
+  concern with its own risk surface. See [docs/design/playlist-tools.md](docs/design/playlist-tools.md)
+  *Follow-up*.
+
 - 🅿️ **Parked (own discussion): extend the hub/remotes/base model to tracks** (metadata,
   ratings, loved, play history reconciled per-remote against a base). Same engine as the
   playlist reconcile, richer conflict surface (which *field* wins, not just membership). Play
@@ -73,8 +80,9 @@ reconcile*; the long-form rationale + rejected alternatives are in
 - 💡 **m3u round-trip.** Export resolved playlists as `.m3u`, edit in any external tool,
   re-import. Pro: zero bespoke UI. Con: needs stable file-path ↔ Track resolution on
   re-import, and on-disk paths must match the organized library.
-- 💡 **A small subset of playlist tools in the CLI.** Merge (the *Now* item), rename,
-  dedup members, split, reorder. Keeps everything in the canonical model.
+- 💡 **More playlist tools in the CLI.** `merge` + `dedup-members` are designed (see *Now*);
+  rename, split, reorder remain unscoped ideas. Reorder fights reconcile decision #2 (ordering
+  is not a semantic), so it needs its own justification. Keeps everything in the canonical model.
 
 ---
 
