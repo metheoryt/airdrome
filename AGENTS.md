@@ -3,6 +3,23 @@
 Guidance for AI coding agents working in this repository. These instructions OVERRIDE
 default behavior — follow them exactly.
 
+## How project knowledge is organized
+
+Durable knowledge lives in git, split by the question it answers — not in a chronological
+journal and not in out-of-tree auto-memory. When you settle something worth keeping, put it
+where its *reader* will look:
+
+| Doc | Reader | Answers |
+|---|---|---|
+| **README.md** | a user running the tool | install / configure / run; observable command behavior |
+| **AGENTS.md** (this file) | an agent about to edit the code | where things live, load-bearing invariants, conventions, workflow |
+| **[docs/design/](docs/design/)** | someone asking *why* | rationale, rejected alternatives, designed-but-unbuilt plans |
+| **[ROADMAP.md](ROADMAP.md)** | planning next work | to-do ideas, open questions, agreed-but-unbuilt (summaries that link to docs/design/) |
+
+Keep this file a **current-state map** — terse facts an editor needs in context. Push the *why*
+(and the alternatives you rejected) into `docs/design/` and link to it; don't inline long
+rationale here. Auto-memory is reserved for cross-project personal facts with no home in the repo.
+
 ## Project
 
 Airdrome migrates a music library plus scrobble/play history from cloud services
@@ -158,14 +175,13 @@ flag; files already on disk are not relocated (that is the reconcile roadmap).
 
 ### Playlist reconcile (`playlists/`)
 
-Long-form rationale + rejected alternatives:
+Why this shape (hub model) + rejected alternatives:
 [docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
 
-Airdrome is the source-of-truth **hub**; every peer is a *remote* reconciled against a
-per-`(playlist, remote)` **base** (`PlaylistLink.synced_track_ids`). Sources (Apple) are
-**read-only** remotes — pull-only, never written; backends (Navidrome) are **read-write**.
-A remote is a `PlaylistAdapter` (`adapter.py`); `writable=False` marks read-only ones.
-`SourcePlaylistRemote` adapts imported `SourcePlaylist` rows; `NavidromeAdapter` the backend.
+Airdrome is the source-of-truth **hub**; every peer is a `PlaylistAdapter` (`adapter.py`)
+*remote* reconciled against a per-`(playlist, remote)` **base** (`PlaylistLink.synced_track_ids`).
+`writable=False` marks **read-only** remotes — `SourcePlaylistRemote` (Apple `SourcePlaylist`
+rows), pull-only, never written; backends are read-write (`NavidromeAdapter`).
 
 - **Engine** (`sync.py`): `_sync_pair` does a multiset 3-way merge (`base`/`ours`/`theirs`)
   for one (playlist, remote). Read-only remotes apply only `theirs→ours` and store `theirs`
@@ -247,13 +263,10 @@ round-trip correctness matters.
 
 ## Roadmap
 
-Forward-looking work — to-do ideas, open design questions, and agreed-but-unbuilt designs —
-lives in [ROADMAP.md](ROADMAP.md) (playlist management, a Telegram management bot, and the
-filesystem ⇄ Airdrome reconcile pipeline). Read it at the start of any non-trivial task.
-Long-form design write-ups (full decision lists, rejected alternatives) live in
-[docs/design/](docs/design/); ROADMAP summarizes and links to them.
+[ROADMAP.md](ROADMAP.md) tracks forward-looking work (playlist management, a Telegram management
+bot, the filesystem ⇄ Airdrome reconcile pipeline). Read it at the start of any non-trivial task.
 
 **When a new idea surfaces** in a dialog — a feature, a "we should eventually…", or a design
 we settle on but won't build now — **ask the user whether to add it to ROADMAP.md**, and
-record it there if they agree. When an item ships, fold its durable design into this file and
-remove it from the roadmap.
+record it there if they agree. When an item ships, move its current-state into this file (and
+mark its `docs/design/` write-up built), then remove it from the roadmap.
