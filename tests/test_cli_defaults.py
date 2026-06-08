@@ -61,6 +61,22 @@ def test_dedup_explicit_set_overrides_default(stub_session, monkeypatch):
     assert spy.call_args.kwargs["flag_sets"][0]["with_year"] is False
 
 
+def test_sync_source_reconciles_one_readonly_remote_without_guard(stub_session, monkeypatch):
+    """`sync apple_xml` reconciles a single read-only remote and never touches the NV guard."""
+    spy = MagicMock()
+    monkeypatch.setattr("airdrome.terminal.sync.reconcile", spy)
+    guard = MagicMock()
+    monkeypatch.setattr("airdrome.terminal.sync._guard_navidrome_stopped", guard)
+
+    result = runner.invoke(app, ["sync", "apple_xml"])
+    assert result.exit_code == 0
+    guard.assert_not_called()  # no writable backend in scope
+
+    adapters = spy.call_args.args[1]
+    assert len(adapters) == 1
+    assert adapters[0].writable is False
+
+
 def test_status_reports_unreachable_db(monkeypatch):
     """`status` reports an unreachable DB instead of crashing — and never runs migrations.
 

@@ -10,7 +10,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from airdrome.models import Backend, Playlist
+from airdrome.enums import Source
+from airdrome.models import Playlist
 
 
 @dataclass(frozen=True)
@@ -33,9 +34,16 @@ class ExternalPlaylist:
 
 
 class PlaylistAdapter(ABC):
-    """Translates between Airdrome canonical playlists and a specific backend."""
+    """Translates between Airdrome canonical playlists and a specific remote.
 
-    backend: Backend
+    A *remote* is any peer Airdrome reconciles playlists with — a read-write server
+    backend (Navidrome, …) or a read-only cloud source (Apple, …). `writable` gates the
+    write half: read-only remotes (`writable = False`) only ever feed `theirs` into the
+    merge and never have `create`/`add_track`/`remove_track`/`from_canonical_track` called.
+    """
+
+    remote: Source
+    writable: bool = True
 
     @abstractmethod
     def list_playlists(self) -> Iterable[ExternalPlaylist]:

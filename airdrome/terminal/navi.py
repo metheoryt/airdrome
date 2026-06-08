@@ -6,28 +6,18 @@ here. Today `push` writes Navidrome's SQLite DB directly, so it requires Navidro
 """
 
 import socket
-from enum import StrEnum
 
 import typer
 
 from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.navidrome import checkpoint_wal, sync_tracks_plays_to_navi
-from airdrome.navidrome.adapter import NavidromeAdapter
-from airdrome.playlists import sync as sync_playlists
 
 from .options import YES
 from .state import AppState
 
 
 navi_app = typer.Typer(help="Sync into Navidrome")
-
-
-class PushTarget(StrEnum):
-    """What `navi push` writes; absent means everything."""
-
-    stats = "stats"
-    playlists = "playlists"
 
 
 def _require_user() -> str:
@@ -56,28 +46,16 @@ def _guard_navidrome_stopped(yes: bool):
 
 
 @navi_app.command("push")
-def push(
-    ctx: typer.Context,
-    only: PushTarget = typer.Option(
-        None, "--only", help="Push only 'stats' (play counts + ratings) or 'playlists'. Default: both."
-    ),
-    yes: bool = YES,
-):
-    """Push play counts, ratings, and playlists for NAVIDROME_USER into Navidrome.
+def push(ctx: typer.Context, yes: bool = YES):
+    """Push play counts and ratings for NAVIDROME_USER into Navidrome.
 
-    Both writes touch the same SQLite DB and need Navidrome stopped, so they share one
-    confirmation. Scope to one half with --only.
+    Writes Navidrome's SQLite DB directly, so it requires Navidrome stopped. Playlists are
+    no longer pushed here — reconcile them with `airdrome sync navidrome` (or `sync all`).
     """
     username = _require_user()
     _guard_navidrome_stopped(yes)
     checkpoint_wal()
     state: AppState = ctx.obj
 
-    if only in (None, PushTarget.stats):
-        console.print("[bold]Pushing play counts and ratings to Navidrome[/bold]")
-        sync_tracks_plays_to_navi(state.session, username)
-
-    if only in (None, PushTarget.playlists):
-        console.print("[bold]Pushing playlists to Navidrome[/bold]")
-        with NavidromeAdapter(state.session, username) as adapter:
-            sync_playlists(state.session, adapter)
+    console.print("[bold]Pushing play counts and ratings to Navidrome[/bold]")
+    sync_tracks_plays_to_navi(state.session, username)

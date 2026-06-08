@@ -84,8 +84,11 @@ airdrome dedup                                 # automatic, flag-set driven
 airdrome dedup --review                        # batch, then open the TUI to adjust canons
 airdrome dedup-export                          # back up confirmed groups to JSON (re-import after a DB rebuild)
 
-# 5. Push to Navidrome (stop Navidrome first — this writes its SQLite DB directly)
-airdrome navi push                  # play counts + ratings + playlists (one confirmation)
+# 5. Reconcile playlists across sources and Navidrome (stop Navidrome — it writes the backend)
+airdrome sync all                   # sources -> canonical -> Navidrome; interactive on conflicts
+
+# 6. Push play counts + ratings to Navidrome (stop Navidrome first — writes its SQLite DB directly)
+airdrome navi push
 ```
 
 ## Command reference
@@ -148,13 +151,30 @@ Round-trip confirmed duplicate groups to a portable JSON file (default `DUPLICAT
 Import is idempotent and matches groups by their member set, so your manual decisions survive a
 database rebuild.
 
+### `airdrome sync <remote>` / `airdrome sync all`
+
+Reconcile playlists across remotes, with Airdrome as the source of truth. Cloud sources
+(`apple_xml`, `apple_ms`) are read-only; `navidrome` is a read-write backend. `sync all` runs
+sources first, then backends. Each playlist is merged against a per-remote base, so downstream
+deletes stick and re-imports don't resurrect removed tracks. When remotes disagree on a track
+(one added it, another removed it), an interactive resolver opens to pick a per-playlist
+strategy: take a remote, keep ours, auto-merge, or abort.
+
+- `--review`/`-r` — open the resolver for *every* changed playlist, not just conflicts
+- `--dry-run`/`-n`
+- `--yes`/`-y` — skip the Navidrome-stopped confirmation
+
+> ⚠️ Any scope that includes `navidrome` writes its SQLite database directly. **Stop Navidrome
+> first** — the CLI refuses to run while it's listening on `NAVIDROME_PORT`. `sync apple_*` is
+> read-only and unguarded.
+
 ### `airdrome navi push`
 
 > ⚠️ Writes directly to Navidrome's SQLite database. **Stop Navidrome first** — the CLI refuses
 > to run while it's listening on `NAVIDROME_PORT`. Pass `--yes`/`-y` to skip the prompt.
 
-Pushes play counts + ratings *and* playlists (3-way merge) for `NAVIDROME_USER` under one
-confirmation. Scope with `--only stats` or `--only playlists`.
+Pushes play counts + ratings for `NAVIDROME_USER`. (Playlists are reconciled with `airdrome
+sync`.)
 
 ### `airdrome maint renormalize`
 

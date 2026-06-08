@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from airdrome.enums import Source
-from airdrome.models import Backend, Playlist, PlaylistLink, PlaylistTrack
+from airdrome.models import Playlist, PlaylistLink, PlaylistTrack
 from airdrome.playlists.adapter import ExternalPlaylist, ExternalTrackRef, PlaylistAdapter
 from airdrome.playlists.sync import _sync_pair, _three_way_merge
 
@@ -27,7 +27,7 @@ class FakeBackend(PlaylistAdapter):
     Playlist rows are a plain list, so multiplicity is observable.
     """
 
-    backend = Backend.NAVIDROME
+    remote = Source.NAVIDROME
 
     def __init__(self):
         self.tracks: dict[str, list[str]] = {}  # ext_id -> ref ids, in order, dups allowed
@@ -76,6 +76,53 @@ class FakeBackend(PlaylistAdapter):
         return ExternalTrackRef(id=rid) if rid is not None else None
 
 
+class FakeSource(PlaylistAdapter):
+    """Dict-backed read-only remote (a cloud source). Pull-only: every write raises.
+
+    Mirrors `FakeBackend`'s read side so the engine's read-only path can be exercised
+    with a controllable canon mapping, while asserting the source is never mutated.
+    """
+
+    remote = Source.APPLE_XML
+    writable = False
+
+    def __init__(self):
+        self.tracks: dict[str, list[str]] = {}  # ext_id -> ref ids, in order
+        self.names: dict[str, str] = {}
+        self.canon_of: dict[str, int] = {}  # ref_id -> canonical Track id
+
+    def seed(self, ext_id: str, name: str, rows: list[str]) -> ExternalPlaylist:
+        self.tracks[ext_id] = list(rows)
+        self.names[ext_id] = name
+        return ExternalPlaylist(id=ext_id, name=name)
+
+    def list_playlists(self):
+        return [ExternalPlaylist(id=i, name=n) for i, n in self.names.items()]
+
+    def get(self, external_id):
+        if external_id in self.tracks:
+            return ExternalPlaylist(id=external_id, name=self.names[external_id])
+        return None
+
+    def get_track_refs(self, external_id):
+        return [ExternalTrackRef(id=r) for r in self.tracks[external_id]]
+
+    def to_canonical_track(self, ref):
+        return self.canon_of.get(ref.id)
+
+    def create(self, playlist):
+        raise NotImplementedError
+
+    def add_track(self, external_id, ref):
+        raise NotImplementedError
+
+    def remove_track(self, external_id, ref):
+        raise NotImplementedError
+
+    def from_canonical_track(self, track_id):
+        raise NotImplementedError
+
+
 def _playlist(s, tracks: list) -> Playlist:
     """Create a playlist holding `tracks` in order (duplicates allowed)."""
     pl = Playlist(name="P", platform=Source.SPOTIFY, source_id=f"src-{id(tracks)}")
@@ -87,19 +134,17 @@ def _playlist(s, tracks: list) -> Playlist:
     return pl
 
 
-def _link(s, pl: Playlist):
+def _link(s, pl: Playlist, remote: Source = Source.NAVIDROME):
     return s.scalars(
-        select(PlaylistLink).where(
-            PlaylistLink.playlist_id == pl.id, PlaylistLink.backend == Backend.NAVIDROME
-        )
+        select(PlaylistLink).where(PlaylistLink.playlist_id == pl.id, PlaylistLink.remote == remote)
     ).one_or_none()
 
 
-def _seed_link(s, pl: Playlist, ext_id: str, synced: list[int]) -> None:
+def _seed_link(s, pl: Playlist, ext_id: str, synced: list[int], remote: Source = Source.NAVIDROME) -> None:
     s.add(
         PlaylistLink(
             playlist_id=pl.id,
-            backend=Backend.NAVIDROME,
+            remote=remote,
             external_id=ext_id,
             synced_track_ids=synced,
             synced_at=datetime.now(UTC),
@@ -244,3 +289,96 @@ def test_no_empty_backend_playlist_created(session):
     assert had_changes is False
     assert be.tracks == {}  # create() never fired
     assert _link(session, pl) is None
+
+
+# ── read-only remote (cloud source) ────────────────────────────────────────
+
+
+def test_readonly_remote_pulls_without_writing(session):
+    """A source remote merges its membership into Airdrome and is never mutated.
+
+    First reconcile of an empty-base pair unions by count: the source's track lands
+    in canonical, the source itself is untouched, and the base records the source's
+    membership for next time.
+    """
+    t = make_track(session, "x")
+    src = FakeSource()
+    src.canon_of["s1"] = t.id
+    ext = src.seed("sp", "P", ["s1"])
+    pl = _playlist(session, [])  # canonical starts empty
+
+    assert _sync_pair(session, src, pl, ext, None, _never) is True
+    assert _pt_rows(session, pl) == [t.id]  # pulled in
+    assert src.tracks["sp"] == ["s1"]  # source untouched
+    assert _link(session, pl, Source.APPLE_XML).synced_track_ids == [t.id]  # base = theirs
+
+    # Idempotent: a second reconcile changes nothing.
+    assert _sync_pair(session, src, pl, ext, _link(session, pl, Source.APPLE_XML), _never) is False
+
+
+def test_readonly_local_only_track_is_preserved(session):
+    """A track in canonical but not in the source survives reconcile (base := theirs).
+
+    If the base captured the *merged* list instead of the source's membership, the
+    local-only track would read as a delete on the next run — guard against that.
+    """
+    x, y = make_track(session, "x"), make_track(session, "y")
+    src = FakeSource()
+    src.canon_of["s1"] = x.id
+    ext = src.seed("sp", "P", ["s1"])  # source lists only x
+    pl = _playlist(session, [x, y])  # y is local-only
+    _seed_link(session, pl, "sp", [x.id], remote=Source.APPLE_XML)  # base: source had x
+
+    assert _sync_pair(session, src, pl, ext, _link(session, pl, Source.APPLE_XML), _never) is False
+    assert _pt_rows(session, pl) == [x.id, y.id]  # y kept, order intact
+
+    # base stays the source's membership, so y is never mistaken for a source delete.
+    assert _link(session, pl, Source.APPLE_XML).synced_track_ids == [x.id]
+
+
+def test_resurrection_bug_is_dead(session):
+    """A downstream delete sticks even after re-importing a source that still lists it.
+
+    push X -> delete X in Navidrome (pull empties canonical) -> re-import a source
+    snapshot still listing X. With a per-source base, base->theirs shows the source
+    didn't change X while base->ours shows we deleted it, so the merge keeps it gone.
+    """
+    x = make_track(session, "x")
+    be = FakeBackend()
+    be.register(x.id, "r1")
+    src = FakeSource()
+    src.canon_of["s1"] = x.id
+    src_ext = src.seed("sp", "P", ["s1"])
+
+    pl = _playlist(session, [x])  # landed from the source
+    _seed_link(session, pl, "sp", [x.id], remote=Source.APPLE_XML)  # land seeded the source base
+
+    # 1. push to Navidrome
+    be_ext = be.seed("e", "P")
+    _sync_pair(session, be, pl, be_ext, None, _never)
+    assert be.tracks["e"] == ["r1"]
+
+    # 2. user deletes X in Navidrome; pull empties canonical
+    be.tracks["e"] = []
+    _sync_pair(session, be, pl, be_ext, _link(session, pl), _never)
+    assert _pt_rows(session, pl) == []
+
+    # 3. re-import the source (still lists X) and reconcile it — X must NOT come back
+    _sync_pair(session, src, pl, src_ext, _link(session, pl, Source.APPLE_XML), _never)
+    assert _pt_rows(session, pl) == []  # bug dead
+
+
+def test_readonly_no_reshuffle_survivors_stay_adds_append(session):
+    """Reconcile is a minimal diff: survivors keep order, removals drop in place, adds append."""
+    a, b, c, d = (make_track(session, n) for n in "abcd")
+    src = FakeSource()
+    for ref, t in [("a", a), ("c", c), ("d", d)]:
+        src.canon_of[ref] = t.id
+    ext = src.seed("sp", "P", ["a", "c", "d"])  # source dropped b, added d
+    pl = _playlist(session, [a, b, c])
+    _seed_link(session, pl, "sp", [a.id, b.id, c.id], remote=Source.APPLE_XML)
+
+    _sync_pair(session, src, pl, ext, _link(session, pl, Source.APPLE_XML), _never)
+
+    # b removed in place; a,c stay put in order; d appended at the end.
+    assert _pt_rows(session, pl) == [a.id, c.id, d.id]

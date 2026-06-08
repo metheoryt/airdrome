@@ -236,7 +236,10 @@ def _unify_per_source(
 ) -> tuple[int, int]:
     """No-merge mode: each source playlist becomes its own canonical, keyed on (platform, source_id).
 
-    Same-name playlists from different sources coexist; re-running only appends missing tracks.
+    Same-name playlists from different sources coexist. land only **seeds** a playlist's
+    membership on first creation; an already-existing canonical is left untouched and its
+    updates flow through ``sync`` instead (which reconciles each source against a base). This
+    is what stops a re-imported snapshot from resurrecting a track deleted downstream.
     Returns ``(playlists_created, tracks_linked)``.
     """
     playlists_created = tracks_linked = 0
@@ -258,12 +261,9 @@ def _unify_per_source(
             source_id=src.source_id,
         )
         playlists_created += created
-        # On re-run the canonical already exists; skip track_ids it already holds.
-        existing_ids = {
-            pt.track_id
-            for pt in s.scalars(select(PlaylistTrack).where(PlaylistTrack.playlist_id == canonical.id))
-        }
-        tracks_linked += _append_tracks(s, canonical, existing_ids, src.track_ids)
+        if created:
+            # Seed the new playlist; existing ones are owned by `sync`, not re-unioned here.
+            tracks_linked += _append_tracks(s, canonical, set(), src.track_ids)
 
         s.flush()
         if progress is not None:
@@ -295,6 +295,8 @@ def unify_source_playlists(
 
     existing = list(s.scalars(select(Playlist)))
     name_to_canonical: dict[str, Playlist] = {pl.name: pl for pl in existing}
+    # Playlists from a prior land are owned by `sync` now — merge only into ones created this run.
+    preexisting_ids = {pl.id for pl in existing}
 
     # Mutable per-canonical track-ID sets; updated in-place as we merge
     canonical_track_ids: dict[int, set[int]] = {
@@ -319,7 +321,10 @@ def unify_source_playlists(
 
         if src.name in name_to_canonical:
             canonical = name_to_canonical[src.name]
-            tracks_linked += _append_tracks(s, canonical, canonical_track_ids[canonical.id], src.track_ids)
+            if canonical.id not in preexisting_ids:  # only merge into playlists seeded this run
+                tracks_linked += _append_tracks(
+                    s, canonical, canonical_track_ids[canonical.id], src.track_ids
+                )
 
         else:
             src_track_set = frozenset(src.track_ids)

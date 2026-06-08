@@ -1,10 +1,11 @@
-"""Backend-agnostic playlist sync engine.
+"""Remote-agnostic playlist sync engine.
 
-Drives one bidirectional sync pass between Airdrome and a single backend.
-The 3-way merge operates on canonical `Track.id`s; backend-specific
-translation is delegated to the `PlaylistAdapter`. Tracks unresolvable on
-either side stay put on whichever side holds them — see `PlaylistLink`
-docstring for the rule on what makes it into the snapshot.
+Drives one reconcile pass between Airdrome and a single remote. A read-write remote
+(a server backend) merges both directions; a read-only remote (a cloud source) is
+pulled into Airdrome only. The 3-way merge operates on canonical `Track.id`s;
+remote-specific translation is delegated to the `PlaylistAdapter`. Tracks unresolvable
+on either side stay put on whichever side holds them — see the `PlaylistLink` docstring
+for the rule on what makes it into the snapshot/base.
 """
 
 from collections import Counter
@@ -14,7 +15,6 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from airdrome.console import console, done
 from airdrome.enums import Source
 from airdrome.models import Playlist, PlaylistLink, PlaylistTrack, Track
 
@@ -66,6 +66,19 @@ def _three_way_merge(base: list[int], ours: list[int], theirs: list[int]) -> lis
     return merged
 
 
+def remote_membership(adapter: PlaylistAdapter, ext: ExternalPlaylist | None) -> list[int]:
+    """Canonical ids a remote currently reports for a playlist, in order, with duplicates.
+
+    Refs the remote holds that don't resolve to a canonical track are dropped — they
+    stay remote-only rather than reading as members. Used by the orchestrator's
+    pre-pass to gather each remote's `theirs` for conflict detection.
+    """
+    if ext is None:
+        return []
+    refs = adapter.get_track_refs(ext.id)
+    return [c for r in refs if (c := adapter.to_canonical_track(r)) is not None]
+
+
 def _airdrome_canonical_ids(s: Session, playlist_id: int) -> list[int]:
     """Resolved canonical IDs of an Airdrome playlist, in order, *with* duplicates.
 
@@ -86,6 +99,33 @@ def _apply_to_airdrome(s: Session, playlist_id: int, merged_canon: list[int]) ->
     s.flush()
 
 
+def _upsert_link(
+    s: Session,
+    playlist: Playlist,
+    link: PlaylistLink | None,
+    remote: Source,
+    external_id: str,
+    snapshot: list[int],
+) -> None:
+    """Record the post-reconcile base for this (playlist, remote) pair."""
+    now = datetime.now(UTC)
+    if link is None:
+        s.add(
+            PlaylistLink(
+                playlist_id=playlist.id,
+                remote=remote,
+                external_id=external_id,
+                synced_track_ids=snapshot,
+                synced_at=now,
+            )
+        )
+    else:
+        link.synced_track_ids = snapshot
+        link.external_id = external_id  # heal in case the remote rotated the id (rare)
+        link.synced_at = now
+    s.flush()
+
+
 def _sync_pair(
     s: Session,
     adapter: PlaylistAdapter,
@@ -103,8 +143,16 @@ def _sync_pair(
     playlist exists yet; `make_ext` lazily creates one only once there is at least
     one track to push, so empty playlists never reach the backend.
 
+    A read-only remote (a cloud source) is pull-only: the merge runs, the result is
+    written to Airdrome, and the base records the *source's* membership — but the source
+    is never mutated. Storing `theirs` (not `merged`) as the base is what makes a
+    downstream-deleted or local-only track stay put instead of being resurrected.
+
     Returns True if any change reached either side.
     """
+    if not adapter.writable and ext is None:
+        return False  # nothing fetched to reconcile a read-only remote against
+
     raw_ours = _airdrome_canonical_ids(s, playlist.id)
     base = link.synced_track_ids if link else []
     ours = raw_ours
@@ -120,6 +168,13 @@ def _sync_pair(
 
     merged = _three_way_merge(base, ours, theirs)
     changed_airdrome = merged != raw_ours
+
+    if not adapter.writable:
+        # Pull-only: apply the merge to Airdrome, leave the source alone, base := theirs.
+        if changed_airdrome:
+            _apply_to_airdrome(s, playlist.id, merged)
+        _upsert_link(s, playlist, link, adapter.remote, ext.id, theirs)
+        return changed_airdrome
 
     # Resolve each merged copy to a backend ref, preserving multiplicity. Reuse the
     # ref already in the backend when present (stable), else materialise one.
@@ -178,109 +233,6 @@ def _sync_pair(
         _apply_to_airdrome(s, playlist.id, merged)
 
     if ext is not None:
-        now = datetime.now(UTC)
-        if link is None:
-            s.add(
-                PlaylistLink(
-                    playlist_id=playlist.id,
-                    backend=adapter.backend,
-                    external_id=ext.id,
-                    synced_track_ids=snapshot,
-                    synced_at=now,
-                )
-            )
-        else:
-            link.synced_track_ids = snapshot
-            link.external_id = ext.id  # heal in case backend rotated the id (rare)
-            link.synced_at = now
-        s.flush()
+        _upsert_link(s, playlist, link, adapter.remote, ext.id, snapshot)
 
     return changed_backend or changed_airdrome
-
-
-def sync(s: Session, adapter: PlaylistAdapter) -> None:
-    """Run one bidirectional sync pass between Airdrome and a backend.
-
-    Duplicate entries are mirrored faithfully (multiplicity is preserved on both
-    sides). A playlist with no backend-representable tracks creates no backend
-    playlist. Backend-only playlists are pulled into Airdrome.
-    """
-
-    airdrome_playlist_ids = list(s.scalars(select(Playlist.id).order_by(Playlist.name)).all())
-    seen_external: set[str] = set()
-    changed = total = 0
-
-    # 1. Existing Airdrome playlists — push or merge against the backend
-    for playlist_id in airdrome_playlist_ids:
-        playlist = s.get(Playlist, playlist_id)
-        link = s.scalars(
-            select(PlaylistLink).where(
-                PlaylistLink.playlist_id == playlist.id,
-                PlaylistLink.backend == adapter.backend,
-            )
-        ).one_or_none()
-        ext: ExternalPlaylist | None = None
-
-        if link is not None:
-            ext = adapter.get(link.external_id)
-            if ext is None:
-                # Backend playlist deleted out from under us. Keep the Airdrome
-                # playlist; drop the stale link and let this pass create a fresh
-                # backend playlist (lazily, only if it has tracks to mirror).
-                console.print(f"  [yellow]?[/yellow]  {playlist.name} (backend missing — relinking)")
-                s.delete(link)
-                s.flush()
-                link = None
-
-        try:
-            # `create` is deferred into _sync_pair so a playlist with nothing to
-            # mirror never spawns an empty backend playlist.
-            had_changes = _sync_pair(s, adapter, playlist, ext, link, lambda p=playlist: adapter.create(p))
-        except Exception:
-            adapter.rollback()
-            s.rollback()
-            raise
-        s.commit()  # backend already committed inside _sync_pair; durable per-playlist
-
-        # The link (if any) now points at whatever backend playlist we settled on.
-        synced_link = s.scalars(
-            select(PlaylistLink).where(
-                PlaylistLink.playlist_id == playlist.id,
-                PlaylistLink.backend == adapter.backend,
-            )
-        ).one_or_none()
-        if synced_link is not None:
-            seen_external.add(synced_link.external_id)
-
-        if had_changes:
-            changed += 1
-            console.print(f"  [green]+[/green]  {playlist.name}")
-        else:
-            console.print(f"  [dim]=[/dim]  {playlist.name}")
-        total += 1
-
-    # 2. Backend-only playlists — pull into Airdrome
-    for ext in adapter.list_playlists():
-        if ext.id in seen_external:
-            continue
-        playlist = Playlist(
-            name=ext.name,
-            platform=Source.NAVIDROME,  # generalise once a second backend lands
-            source_id=ext.id,
-            description=ext.comment,
-        )
-        s.add(playlist)
-        s.flush()
-        try:
-            # ext already exists here, so make_ext is never invoked (bind it anyway).
-            _sync_pair(s, adapter, playlist, ext, link=None, make_ext=lambda e=ext: e)
-        except Exception:
-            adapter.rollback()
-            s.rollback()
-            raise
-        s.commit()
-        changed += 1
-        console.print(f"  [cyan]<[/cyan]  {playlist.name}")
-        total += 1
-
-    done(f"{changed}/{total} playlists updated")

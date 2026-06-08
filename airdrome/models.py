@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 
@@ -15,15 +14,6 @@ from .conf import settings
 from .enums import Source
 from .library import MAIN_SUBDIR
 from .normalize.norm import normalize_name
-
-
-class Backend(StrEnum):
-    """Music server backends Airdrome can mirror playlists to."""
-
-    NAVIDROME = "navidrome"
-    # JELLYFIN = "jellyfin"
-    # PLEX = "plex"
-    # SUBSONIC = "subsonic"
 
 
 if TYPE_CHECKING:
@@ -590,27 +580,31 @@ class PlaylistTrack(Base):
 
 
 class PlaylistLink(Base):
-    """Mirror of a canonical Airdrome `Playlist` on an external server backend.
+    """Reconcile state for a canonical Airdrome `Playlist` against one remote.
 
-    One row per (Airdrome playlist, backend) pair. `synced_track_ids` is the
-    snapshot of canonical track IDs that were reconciled on both sides at the
-    last sync — used as the merge base for the next 3-way merge. Tracks that
-    Airdrome holds but the backend can't represent (no `TrackFile` / no
-    `MediaFile`) and tracks the backend holds that Airdrome can't resolve
-    (no matching local file) are deliberately excluded from this snapshot
-    so they read as steady-state rather than as one-sided deletions.
+    One row per (Airdrome playlist, remote) pair, where a *remote* is any peer —
+    a read-write backend (Navidrome) or a read-only source (Apple, …). Sources gain
+    a base for the first time here. `synced_track_ids` is the snapshot of canonical
+    track IDs reconciled on both sides at the last sync — the merge base for the next
+    3-way merge. Tracks Airdrome holds but the remote can't represent, and tracks the
+    remote holds that Airdrome can't resolve, are deliberately excluded from this
+    snapshot so they read as steady-state rather than one-sided deletions.
+
+    `external_id` is the remote-side playlist id — a server id for backends, a
+    `SourcePlaylist.source_id` for sources. Nullable to cover the window before a
+    backend playlist has been lazily created.
     """
 
     __tablename__ = "playlistlink"
     __table_args__ = (
-        UniqueConstraint("playlist_id", "backend"),
-        UniqueConstraint("backend", "external_id"),
+        UniqueConstraint("playlist_id", "remote"),
+        UniqueConstraint("remote", "external_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     playlist_id: Mapped[int] = mapped_column(ForeignKey("playlist.id", ondelete="CASCADE"), index=True)
-    backend: Mapped[Backend]
-    external_id: Mapped[str]
+    remote: Mapped[Source] = mapped_column(sa.Enum(Source, native_enum=False))
+    external_id: Mapped[str | None]
     synced_track_ids: Mapped[list[int]] = mapped_column(sa.JSON, nullable=False)
     synced_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 

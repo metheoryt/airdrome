@@ -164,14 +164,27 @@ def upgrade() -> None:
         "playlistlink",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("playlist_id", sa.Integer(), nullable=False),
-        sa.Column("backend", sa.Enum("NAVIDROME", name="backend"), nullable=False),
-        sa.Column("external_id", sa.String(), nullable=False),
+        sa.Column(
+            "remote",
+            sa.Enum(
+                "APPLE_XML",
+                "APPLE_MS",
+                "SPOTIFY",
+                "LASTFM",
+                "LISTENBRAINZ",
+                "NAVIDROME",
+                name="source",
+                native_enum=False,
+            ),
+            nullable=False,
+        ),
+        sa.Column("external_id", sa.String(), nullable=True),
         sa.Column("synced_track_ids", sa.JSON(), nullable=False),
         sa.Column("synced_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["playlist_id"], ["playlist.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("backend", "external_id"),
-        sa.UniqueConstraint("playlist_id", "backend"),
+        sa.UniqueConstraint("remote", "external_id"),
+        sa.UniqueConstraint("playlist_id", "remote"),
     )
     op.create_index(op.f("ix_playlistlink_playlist_id"), "playlistlink", ["playlist_id"], unique=False)
     op.create_table(

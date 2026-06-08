@@ -48,20 +48,18 @@ def test_engine():
 
 @pytest.fixture()
 def session(test_engine):
-    """
-    Provide a session that rolls back all changes after each test.
+    """Provide a session that rolls back all changes after each test.
 
-    Uses a nested transaction (SAVEPOINT) so the outer transaction can be rolled back,
-    leaving the database pristine for the next test.
+    The session joins an outer transaction via a SAVEPOINT (`create_savepoint`), so even
+    code under test that calls `session.commit()` only releases/restarts the savepoint —
+    the outer transaction is rolled back at teardown, leaving the database pristine.
     """
     connection = test_engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
-    nested = connection.begin_nested()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
 
     yield session
 
     session.close()
-    nested.rollback()
     transaction.rollback()
     connection.close()

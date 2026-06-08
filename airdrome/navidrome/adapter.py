@@ -12,8 +12,9 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console
+from airdrome.enums import Source
 from airdrome.library import MAIN_SUBDIR
-from airdrome.models import Backend, Playlist, Track, TrackFile
+from airdrome.models import Playlist, Track, TrackFile
 from airdrome.playlists.adapter import ExternalPlaylist, ExternalTrackRef, PlaylistAdapter
 
 from .models import MediaFile, Playlist as NVPlaylist, PlaylistTracks, User, get_nv_engine
@@ -24,7 +25,7 @@ def _to_external(nv_pl: NVPlaylist) -> ExternalPlaylist:
 
 
 class NavidromeAdapter(PlaylistAdapter):
-    backend = Backend.NAVIDROME
+    remote = Source.NAVIDROME
 
     def __init__(self, airdrome_session: Session, username: str):
         self._s = airdrome_session

@@ -3,4 +3,4 @@ from .adapter import (
     ExternalTrackRef as ExternalTrackRef,
     PlaylistAdapter as PlaylistAdapter,
 )
-from .sync import sync as sync
+from .orchestrator import reconcile as reconcile

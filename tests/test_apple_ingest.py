@@ -1,14 +1,14 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from airdrome.cloud.apple.media_services import import_ms_playlist, import_ms_track
 from airdrome.cloud.apple.xml_library import do_import_playlists, do_import_tracks
 from airdrome.cloud.sources import SourcePlaylist, SourcePlaylistTrack, SourceTrack
 from airdrome.enums import Source
 from airdrome.library.unify import do_unify, unify_source_playlists, unify_source_tracks
-from airdrome.models import Backend, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
+from airdrome.models import Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
 
 
 def _xml_track(session, source_id):
@@ -295,6 +295,35 @@ def _canonical_track_id(session, name: str) -> int:
     return session.scalars(select(Track).where(Track.title == name)).one().id
 
 
+def test_unify_playlists_seeds_only_never_reunions_existing(session):
+    """land seeds a new playlist once; a later land must not resurrect a downstream-removed track.
+
+    This is the behaviour half of the playlist resurrection fix: once a canonical playlist
+    exists, `sync` owns its membership — re-importing a source snapshot that still lists a
+    track the user deleted downstream must not re-add it.
+    """
+    a, b = _track_data(name="A"), _track_data(name="B")
+    do_import_tracks(session, {str(a["Track ID"]): a, str(b["Track ID"]): b})
+    unify_source_tracks(session)
+    do_import_playlists(session, [_playlist_data(name="P", track_ids=[a["Track ID"], b["Track ID"]])])
+
+    unify_source_playlists(session)  # first land seeds P with A and B
+    pl = session.scalars(select(Playlist).where(Playlist.name == "P")).one()
+    a_id = _canonical_track_id(session, "A")
+    session.execute(  # downstream removes A (as `sync` would after a Navidrome delete)
+        delete(PlaylistTrack).where(PlaylistTrack.playlist_id == pl.id, PlaylistTrack.track_id == a_id)
+    )
+    session.flush()
+
+    pl_created, tr_linked = unify_source_playlists(session)  # second land must touch nothing
+
+    assert (pl_created, tr_linked) == (0, 0)
+    remaining = {
+        pt.track_id for pt in session.scalars(select(PlaylistTrack).where(PlaylistTrack.playlist_id == pl.id))
+    }
+    assert remaining == {_canonical_track_id(session, "B")}  # A stayed deleted
+
+
 def test_unify_playlists_default_keeps_same_name_separate(session):
     a = _track_data(name="A")
     b = _track_data(name="B")
@@ -446,7 +475,7 @@ def test_do_unify_rebuild_playlists_drops_and_recreates(session):
     session.add(
         PlaylistLink(
             playlist_id=real.id,
-            backend=Backend.NAVIDROME,
+            remote=Source.NAVIDROME,
             external_id="nd-1",
             synced_track_ids=[],
             synced_at=datetime(2020, 1, 1, tzinfo=UTC),

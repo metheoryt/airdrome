@@ -18,6 +18,7 @@ from .navi import navi_app
 from .options import DRY_RUN
 from .state import AppState
 from .status import status
+from .sync import sync_app
 
 
 _HELP = """Airdrome — migrate your music library and listening history into Navidrome.
@@ -28,7 +29,8 @@ Typical flow (run in order):
   land               build the canonical library graph
   organize           move/copy files into LIBRARY_DIR
   dedup              collapse duplicate tracks
-  navi push          sync play counts, ratings & playlists
+  sync all           reconcile playlists across sources & Navidrome
+  navi push          sync play counts & ratings into Navidrome
 
 Run `status` anytime for a read-only snapshot of config and pipeline progress.
 Every write command is idempotent and takes --dry-run/-n. Run any command with --help."""
@@ -36,6 +38,7 @@ Every write command is idempotent and takes --dry-run/-n. Run any command with -
 app = typer.Typer(help=_HELP)
 app.command("status")(status)
 pipeline.register(app)
+app.add_typer(sync_app, name="sync")
 app.add_typer(navi_app, name="navi")
 app.add_typer(maint_app, name="maint")
 

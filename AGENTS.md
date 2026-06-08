@@ -28,14 +28,14 @@ airdrome --help
 
 ## CLI surface
 
-End-to-end flow: `import <path>...` → `land` → `organize` → `dedup` → `navi push`. Every
-write command is idempotent and takes `--dry-run`/`-n` (rolls back instead of committing).
-Global `-v/--verbose` shows per-item detail (file picks, misses); `-q/--quiet` suppresses
-non-essential output (both on the root callback, set via `console.set_verbosity`). Run any
-command with `--help` for flags.
+End-to-end flow: `import <path>...` → `land` → `organize` → `dedup` → `sync all` →
+`navi push`. Every write command is idempotent and takes `--dry-run`/`-n` (rolls back
+instead of committing). Global `-v/--verbose` shows per-item detail (file picks, misses);
+`-q/--quiet` suppresses non-essential output (both on the root callback, set via
+`console.set_verbosity`). Run any command with `--help` for flags.
 
-The top level is the pipeline plus `status`; two groups hold the rest — `navi` (sync
-destinations) and `maint` (housekeeping).
+The top level is the pipeline plus `status`; three groups hold the rest — `sync` (playlist
+reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping).
 
 - **`status`** — read-only "where am I?" snapshot: config sanity (DB connectivity, `LIBRARY_DIR`
   state, Navidrome config + whether it's running) and per-stage counts (imported / landed /
@@ -65,10 +65,14 @@ destinations) and `maint` (housekeeping).
 - **`dedup-export`/`dedup-import`** — round-trip confirmed dedup groups to/from JSON (default
   `DUPLICATES_FILEPATH`); idempotent upsert keyed on the member set. These survive the
   disposable DB across schema rebuilds; slated for automatic management (see ROADMAP.md).
+- **`sync <remote>` / `sync all`** — reconcile playlists across remotes (cloud sources +
+  backends). One subcommand per remote (`apple_xml`, `apple_ms`, `navidrome`); `sync all`
+  runs sources first, then backends. `-r/--review` opens the resolver for every changed
+  playlist (not just hard conflicts); `-n`/`-y`. The Navidrome-stopped guard + WAL checkpoint
+  fire only when a writable backend is in scope. See *Playlist reconcile* below.
 - **`navi push`** — requires Navidrome stopped (probes `NAVIDROME_PORT`, prompts unless
-  `-y/--yes`, then writes its SQLite DB directly). Pushes play counts + ratings *and*
-  playlists (3-way merge) for `NAVIDROME_USER` under one confirmation; scope to one half with
-  `--only stats` / `--only playlists`.
+  `-y/--yes`, then writes its SQLite DB directly). Pushes play counts + ratings for
+  `NAVIDROME_USER`. (Playlists moved to `sync`.)
 - **`maint renormalize`** — recompute `_norm` fields on tracks, aliases, and files (the escape
   hatch for a normalization-rule change, instead of a full reimport).
 
@@ -87,8 +91,8 @@ destinations) and `maint` (housekeeping).
 4. **Deduplicate** (`normalize/dedup/`) — group duplicates via trigram matching; twins link
    to a canon via `Track.canon_id`. Confirmed groups live in `dedupgroup`/`dedupgroupmember`
    (import identity = the member-hash multiset, not the label).
-5. **Sync** (`navidrome/`, `playlists/`) — push play counts + ratings, merge playlists into
-   Navidrome's SQLite DB.
+5. **Sync** — push play counts + ratings into Navidrome's SQLite DB (`navidrome/`), and
+   reconcile playlists across remotes (`playlists/`, see *Playlist reconcile*).
 
 ### Import / source design
 
@@ -151,6 +155,29 @@ has the best copy — often a twin, not the canon), but plays are **summed** and
 keep the one-main invariant — `organize` picks it across canon+twins, and
 `recompute_main_files` re-picks it whenever the canon graph changes. Selection only flips the
 flag; files already on disk are not relocated (that is the reconcile roadmap).
+
+### Playlist reconcile (`playlists/`)
+
+Airdrome is the source-of-truth **hub**; every peer is a *remote* reconciled against a
+per-`(playlist, remote)` **base** (`PlaylistLink.synced_track_ids`). Sources (Apple) are
+**read-only** remotes — pull-only, never written; backends (Navidrome) are **read-write**.
+A remote is a `PlaylistAdapter` (`adapter.py`); `writable=False` marks read-only ones.
+`SourcePlaylistRemote` adapts imported `SourcePlaylist` rows; `NavidromeAdapter` the backend.
+
+- **Engine** (`sync.py`): `_sync_pair` does a multiset 3-way merge (`base`/`ours`/`theirs`)
+  for one (playlist, remote). Read-only remotes apply only `theirs→ours` and store `theirs`
+  as the new base (not the merged list) — that is what stops a downstream-deleted or
+  local-only track from being resurrected.
+- **Orchestrator** (`orchestrator.py`): `reconcile(s, adapters, *, review)` runs every
+  playlist against the remotes in order. A pre-pass gathers each remote's base/membership and
+  `detect_conflicts` (`conflicts.py`) finds order-dependent (add-vs-remove) edits. Conflicted
+  (or, under `--review`, all changed) playlists go to the resolver (`resolver_tui.py`,
+  modeled on the dedup TUI): per playlist take a remote / keep ours / auto / abort. Overrides
+  are applied by forcing the resolved membership and priming each base to `theirs`, so the
+  same `_sync_pair` propagates it outward.
+- **`land` seeds, `sync` updates**: `unify_source_playlists` only writes membership when it
+  *creates* a canonical playlist; existing playlists are owned by `sync`. Re-importing a
+  snapshot never re-unions, so a downstream delete sticks.
 
 ### Migrations
 
