@@ -1,9 +1,78 @@
 # Airdrome
 
-Airdrome migrates music libraries and scrobble/play history from cloud services
-(Spotify, Apple Music, Last.fm, ListenBrainz) to [Navidrome](https://www.navidrome.org/),
-a self-hosted music server. It ingests metadata, deduplicates tracks, organizes files
-on disk, and syncs play counts, ratings, and playlists.
+**Move your music library — and a decade of listening history — off Spotify, Apple Music,
+Last.fm and ListenBrainz onto self-hosted [Navidrome](https://www.navidrome.org/).**
+
+Leaving a streaming service is easy. Leaving without losing anything is not. Your files sit
+in one pile, your play counts live in a Spotify JSON export, your ratings in an Apple
+`Library.xml`, your playlists in three places that disagree with each other — and none of
+them agree on how to spell an artist's name. Navidrome will happily serve the files and
+knows nothing about the rest.
+
+Airdrome is the missing step. It ingests every export you have, resolves the same song
+across all of them into one canonical track, binds those tracks to the actual files on
+disk, organizes the library, and writes the play counts, ratings and playlists into
+Navidrome. Every stage is idempotent: run it, import another export, run it again.
+
+`airdrome status` tells you where a migration stands at any point (example output):
+
+```console
+$ airdrome status
+Environment
+Database     connected postgresql+psycopg://localhost:5437/postgres
+Library dir  /srv/music (12,431 files)
+Navidrome    configured, not running
+
+Imported
+Source tracks     18,204
+Source playlists  313
+Scrobbles         214,880
+
+Canonical (land)
+Tracks           12,908
+Aliases matched  9,731 / 10,402
+Plays            198,447
+Playlists        296
+
+Files
+Bound to tracks    12,431 / 12,908
+Organized on disk  12,431
+
+Dedup
+Twins             1,204 in 517 group(s)
+Confirmed groups  488
+
+Synced to backends
+Playlist links  296
+```
+
+## How it works
+
+The interesting problem isn't reading the exports — it's that **no two sources identify a
+song the same way**, and a scrobble from 2014 has nothing but three strings of text to
+connect it to a FLAC on your disk.
+
+- **A canonical hub.** Every source is imported raw and untouched (`SourceTrack`,
+  `SourcePlaylist`, `TrackAlias`), then *landed* into one canonical `Track`/`Playlist`
+  graph. Sources are never edited in place, so a re-import is always safe and the raw
+  record stays available when a matching rule changes.
+- **Fuzzy matching in the database.** Scrobble metadata is bound to canonical tracks with
+  PostgreSQL trigram similarity (`pg_trgm`) over normalized text, with a tunable threshold —
+  so "Sigur Rós — Untitled #1" and "Sigur Ros - Untitled 1 (Vaka)" land on the same track
+  instead of two.
+- **Deduplication you can correct.** The same album ripped twice, plus a stream copy, plus
+  the remaster — grouped by configurable flag-sets (artist/album/year) and collapsed onto a
+  canon. Automatic where it's confident, an interactive review pass where it isn't, and
+  your manual decisions persist as overrides that survive a full database rebuild.
+- **Playlist reconcile, not playlist push.** Each remote gets a per-playlist base snapshot,
+  so a diff is computed against *what that remote last saw* rather than against the current
+  hub. Downstream deletes stick, a re-import doesn't resurrect a track you removed, and a
+  genuine conflict resolves to the remote that edited that track last — no prompts.
+- **Idempotent stages.** Every command fills gaps rather than redoing work, which is what
+  makes a migration you run over several weeks, as exports trickle in, actually tractable.
+
+Design rationale, rejected alternatives and the measured data behind each decision live in
+[`docs/design/`](docs/design/).
 
 ## Requirements
 
@@ -66,6 +135,10 @@ Use `--as <name>` to force one when detection is ambiguous or fails.
 A full migration runs roughly in this order. Every command is idempotent — re-running is
 safe and only fills gaps. Add `--dry-run`/`-n` to any write command to roll back instead of
 committing.
+
+> ⚠️ `--dry-run` currently rolls back the *database* only. `organize` moves and copies files
+> on disk before the rollback happens, so a dry run of that one command still relocates
+> files — see [ROADMAP.md](ROADMAP.md).
 
 ```bash
 # 1. Import every source you have (one invocation, any mix of exports / folders)
