@@ -54,7 +54,7 @@ def get_lb_records(path: Path) -> Iterator[ListenBrainzScrobble]:
 class ListenBrainzScrobbleParser(ScrobbleParser):
     platform = Source.LISTENBRAINZ
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         self.path = path
 
     def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:

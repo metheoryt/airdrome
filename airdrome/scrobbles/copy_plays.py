@@ -47,14 +47,14 @@ def do_copy_plays(
     return total
 
 
-def copy_plays(s: Session):
+def copy_plays(s: Session) -> None:
     """Materialize TrackPlay history from matched aliases, with a progress bar and summary."""
     total = s.scalars(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_not(None))).one()
 
     with make_progress() as progress:
         task = progress.add_task("Copying plays from matched aliases", total=total)
 
-        def _on_progress(aliases_done: int):
+        def _on_progress(aliases_done: int) -> None:
             progress.update(task, completed=aliases_done)
 
         plays = do_copy_plays(s, on_progress=_on_progress)

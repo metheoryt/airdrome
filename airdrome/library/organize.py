@@ -11,7 +11,7 @@ from airdrome.models import Track, TrackFile, TrackGroup
 
 
 class FileOrganizer:
-    def __init__(self, dst_dir: Path, copy: bool = False):
+    def __init__(self, dst_dir: Path, copy: bool = False) -> None:
         self.dst_dir = dst_dir
         self.copy = copy
 
@@ -143,7 +143,7 @@ def organize_library(
     s: Session,
     dst_dir: Path,
     copy: bool = False,
-):
+) -> None:
     mover = FileOrganizer(dst_dir=dst_dir, copy=copy)
     verb = "copied" if copy else "moved"
 

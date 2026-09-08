@@ -11,7 +11,7 @@ from airdrome.models import Track, TrackFile, TrackGroup, TrackPlay
 from ..models import AlbumArtist, Annotation, MediaFile, Scrobbles, User, get_nv_engine
 
 
-def sync_tracks_plays_to_navi(s: Session, username: str):
+def sync_tracks_plays_to_navi(s: Session, username: str) -> None:
     with Session(get_nv_engine()) as nvs:
         TrackSyncer(username).sync_all(s, nvs)
 
@@ -21,7 +21,7 @@ def _normalize_dates(dts: list[datetime | None]) -> list[datetime]:
 
 
 class TrackSyncer:
-    def __init__(self, username: str):
+    def __init__(self, username: str) -> None:
         self.username = username
         self._user: User | None = None
         self._item_play_count: dict[str, int] = defaultdict(int)
@@ -56,7 +56,7 @@ class TrackSyncer:
         nvs.add(ann)
         return ann, True
 
-    def _add_play_count_date(self, ann: Annotation, play_count: int, latest_play: datetime | None):
+    def _add_play_count_date(self, ann: Annotation, play_count: int, latest_play: datetime | None) -> None:
         self._item_play_count[ann.item_id] += play_count
         ann.play_count = self._item_play_count[ann.item_id]
         if latest_play:
@@ -101,7 +101,7 @@ class TrackSyncer:
         play_count: int,
         latest_play: datetime | None,
         first_play: datetime | None,
-    ):
+    ) -> None:
         # The group has existed since its earliest member was added; use that as
         # the representative "added" date for created_at and rating timestamps.
         added = group.date_added
@@ -131,7 +131,7 @@ class TrackSyncer:
         play_count: int,
         latest_play: datetime | None,
         first_play: datetime | None,
-    ):
+    ) -> None:
         added = group.date_added
         date_candidates = [mf.album_model.created_at, first_play, added]
         valid_dates = _normalize_dates(date_candidates)
@@ -150,7 +150,7 @@ class TrackSyncer:
 
     def update_artist_annotations(
         self, mf: MediaFile, nvs: Session, play_count: int, latest_play: datetime | None
-    ):
+    ) -> None:
         stmt = select(AlbumArtist.artist_id).where(
             AlbumArtist.album_id == mf.album_id,
             AlbumArtist.role.in_(["albumartist", "artist"]),
@@ -174,7 +174,7 @@ class TrackSyncer:
         nvs.flush()
         return play_count
 
-    def sync_all(self, s: Session, nvs: Session):
+    def sync_all(self, s: Session, nvs: Session) -> None:
         stmt = (
             select(Track)
             .join(TrackFile, (TrackFile.track_id == Track.id) & (TrackFile.is_main.is_(True)))

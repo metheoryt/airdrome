@@ -54,7 +54,7 @@ def _progress(summary: str) -> Progress:
     return make_progress(TextColumn(summary))
 
 
-def _upsert_track(s: Session, *, defaults: dict, **key) -> tuple[Track, bool, bool]:
+def _upsert_track(s: Session, *, defaults: dict, **key: object) -> tuple[Track, bool, bool]:
     """Get-or-create a canonical Track by ``key``, backfilling NULLs from ``defaults``.
 
     Returns ``(track, created, updated)``: ``created`` if a new row was made, ``updated`` if an
@@ -431,7 +431,7 @@ def _reset_canonical_playlists(s: Session) -> tuple[int, int]:
     return playlists, links
 
 
-def do_unify(s: Session, *, merge_playlists: bool = False, rebuild_playlists: bool = False):
+def do_unify(s: Session, *, merge_playlists: bool = False, rebuild_playlists: bool = False) -> None:
     """Run the three unify stages and print a per-stage summary.
 
     ``merge_playlists`` collapses same-name source playlists into one canonical (see

@@ -4,7 +4,7 @@ from pathlib import Path
 from airdrome.console import console
 
 
-def remove_empty_dirs_recursively(root_dir_path: Path):
+def remove_empty_dirs_recursively(root_dir_path: Path) -> None:
     """
     Removes all empty directories within the given root directory, recursively.
 
@@ -32,7 +32,7 @@ def remove_empty_dirs_recursively(root_dir_path: Path):
             #     pass
 
 
-def ensure_truncated(s: str, maxlen: int = 35, is_filename: bool = False):
+def ensure_truncated(s: str, maxlen: int = 35, is_filename: bool = False) -> str:
     tr = s[:maxlen].rstrip() if len(s) > maxlen else s.rstrip()
 
     # quote windows path

@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import and_, func, literal, or_, select
+from sqlalchemy import ColumnElement, and_, func, literal, or_, select
 from sqlalchemy.orm import Session
 
 from .models import Track
@@ -16,7 +16,7 @@ ColOptVal = tuple[Any, str | None]
 MIN_CONTAINMENT_LEN = 4
 
 
-def build_match_score(artist_norm, album_norm):
+def build_match_score(artist_norm: str | None, album_norm: str | None) -> ColumnElement[float]:
     """Weighted artist+album trigram similarity of a candidate Track to an alias (0..1)."""
     if artist_norm:
         artist_sim_expr = func.greatest(
@@ -25,12 +25,12 @@ def build_match_score(artist_norm, album_norm):
         )
     else:
         # alias has no artist → perfect match
-        artist_sim_expr = 1.0
+        artist_sim_expr = literal(1.0)
 
     if album_norm:
         album_sim_expr = func.similarity(Track.album_norm, album_norm)
     else:
-        album_sim_expr = 0.5 if artist_norm else 1.0
+        album_sim_expr = literal(0.5 if artist_norm else 1.0)
 
     artist_w = 0.75
     album_w = 0.25
@@ -42,7 +42,7 @@ def build_match_score(artist_norm, album_norm):
     return score
 
 
-def _title_candidate_clause(title_norm: str, title_threshold: float):
+def _title_candidate_clause(title_norm: str, title_threshold: float) -> ColumnElement[bool]:
     """Predicate accepting tracks whose title is exact, trigram-similar, or containment-related.
 
     Containment (one normalized title is a substring of the other) catches the common case
@@ -63,9 +63,9 @@ def _title_candidate_clause(title_norm: str, title_threshold: float):
 
 def find_best_track(
     session: Session,
-    title_norm,
-    artist_norm,
-    album_norm,
+    title_norm: str | None,
+    artist_norm: str | None,
+    album_norm: str | None,
     threshold: float = 0.4,
     title_threshold: float = 0.45,
     log: Callable[[str], None] | None = None,
@@ -113,7 +113,7 @@ def find_best_track(
     if score_val < threshold:
         return None
     if score_val < threshold + 0.1 and log:
-        alias_l = f"{title_norm[:25]:<25} | {album_norm[:40]:<40} | {artist_norm[:25]:<25}"
+        alias_l = f"{title_norm[:25]:<25} | {(album_norm or '')[:40]:<40} | {(artist_norm or '')[:25]:<25}"
         track_l = (
             f"{track.title_norm[:25]:<25} | "
             f"{track.album_norm[:40]:<40} | "

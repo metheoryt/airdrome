@@ -30,7 +30,7 @@ class Importer(ABC):
     """Human-friendly source name shown in import output (e.g. 'Apple iTunes XML')."""
     provides: ClassVar[DataKind]
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         self.path = path
 
     @classmethod

@@ -8,6 +8,7 @@ canonical before the backend push instead of being re-added. Bare `sync` prints 
 """
 
 import contextlib
+from collections.abc import Callable
 
 import typer
 
@@ -16,6 +17,7 @@ from airdrome.enums import Source
 from airdrome.navidrome import checkpoint_wal
 from airdrome.navidrome.adapter import NavidromeAdapter
 from airdrome.playlists import reconcile
+from airdrome.playlists.adapter import PlaylistAdapter
 from airdrome.playlists.source_remote import SourcePlaylistRemote
 
 from .navi import _guard_navidrome_stopped, _require_user
@@ -29,13 +31,13 @@ sync_app = typer.Typer(help="Reconcile playlists across remotes (cloud sources +
 ALL_REMOTES = (Source.APPLE_XML, Source.APPLE_MS, Source.NAVIDROME)
 
 
-def _build_adapter(remote: Source, state: AppState):
+def _build_adapter(remote: Source, state: AppState) -> PlaylistAdapter:
     if remote is Source.NAVIDROME:
         return NavidromeAdapter(state.session, _require_user())
     return SourcePlaylistRemote(state.session, remote)
 
 
-def _run(ctx: typer.Context, remotes: tuple[Source, ...], *, review: bool, dry_run: bool, yes: bool):
+def _run(ctx: typer.Context, remotes: tuple[Source, ...], *, review: bool, dry_run: bool, yes: bool) -> None:
     state: AppState = ctx.obj
     state.dry_run = dry_run
 
@@ -49,10 +51,10 @@ def _run(ctx: typer.Context, remotes: tuple[Source, ...], *, review: bool, dry_r
         reconcile(state.session, adapters, review=review)
 
 
-def _command(remotes: tuple[Source, ...]):
+def _command(remotes: tuple[Source, ...]) -> Callable[..., None]:
     """Build a subcommand bound to a fixed set of remotes."""
 
-    def cmd(ctx: typer.Context, review: bool = REVIEW, dry_run: bool = DRY_RUN, yes: bool = YES):
+    def cmd(ctx: typer.Context, review: bool = REVIEW, dry_run: bool = DRY_RUN, yes: bool = YES) -> None:
         _run(ctx, remotes, review=review, dry_run=dry_run, yes=yes)
 
     return cmd
@@ -71,7 +73,7 @@ sync_app.command("navidrome", help="Reconcile the Navidrome backend (Navidrome m
 
 
 @sync_app.callback(invoke_without_command=True)
-def _sync_callback(ctx: typer.Context):
+def _sync_callback(ctx: typer.Context) -> None:
     """Show help when `sync` is run without a remote."""
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())

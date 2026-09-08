@@ -9,6 +9,7 @@ against this interface and never touches a backend's tables directly.
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
+from types import TracebackType
 
 from airdrome.enums import Source
 from airdrome.models import Playlist
@@ -44,6 +45,19 @@ class PlaylistAdapter(ABC):
 
     remote: Source
     writable: bool = True
+
+    # Every adapter is driven under `with`/`ExitStack`; remotes that own an external
+    # session override these, read-only ones inherit the no-ops.
+    def __enter__(self) -> PlaylistAdapter:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
 
     @abstractmethod
     def list_playlists(self) -> Iterable[ExternalPlaylist]:

@@ -12,12 +12,14 @@ conflict can arise. `sync all` passes sources first, then backends, so a source 
 reaches canonical before the backend push instead of being re-added.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from airdrome.console import console, done
+from airdrome.enums import Source
 from airdrome.models import Playlist, PlaylistLink
 
 from .adapter import ExternalPlaylist, PlaylistAdapter
@@ -37,7 +39,7 @@ class _Ctx:
     base: list[int]
 
 
-def _get_link(s: Session, playlist_id: int, remote) -> PlaylistLink | None:
+def _get_link(s: Session, playlist_id: int, remote: Source) -> PlaylistLink | None:
     return s.scalars(
         select(PlaylistLink).where(PlaylistLink.playlist_id == playlist_id, PlaylistLink.remote == remote)
     ).one_or_none()
@@ -68,7 +70,7 @@ def _auto_would_change(conflict: PlaylistConflict) -> bool:
     return resolve_final(conflict, Decision(Strategy.AUTO)) != conflict.ours
 
 
-def _make_ext(adapter: PlaylistAdapter, playlist: Playlist):
+def _make_ext(adapter: PlaylistAdapter, playlist: Playlist) -> Callable[[], ExternalPlaylist]:
     return lambda: adapter.create(playlist)
 
 

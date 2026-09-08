@@ -48,7 +48,7 @@ def main(
     ctx: typer.Context,
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show per-item detail (file picks, misses)."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-essential output."),
-):
+) -> None:
     """Open the DB session shared by every subcommand and commit (or roll back) on exit."""
     set_verbosity(1 if verbose else -1 if quiet else 0)
     if ctx.invoked_subcommand is None:
@@ -66,7 +66,7 @@ def main(
     session = ctx.with_resource(Session(engine, expire_on_commit=False))
     ctx.obj = AppState(session=session, dry_run=False)
 
-    def _finalize():
+    def _finalize() -> None:
         if ctx.obj.dry_run:
             session.rollback()
             console.print("[yellow]Dry run — rolled back; nothing was committed.[/yellow]")
@@ -113,7 +113,7 @@ def import_(
     no_playlists: bool = typer.Option(False, "--no-playlists", help="Skip importing playlists"),
     no_scrobbles: bool = typer.Option(False, "--no-scrobbles", help="Skip importing scrobbles"),
     dry_run: bool = DRY_RUN,
-):
+) -> None:
     """Auto-detect the source at each PATH and import its tracks, playlists, and scrobbles."""
     state: AppState = ctx.obj
     state.dry_run = dry_run
@@ -160,7 +160,7 @@ def land(
         help="Drop all canonical playlists first and rebuild from source. Also discards backend-sync links.",
     ),
     dry_run: bool = DRY_RUN,
-):
+) -> None:
     """Build the canonical graph from everything imported.
 
     Runs the full post-import resolution in dependency order: unify source tracks/playlists into
@@ -183,7 +183,7 @@ def land(
 
 @navi_app.callback(invoke_without_command=True)
 @maint_app.callback(invoke_without_command=True)
-def sub_callback(ctx: typer.Context):
+def sub_callback(ctx: typer.Context) -> None:
     """Show the sub-app's help when invoked without a subcommand."""
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())

@@ -7,6 +7,7 @@ go through this adapter; the merge engine never touches `MediaFile` or
 
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from types import TracebackType
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -27,7 +28,7 @@ def _to_external(nv_pl: NVPlaylist) -> ExternalPlaylist:
 class NavidromeAdapter(PlaylistAdapter):
     remote = Source.NAVIDROME
 
-    def __init__(self, airdrome_session: Session, username: str):
+    def __init__(self, airdrome_session: Session, username: str) -> None:
         self._s = airdrome_session
         self._username = username
         self._nvs: Session | None = None
@@ -42,7 +43,12 @@ class NavidromeAdapter(PlaylistAdapter):
         self._user_id = user.id
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         assert self._nvs is not None
         self._nvs.close()
         self._nvs = None

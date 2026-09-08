@@ -18,7 +18,7 @@ class AppleMediaServicesPackage:
     _PLAYLISTS_FILE = "Apple Music Library Playlists.json.zip"
     _PLAY_ACTIVITY_FILE = "Apple Music Play Activity.csv"
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         self._path = path
 
     # ------------------------------------------------------------------ zip

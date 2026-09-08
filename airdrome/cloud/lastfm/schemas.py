@@ -11,11 +11,11 @@ class LastFMScrobble(BaseModel):
 
     @field_validator("date", mode="before")
     @classmethod
-    def parse_date(cls, value):
+    def parse_date(cls, value: object) -> object:
         if isinstance(value, str):
             return datetime.strptime(value, "%d %b %Y %H:%M")  # Custom format
         return value
 
     @property
-    def full_name(self):
+    def full_name(self) -> str:
         return f"{self.artist or ''} [{self.album or ''}] {self.title}"

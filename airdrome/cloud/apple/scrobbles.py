@@ -53,7 +53,7 @@ def _parse_play_activity(
 class AppleScrobbleParser(ScrobbleParser):
     platform = Source.APPLE_MS
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         self._package = AppleMediaServicesPackage(path)
 
     def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:

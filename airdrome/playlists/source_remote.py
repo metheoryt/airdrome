@@ -7,12 +7,14 @@ backends, so a source becomes just another — read-only — remote. The write h
 the engine must never call it for a `writable = False` remote.
 """
 
+from types import TracebackType
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.enums import Source
-from airdrome.models import Track
+from airdrome.models import Playlist, Track
 
 from .adapter import ExternalPlaylist, ExternalTrackRef, PlaylistAdapter
 
@@ -27,7 +29,7 @@ class SourcePlaylistRemote(PlaylistAdapter):
 
     writable = False
 
-    def __init__(self, session: Session, provider: Source):
+    def __init__(self, session: Session, provider: Source) -> None:
         self._s = session
         self.remote = provider  # the source provider IS this remote's identity
 
@@ -35,7 +37,12 @@ class SourcePlaylistRemote(PlaylistAdapter):
     def __enter__(self) -> SourcePlaylistRemote:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         return None
 
     def _playlist(self, external_id: str) -> SourcePlaylist | None:
@@ -79,7 +86,7 @@ class SourcePlaylistRemote(PlaylistAdapter):
 
     # ── write interface (never called for a read-only remote) ─────────────────
 
-    def create(self, playlist) -> ExternalPlaylist:
+    def create(self, playlist: Playlist) -> ExternalPlaylist:
         raise NotImplementedError("source remotes are read-only")
 
     def add_track(self, external_id: str, ref: ExternalTrackRef) -> None:

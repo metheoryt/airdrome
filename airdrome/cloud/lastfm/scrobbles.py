@@ -32,7 +32,7 @@ def get_lastfm_records(filepath: str) -> Iterator[LastFMScrobble]:
 class LastFMScrobbleParser(ScrobbleParser):
     platform = Source.LASTFM
 
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str) -> None:
         self.filepath = filepath
 
     def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:

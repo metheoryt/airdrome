@@ -42,7 +42,7 @@ def _touched_tracks(conflict: PlaylistConflict) -> list[int]:
 
 
 class PlaylistConflictUI:
-    def __init__(self, session: Session, conflicts: list[PlaylistConflict]):
+    def __init__(self, session: Session, conflicts: list[PlaylistConflict]) -> None:
         self.s = session
         self.conflicts = conflicts
         # Every conflict starts on AUTO (the deterministic default); the user overrides.

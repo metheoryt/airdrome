@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 import sqlalchemy as sa
 from mutagen import File
 from sqlalchemy import ForeignKey, Index, UniqueConstraint, create_engine, select, text
+from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, validates
 from sqlalchemy.types import TypeDecorator
 
@@ -35,14 +36,14 @@ class PathType(TypeDecorator):
     impl = sa.String
     cache_ok = True
 
-    def process_bind_param(self, value: Path | str | None, dialect):
+    def process_bind_param(self, value: Path | str | None, dialect: Dialect) -> str | None:
         if value is None:
             return None
         if isinstance(value, str):
             return value
         return value.as_posix()
 
-    def process_result_value(self, value: str, dialect):
+    def process_result_value(self, value: str | None, dialect: Dialect) -> Path | None:
         if value is None:
             return None
         return Path(value)
@@ -80,7 +81,7 @@ class Base(AirdromeBase):
         return changed
 
     @classmethod
-    def truncate_cascade(cls, session: Session):
+    def truncate_cascade(cls, session: Session) -> None:
         session.execute(text(f"TRUNCATE TABLE {cls.__tablename__} RESTART IDENTITY CASCADE;"))
         session.commit()
 
@@ -177,7 +178,7 @@ class Track(Base):
         back_populates="track", cascade="all, delete-orphan"
     )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Track {self.title} by {self.artist} on {self.album}>"
 
     @validates("title", "artist", "album_artist", "album")
@@ -190,7 +191,7 @@ class Track(Base):
         return self.title, self.artist, self.album_artist, self.album
 
     @property
-    def duplicate_hash(self):
+    def duplicate_hash(self) -> str:
         """
         Generates a hash string for identifying potential duplicate tracks.
 
@@ -229,7 +230,7 @@ class Track(Base):
         return TrackGroup.of(self)
 
     @property
-    def path_artist(self):
+    def path_artist(self) -> str:
         if self.compilation:
             return "Compilations"
         elif self.album_artist:
@@ -240,7 +241,7 @@ class Track(Base):
             return "Unknown Artist"
 
     @property
-    def path_album(self):
+    def path_album(self) -> str:
         return self.album or "Unknown Album"
 
     def generate_relative_path(self, ext: str, suffix: int = 0) -> Path:
@@ -327,7 +328,7 @@ class TrackFile(Base):
         return None
 
     @property
-    def duration_str(self):
+    def duration_str(self) -> str:
         if self.duration is None:
             return ""
         d = int(self.duration)
@@ -344,13 +345,13 @@ class TrackFile(Base):
             return settings.library_dir / self.library_path
         return self.source_path
 
-    def enrich(self):
+    def enrich(self) -> None:
         audio = File(self.absolute_path)
         if audio is None:
             raise ValueError("Unsupported or corrupted file")
         tags = audio.tags or {}
 
-        def get(*keys):
+        def get(*keys: str) -> str | None:
             for k in keys:
                 if k in tags:
                     v = tags[k]
@@ -504,7 +505,7 @@ class TrackAlias(Base):
         return value
 
     @property
-    def repr(self):
+    def repr(self) -> str:
         return f"[{self.title} / {self.artist or ''} / {self.album or ''}]"
 
 
@@ -559,7 +560,7 @@ class Playlist(Base):
     )
 
     @property
-    def comment(self):
+    def comment(self) -> str:
         c = self.platform.service
         if self.source_id:
             c += f" #{self.source_id}"

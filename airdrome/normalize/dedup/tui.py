@@ -1,6 +1,6 @@
 from rich.console import Group
 from rich.panel import Panel
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskID, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
@@ -26,7 +26,7 @@ INSTRUCTION_TEXT = Text.from_markup(
 
 
 class DeduplicatorUI:
-    def __init__(self, deduplicator: Deduplicator):
+    def __init__(self, deduplicator: Deduplicator) -> None:
         self.dedup = deduplicator
         self.state = deduplicator.state
         self.feedback_text = Text()
@@ -149,7 +149,7 @@ class DeduplicatorUI:
 
         return None
 
-    def _update(self, task_id, total: int) -> None:
+    def _update(self, task_id: TaskID, total: int) -> None:
         self.progress.update(
             task_id,
             description=f"[bold blue]{self.state.filter_mode.value}",

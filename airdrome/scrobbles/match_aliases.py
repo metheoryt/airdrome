@@ -43,7 +43,7 @@ def do_match_aliases(
     return matched, unmatched
 
 
-def match_aliases(s: Session, threshold: float = 0.4):
+def match_aliases(s: Session, threshold: float = 0.4) -> None:
     """Match unmatched aliases to canonical tracks, with a progress bar and summary."""
     progress = make_progress(
         TextColumn("[green]✓ {task.fields[match]}[/green]"),
@@ -55,7 +55,7 @@ def match_aliases(s: Session, threshold: float = 0.4):
     with progress:
         task = progress.add_task("Matching aliases", total=total, match=0, mismatch=0)
 
-        def _on_progress(matched: int, unmatched: int):
+        def _on_progress(matched: int, unmatched: int) -> None:
             progress.update(task, advance=1, match=matched, mismatch=unmatched)
 
         matched, unmatched = do_match_aliases(

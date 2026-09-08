@@ -7,7 +7,9 @@ from airdrome.models import Track, TrackAlias, TrackFile
 from .norm import normalize_name
 
 
-def _renormalize(session: Session, model, fields: list[tuple[str, str]], label: str):
+def _renormalize(
+    session: Session, model: type[Track | TrackAlias | TrackFile], fields: list[tuple[str, str]], label: str
+) -> None:
     for i, obj in enumerate(session.scalars(select(model)), start=1):
         for src, dst in fields:
             setattr(obj, dst, normalize_name(getattr(obj, src)))
@@ -17,7 +19,7 @@ def _renormalize(session: Session, model, fields: list[tuple[str, str]], label: 
     console.print(f"[green]{label} normalized[/green]")
 
 
-def normalize_track_names(s: Session):
+def normalize_track_names(s: Session) -> None:
     _renormalize(
         s,
         Track,
@@ -31,7 +33,7 @@ def normalize_track_names(s: Session):
     )
 
 
-def normalize_alias_names(s: Session):
+def normalize_alias_names(s: Session) -> None:
     _renormalize(
         s,
         TrackAlias,
@@ -44,7 +46,7 @@ def normalize_alias_names(s: Session):
     )
 
 
-def normalize_track_file_names(s: Session):
+def normalize_track_file_names(s: Session) -> None:
     _renormalize(
         s,
         TrackFile,

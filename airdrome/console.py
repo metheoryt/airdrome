@@ -1,5 +1,12 @@
 from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    ProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 
 console = Console()
@@ -49,7 +56,7 @@ def done(summary: str) -> None:
     console.print(f"[green]✓[/green] {summary}")
 
 
-def make_progress(*extra_columns, transient: bool = False) -> Progress:
+def make_progress(*extra_columns: ProgressColumn, transient: bool = False) -> Progress:
     """Standard progress bar. Pass extra TextColumn instances for custom fields.
 
     With `transient=True` the bar is cleared on completion (used by `import`, which

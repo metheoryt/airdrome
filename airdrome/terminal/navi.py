@@ -27,7 +27,7 @@ def _require_user() -> str:
     return settings.navidrome_user
 
 
-def _guard_navidrome_stopped(yes: bool):
+def _guard_navidrome_stopped(yes: bool) -> None:
     """Abort if Navidrome is listening on localhost; prompt when --yes is not passed."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(2)
@@ -46,7 +46,7 @@ def _guard_navidrome_stopped(yes: bool):
 
 
 @navi_app.command("push")
-def push(ctx: typer.Context, yes: bool = YES):
+def push(ctx: typer.Context, yes: bool = YES) -> None:
     """Push play counts and ratings for NAVIDROME_USER into Navidrome.
 
     Writes Navidrome's SQLite DB directly, so it requires Navidrome stopped. Playlists are

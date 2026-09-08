@@ -6,7 +6,7 @@ from airdrome.console import done, make_progress
 from airdrome.models import TrackAlias
 
 
-def maybe_complete_alias(alias: TrackAlias, s: Session):
+def maybe_complete_alias(alias: TrackAlias, s: Session) -> list[str]:
     # implied that the title is not empty
 
     if alias.album_norm and alias.artist_norm:
@@ -57,7 +57,7 @@ def maybe_complete_alias(alias: TrackAlias, s: Session):
     return changed
 
 
-def augment_aliases(s: Session):
+def augment_aliases(s: Session) -> None:
     """Backfill blank artist/album on aliases from sibling aliases, with a progress bar and summary."""
     aliases = s.scalars(
         select(TrackAlias).where(or_(TrackAlias.album_norm == "", TrackAlias.artist_norm == ""))

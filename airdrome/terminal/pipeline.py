@@ -54,7 +54,7 @@ def organize(
         False, "--move", "-m", help="Move files into LIBRARY_DIR instead of copying them."
     ),
     dry_run: bool = DRY_RUN,
-):
+) -> None:
     """Copy (or --move) bound files into LIBRARY_DIR, picking the best copy as each track's main."""
     state: AppState = ctx.obj
     state.dry_run = dry_run
@@ -75,7 +75,7 @@ def dedup(
         False, "--review", "-r", help="After the batch pass, open the TUI to review and adjust canons."
     ),
     match: str = typer.Option("", "--match", help="With --review, filter groups by a substring."),
-):
+) -> None:
     """Rebuild Track.canon_id from N flag-sets + stored manual overrides.
 
     The batch pass is a clean slate: all canon_ids are reset, each --set produces its own
@@ -108,7 +108,7 @@ def dedup(
 def dedup_export(
     ctx: typer.Context,
     path: Path = typer.Argument(None, help="Output JSON file (default: DUPLICATES_FILEPATH)."),
-):
+) -> None:
     """Dump confirmed dedup groups from the DB to a portable JSON file."""
     state: AppState = ctx.obj
     dest = path or settings.duplicates_filepath
@@ -122,7 +122,7 @@ def dedup_import(
     ctx: typer.Context,
     path: Path = typer.Argument(None, help="Input JSON file (default: DUPLICATES_FILEPATH)."),
     dry_run: bool = DRY_RUN,
-):
+) -> None:
     """Load confirmed dedup groups from a JSON file into the DB (idempotent)."""
     state: AppState = ctx.obj
     state.dry_run = dry_run

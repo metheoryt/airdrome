@@ -3,6 +3,7 @@ import io
 import json
 import plistlib
 import zipfile
+from collections.abc import Iterable
 from functools import cached_property
 from pathlib import Path
 from typing import ClassVar
@@ -47,7 +48,7 @@ def _member_names(path: Path, limit: int = 10_000) -> list[str]:
     return []
 
 
-def _zip_contains_signature(zf: zipfile.ZipFile, signatures, depth: int) -> bool:
+def _zip_contains_signature(zf: zipfile.ZipFile, signatures: Iterable[str], depth: int) -> bool:
     """Whether any entry name contains a signature, descending into nested zips.
 
     Apple's Media Services export buries the activity files inside a nested

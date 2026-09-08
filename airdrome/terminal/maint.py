@@ -17,7 +17,7 @@ maint_app = typer.Typer(help="Maintenance tasks")
 
 
 @maint_app.command()
-def renormalize(ctx: typer.Context, dry_run: bool = DRY_RUN):
+def renormalize(ctx: typer.Context, dry_run: bool = DRY_RUN) -> None:
     """Recompute the normalized `_norm` fields on tracks, aliases, and files.
 
     The escape hatch for a normalization-rule change: recompute in place instead of a full

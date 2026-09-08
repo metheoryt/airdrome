@@ -8,3 +8,7 @@ __pycache__/
 /navi/
 .env
 .coverage
+
+# gortex: local index state + auto-generated routing skills (never committed)
+.gortex/
+.claude/skills/generated/

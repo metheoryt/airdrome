@@ -10,9 +10,9 @@ import re
 import socket
 
 from rich.table import Table
-from sqlalchemy import distinct, func, select
+from sqlalchemy import ColumnElement, distinct, func, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import DeclarativeBase, Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.conf import settings
@@ -39,7 +39,7 @@ def _section(title: str) -> Table:
     return table
 
 
-def _count(session: Session, model, *where) -> int:
+def _count(session: Session, model: type[DeclarativeBase], *where: ColumnElement[bool]) -> int:
     """COUNT(*) over `model`, optionally filtered, returning 0 instead of None."""
     stmt = select(func.count()).select_from(model)
     if where:

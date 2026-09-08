@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy import ForeignKey, create_engine, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from airdrome.conf import settings
@@ -20,7 +21,7 @@ class NVSQLModel(NavidromeBase):
 _engine = None
 
 
-def get_nv_engine():
+def get_nv_engine() -> Engine:
     global _engine
     if _engine is None:
         if not settings.navidrome_db_dsn:
@@ -29,7 +30,7 @@ def get_nv_engine():
     return _engine
 
 
-def checkpoint_wal():
+def checkpoint_wal() -> None:
     """Fold any pending WAL pages into the main DB file before writing.
 
     Must be called after confirming Navidrome is stopped.
@@ -41,7 +42,7 @@ def checkpoint_wal():
 # these are existing Navidrome tables, only declare columns that are needed
 
 
-def generate_id():
+def generate_id() -> str:
     return "".join(random.choices(string.ascii_letters + string.digits, k=22))
 
 

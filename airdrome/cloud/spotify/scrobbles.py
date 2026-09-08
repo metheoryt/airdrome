@@ -17,7 +17,7 @@ class SpotifyRecord(BaseModel):
     ts: datetime
 
 
-def get_spotify_scrobbles(filename: str):
+def get_spotify_scrobbles(filename: str) -> Iterator[tuple[TrackAlias, datetime]]:
     with open(filename, encoding="utf-8") as jsonfile:
         history = json.load(jsonfile)
         for record in history:
@@ -32,7 +32,7 @@ def get_spotify_scrobbles(filename: str):
             yield TrackAlias(artist=r.artist, album=r.album, title=r.title), r.ts
 
 
-def get_spotify_streaming_history(dirpath: str):
+def get_spotify_streaming_history(dirpath: str) -> Iterator[tuple[TrackAlias, datetime]]:
     for filename in os.listdir(dirpath):
         yield from get_spotify_scrobbles(os.path.join(dirpath, filename))
 
@@ -40,7 +40,7 @@ def get_spotify_streaming_history(dirpath: str):
 class SpotifyScrobbleParser(ScrobbleParser):
     platform = Source.SPOTIFY
 
-    def __init__(self, dirpath: str):
+    def __init__(self, dirpath: str) -> None:
         self.dirpath = dirpath
 
     def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:

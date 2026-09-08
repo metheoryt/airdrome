@@ -41,7 +41,7 @@ class Page:
     confirmed: bool = False
     auto_resolved: bool = False  # canon_ids already set in DB by auto-dedup
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.canons = [t.canon_id for t in self.tracks]
         self.chosen_canons = list(self.canons)
         self.auto_resolved = any(c is not None for c in self.canons)
@@ -81,7 +81,7 @@ class DeduplicatorState:
     pages_iter: list[tuple[str, Page]] = field(default_factory=list, init=False)
     _mode_idx: dict = field(default_factory=lambda: dict.fromkeys(FilterMode, 0), init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.pages_iter = list(self.pages.items())
 
     def order_pages(self) -> None:
@@ -159,7 +159,7 @@ class Deduplicator:
         flag_sets: list[dict[str, bool]] | None = None,
         strategy: CanonStrategy = CanonStrategy.ADDED,
         partial_match: str = "",
-    ):
+    ) -> None:
         self.s = s
         self.flag_sets = flag_sets or _DEFAULT_FLAG_SETS
         self.strategy = strategy

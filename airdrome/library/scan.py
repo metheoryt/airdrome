@@ -12,7 +12,7 @@ from airdrome.models import TrackFile
 class MusicScanner:
     EXTENSIONS: ClassVar[set[str]] = {".mp3", ".m4a", ".flac"}
 
-    def __init__(self, target_path: Path, match_threshold: float = 0.4):
+    def __init__(self, target_path: Path, match_threshold: float = 0.4) -> None:
         self.target_path = target_path
 
     def scan_file(self, abs_path: Path, s: Session) -> tuple[TrackFile, bool]:
@@ -45,7 +45,7 @@ class MusicScanner:
 
         return n_created
 
-    def run(self, s: Session):
+    def run(self, s: Session) -> None:
         progress = Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
@@ -60,7 +60,7 @@ class MusicScanner:
                 file_created=0,
             )
 
-            def _on_item(n_created: int):
+            def _on_item(n_created: int) -> None:
                 progress.update(task_id, advance=1, file_created=n_created)
 
             self.scan_all(s, _on_item=_on_item)
