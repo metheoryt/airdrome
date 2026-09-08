@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from airdrome.library import MAIN_SUBDIR, MUSIC_SUBDIR
 from airdrome.library.organize import FileOrganizer
 from airdrome.models import Track, TrackFile
 
@@ -66,6 +69,78 @@ def test_organize_skips_already_organized(session, tmp_path):
 
     assert n_first == 1
     assert n_second == 0  # already organized, nothing to do
+
+
+def test_dry_run_touches_no_files_but_still_reports(session, tmp_path):
+    """A dry run must plan, not act: nothing moves, and the count is still real."""
+    src_dir = tmp_path / "source"
+    dst_dir = tmp_path / "library"
+    src_dir.mkdir()
+    dst_dir.mkdir()
+
+    _track, tf = _make_track_with_file(session, src_dir, "Test Song")
+    src_before = tf.source_path
+    organizer = FileOrganizer(dst_dir=dst_dir, dry_run=True)
+
+    n = organizer.organize(session)
+
+    assert n == 1  # reported as it would have happened
+    assert src_before.exists()  # source untouched...
+    assert tf.library_path is not None
+    assert not (dst_dir / tf.library_path).exists()  # ...and nothing written
+    assert list(dst_dir.iterdir()) == []  # not even the destination directories
+
+
+def test_dry_run_still_raises_on_a_missing_source(session, tmp_path):
+    """Preconditions are the point of a dry run — it must not swallow them."""
+    src_dir = tmp_path / "source"
+    dst_dir = tmp_path / "library"
+    src_dir.mkdir()
+    dst_dir.mkdir()
+
+    _track, tf = _make_track_with_file(session, src_dir, "Test Song")
+    tf.source_path.unlink()
+    organizer = FileOrganizer(dst_dir=dst_dir, dry_run=True)
+
+    with pytest.raises(FileNotFoundError):
+        organizer.organize(session)
+
+
+def test_dry_run_detects_a_destination_collision(session, tmp_path):
+    """A file already sitting at the destination is reported, not silently ignored."""
+    src_dir = tmp_path / "source"
+    dst_dir = tmp_path / "library"
+    src_dir.mkdir()
+    dst_dir.mkdir()
+
+    track, tf = _make_track_with_file(session, src_dir, "Test Song")
+    dst_rel = Path(MAIN_SUBDIR) / MUSIC_SUBDIR / track.generate_relative_path(ext="mp3")
+    (dst_dir / dst_rel).parent.mkdir(parents=True)
+    (dst_dir / dst_rel).write_bytes(b"squatter")
+    organizer = FileOrganizer(dst_dir=dst_dir, dry_run=True)
+
+    with pytest.raises(FileExistsError):
+        organizer.organize(session)
+
+    assert tf.source_path.exists()
+
+
+def test_dry_run_plans_the_same_path_a_real_run_would_write(session, tmp_path):
+    """The planned `library_path` is the real one, so the preview is worth reading."""
+    src_dir = tmp_path / "source"
+    dst_dir = tmp_path / "library"
+    src_dir.mkdir()
+    dst_dir.mkdir()
+
+    _track, tf = _make_track_with_file(session, src_dir, "Test Song")
+    FileOrganizer(dst_dir=dst_dir, dry_run=True).organize(session)
+    planned = tf.library_path
+
+    tf.library_path = None  # same track, same organizer settings, for real this time
+    FileOrganizer(dst_dir=dst_dir).organize(session)
+
+    assert tf.library_path == planned
+    assert (dst_dir / planned).exists()
 
 
 def test_on_item_callback_called(session, tmp_path):

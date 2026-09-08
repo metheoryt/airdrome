@@ -53,12 +53,15 @@ def organize(
     move: bool = typer.Option(
         False, "--move", "-m", help="Move files into LIBRARY_DIR instead of copying them."
     ),
-    dry_run: bool = DRY_RUN,
+    # Not the shared DRY_RUN: this one also skips the filesystem write, it does not undo it.
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Report what would be transferred; write nothing."
+    ),
 ) -> None:
     """Copy (or --move) bound files into LIBRARY_DIR, picking the best copy as each track's main."""
     state: AppState = ctx.obj
-    state.dry_run = dry_run
-    organize_library(state.session, dst_dir=settings.library_dir, copy=not move)
+    state.dry_run = dry_run  # rolls the DB back on close; `dry_run` below spares the disk
+    organize_library(state.session, dst_dir=settings.library_dir, copy=not move, dry_run=dry_run)
 
 
 def dedup(

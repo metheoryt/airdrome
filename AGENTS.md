@@ -72,6 +72,11 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   `select_main` picks the best copy (bitrate, then container). (The `FileOrganizer`/
   `organize_library` engine still defaults to *move*; only the CLI defaults to copy — the
   safer, non-destructive user default.) The per-file "picking best" lines are verbose-only.
+  `--dry-run` is threaded into `FileOrganizer` (not just the session rollback): `transfer`
+  checks both preconditions, then returns the planned path without creating directories or
+  calling `shutil` — so `library_path` and the count are the real ones, and the summary reads
+  "would be moved/copied". The one thing it can't see is two tracks planning the *same*
+  destination; that needs planned paths tracked across calls.
 - **`dedup`** — batch rebuild of `Track.canon_id` from N flag-sets + stored manual overrides.
   `-s/--set` (repeatable, comma-separated fields; title always implicit), `-c/--canon`
   (`added`/`year`). With no `--set` the CLI uses `RECOMMENDED_SETS` (see *Dedup tuning notes*);
@@ -142,6 +147,10 @@ Business logic takes `s: Session` and uses `s.flush()` for intermediate persiste
 must **not** call `s.commit()`. Intentional exceptions: the interactive `Deduplicator`
 commits on the user's keypress; `auto_deduplicate` commits (with a behavioral `dry_run`);
 Navidrome sync manages its own SQLite session and ignores `--dry-run`.
+
+**A rollback only undoes the DB.** A command that also writes outside the session — files,
+an external backend — must take `dry_run` as a *behavioral* argument and skip the side effect
+itself; `state.dry_run` alone is not enough (see `organize`, and `auto_deduplicate`).
 
 ### Key models (`models.py`)
 

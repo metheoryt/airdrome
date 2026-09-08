@@ -11,9 +11,19 @@ from airdrome.models import Track, TrackFile, TrackGroup
 
 
 class FileOrganizer:
-    def __init__(self, dst_dir: Path, copy: bool = False) -> None:
+    """Places bound files under `dst_dir`, one destination per track.
+
+    Under `dry_run` nothing on disk is touched — no directories created, no bytes
+    moved or copied — but everything else runs: preconditions are still checked and
+    `TrackFile.library_path` is still written, so the reported count and paths are the
+    ones a real run would produce. Undoing those DB writes is the caller's job (the CLI
+    rolls the session back). See `transfer` for what a dry run cannot see.
+    """
+
+    def __init__(self, dst_dir: Path, copy: bool = False, dry_run: bool = False) -> None:
         self.dst_dir = dst_dir
         self.copy = copy
+        self.dry_run = dry_run
 
     @classmethod
     def select_main(cls, files: list[TrackFile]) -> TrackFile:
@@ -48,6 +58,13 @@ class FileOrganizer:
         Move a file from `src_abs` to `dst_dir_mains/dst_rel`.
 
         Return the real absolut path of the moved destination file.
+
+        Both preconditions are checked even under `dry_run` — surfacing a missing source
+        or an occupied destination is the point of a dry run. What a dry run *cannot*
+        see is a collision between two tracks that resolve to the same destination: in a
+        real run the second one hits the first's file, but nothing is written here, so
+        the pair reads as clean. Detecting that would need planned paths tracked across
+        calls.
         """
 
         if not src_abs.exists():
@@ -56,6 +73,10 @@ class FileOrganizer:
 
         if dst_abs.exists():
             raise FileExistsError(f"Destination file already exists: {dst_abs}")
+
+        if self.dry_run:
+            # Report the path a real run would produce, without creating anything.
+            return dst_abs
 
         dst_abs.parent.mkdir(parents=True, exist_ok=True)
 
@@ -143,9 +164,12 @@ def organize_library(
     s: Session,
     dst_dir: Path,
     copy: bool = False,
+    dry_run: bool = False,
 ) -> None:
-    mover = FileOrganizer(dst_dir=dst_dir, copy=copy)
-    verb = "copied" if copy else "moved"
+    mover = FileOrganizer(dst_dir=dst_dir, copy=copy, dry_run=dry_run)
+    # Under a dry run nothing is written, so the summary must not claim it was.
+    label = ("copying" if copy else "moving") if dry_run else ("copied" if copy else "moved")
+    outcome = f"would be {'copied' if copy else 'moved'}" if dry_run else label
 
     pending_stmt = select(Track).where(Track.files.any(TrackFile.library_path.is_(None)))
     total = s.scalars(select(func.count()).select_from(pending_stmt.subquery())).one()
@@ -153,8 +177,9 @@ def organize_library(
         console.print("[dim]Nothing to do.[/dim]")
         return
 
+    scope = f"dry run, {label}" if dry_run else label
     with make_progress() as progress:
-        task = progress.add_task(f"Organizing library ({verb})", total=total)
+        task = progress.add_task(f"Organizing library ({scope})", total=total)
         i = mover.organize(s, _on_item=lambda _: progress.advance(task))
 
-    done(f"{i} tracks {verb}")
+    done(f"{i} tracks {outcome}")

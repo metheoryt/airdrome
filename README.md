@@ -136,10 +136,6 @@ A full migration runs roughly in this order. Every command is idempotent — re-
 safe and only fills gaps. Add `--dry-run`/`-n` to any write command to roll back instead of
 committing.
 
-> ⚠️ `--dry-run` currently rolls back the *database* only. `organize` moves and copies files
-> on disk before the rollback happens, so a dry run of that one command still relocates
-> files — see [ROADMAP.md](ROADMAP.md).
-
 ```bash
 # 1. Import every source you have (one invocation, any mix of exports / folders)
 airdrome import ./exports/itunes/Library.xml ./exports/Apple_Media_Services.zip \
@@ -205,7 +201,9 @@ Copy (default) or move bound files into `LIBRARY_DIR`; picks the best copy (bitr
 as each track's main.
 
 - `--move`, `-m` — move files instead of copying them
-- `--dry-run`, `-n`
+- `--dry-run`, `-n` — plan only: reports the paths and count a real run would produce, and still
+  reports a missing source or an occupied destination, but writes nothing to disk. It cannot see a
+  collision between two tracks that resolve to the *same* destination — a real run would hit that.
 
 ### `airdrome dedup`
 
