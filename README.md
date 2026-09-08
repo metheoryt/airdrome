@@ -156,11 +156,11 @@ database rebuild.
 Reconcile playlists across remotes, with Airdrome as the source of truth. Cloud sources
 (`apple_xml`, `apple_ms`) are read-only; `navidrome` is a read-write backend. `sync all` runs
 sources first, then backends. Each playlist is merged against a per-remote base, so downstream
-deletes stick and re-imports don't resurrect removed tracks. When remotes disagree on a track
-(one added it, another removed it), an interactive resolver opens to pick a per-playlist
-strategy: take a remote, keep ours, auto-merge, or abort.
+deletes stick and re-imports don't resurrect removed tracks. `sync` never prompts: when
+remotes disagree on a track (one added it, another removed it), the **last remote that edited
+that track** wins it — with `sync all`'s sources-then-backends order, a Navidrome edit beats a
+source export. Every other edit still merges normally, and each auto-resolution is printed.
 
-- `--review`/`-r` — open the resolver for *every* changed playlist, not just conflicts
 - `--dry-run`/`-n`
 - `--yes`/`-y` — skip the Navidrome-stopped confirmation
 

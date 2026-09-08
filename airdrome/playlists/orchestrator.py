@@ -2,10 +2,11 @@
 
 One pass that reconciles every canonical playlist against a set of remotes (cloud
 sources and/or server backends), in the order given. For each playlist it gathers what
-each remote currently holds versus its base, detects order-dependent (add-vs-remove)
-conflicts across remotes, and — when any exist, or under `--review` — opens the resolver
-so the user picks a per-playlist strategy. Everything else auto-merges via the pairwise
-engine in `sync.py`; conflicts are applied by forcing the resolved membership outward.
+each remote currently holds versus its base and detects order-dependent (add-vs-remove)
+conflicts across remotes. Clean playlists auto-merge via the pairwise engine in
+`sync.py`; conflicted ones are settled non-interactively by `resolve_latest` — the last
+remote that edited each conflicted track wins — and applied by forcing that membership
+outward. `sync` never prompts.
 
 Single-remote `sync <remote>` is just this with one adapter, where no cross-remote
 conflict can arise. `sync all` passes sources first, then backends, so a source delete
@@ -20,11 +21,10 @@ from sqlalchemy.orm import Session
 
 from airdrome.console import console, done
 from airdrome.enums import Source
-from airdrome.models import Playlist, PlaylistLink
+from airdrome.models import Playlist, PlaylistLink, Track
 
 from .adapter import ExternalPlaylist, PlaylistAdapter
-from .conflicts import Decision, PlaylistConflict, RemoteState, Strategy, detect_conflicts, resolve_final
-from .resolver_tui import PlaylistConflictUI
+from .conflicts import PlaylistConflict, RemoteState, detect_conflicts, resolve_latest, verdicts
 from .sync import _airdrome_canonical_ids, _apply_to_airdrome, _sync_pair, remote_membership
 
 
@@ -63,11 +63,24 @@ def _gather(s: Session, playlist: Playlist, adapters: list[PlaylistAdapter]) -> 
     return ctxs
 
 
-def _auto_would_change(conflict: PlaylistConflict) -> bool:
-    """True if an auto reconcile would touch this playlist on either side."""
-    if any(st.theirs != st.base for st in conflict.states):
-        return True
-    return resolve_final(conflict, Decision(Strategy.AUTO)) != conflict.ours
+def _report_resolution(s: Session, conflict: PlaylistConflict) -> None:
+    """Name each auto-resolved track and the remote that won it, so `sync` isn't silent.
+
+    One line per conflicted track — conflicts are rare, and a bare `Track.id` would say
+    nothing at the terminal, so the ids are resolved to titles here.
+    """
+    decided = verdicts(conflict)
+    if not decided:
+        return
+    titles = {
+        t.id: f"{t.title} — {t.artist}" if t.artist else t.title
+        for t in s.scalars(select(Track).where(Track.id.in_(decided)))
+    }
+    for track_id, (remote, _) in decided.items():
+        console.print(
+            f"  [yellow]![/yellow]  {conflict.playlist_name}: "
+            f"{titles.get(track_id, f'#{track_id}')} → {remote.value}"
+        )
 
 
 def _make_ext(adapter: PlaylistAdapter, playlist: Playlist) -> Callable[[], ExternalPlaylist]:
@@ -119,45 +132,34 @@ def _pull_backend_only(s: Session, adapter: PlaylistAdapter, seen: set[str]) -> 
     return pulled
 
 
-def reconcile(s: Session, adapters: list[PlaylistAdapter], *, review: bool = False) -> None:
-    """Reconcile every canonical playlist against `adapters`, in order."""
+def reconcile(s: Session, adapters: list[PlaylistAdapter]) -> None:
+    """Reconcile every canonical playlist against `adapters`, in order.
+
+    Single pass, no prompting: a playlist with no hard conflict auto-merges pairwise; a
+    conflicted one is settled by `resolve_latest` and that membership forced outward.
+    """
     playlist_ids = list(s.scalars(select(Playlist.id).order_by(Playlist.name)).all())
 
-    # Pre-pass: gather state, detect conflicts, decide which playlists need the resolver.
-    plans: list[tuple[Playlist, list[_Ctx], PlaylistConflict]] = []
-    to_resolve: list[PlaylistConflict] = []
-    for pid in playlist_ids:
-        playlist = s.get(Playlist, pid)
-        ctxs = _gather(s, playlist, adapters)
-        states = [RemoteState(c.adapter.remote, list(c.base), list(c.theirs)) for c in ctxs]
-        conflict = PlaylistConflict(
-            playlist_id=playlist.id,
-            playlist_name=playlist.name,
-            ours=_airdrome_canonical_ids(s, playlist.id),
-            states=states,
-            conflicts=detect_conflicts(states),
-        )
-        plans.append((playlist, ctxs, conflict))
-        if conflict.conflicts or (review and _auto_would_change(conflict)):
-            to_resolve.append(conflict)
-
-    decisions: dict[int, Decision] = {}
-    if to_resolve:
-        result = PlaylistConflictUI(s, to_resolve).serve()
-        if result is None:
-            s.rollback()
-            console.print("[yellow]Reconcile aborted — nothing changed.[/yellow]")
-            return
-        decisions = result
-
-    # Apply: overrides force the chosen membership, everything else auto-merges.
     changed = total = 0
     seen: dict = {a.remote: set() for a in adapters}
-    for playlist, ctxs, conflict in plans:
-        decision = decisions.get(playlist.id)
+    for pid in playlist_ids:
+        playlist = s.get(Playlist, pid)
+        if playlist is None:  # deleted between the id scan and now
+            continue
+        ctxs = _gather(s, playlist, adapters)
+        states = [RemoteState(c.adapter.remote, list(c.base), list(c.theirs)) for c in ctxs]
+        conflicts = detect_conflicts(states)
         try:
-            if decision is not None and decision.strategy is not Strategy.AUTO:
-                had = _apply_override(s, playlist, ctxs, resolve_final(conflict, decision))
+            if conflicts:
+                conflict = PlaylistConflict(
+                    playlist_id=playlist.id,
+                    playlist_name=playlist.name,
+                    ours=_airdrome_canonical_ids(s, playlist.id),
+                    states=states,
+                    conflicts=conflicts,
+                )
+                had = _apply_override(s, playlist, ctxs, resolve_latest(conflict))
+                _report_resolution(s, conflict)
             else:
                 had = _apply_auto(s, playlist, ctxs)
         except Exception:

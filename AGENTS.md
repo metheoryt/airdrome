@@ -84,8 +84,8 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   disposable DB across schema rebuilds; slated for automatic management (see ROADMAP.md).
 - **`sync <remote>` / `sync all`** — reconcile playlists across remotes (cloud sources +
   backends). One subcommand per remote (`apple_xml`, `apple_ms`, `navidrome`); `sync all`
-  runs sources first, then backends. `-r/--review` opens the resolver for every changed
-  playlist (not just hard conflicts); `-n`/`-y`. The Navidrome-stopped guard + WAL checkpoint
+  runs sources first, then backends. Fully non-interactive — hard conflicts auto-resolve to
+  the last remote that edited the track. `-n`/`-y`. The Navidrome-stopped guard + WAL checkpoint
   fire only when a writable backend is in scope. See *Playlist reconcile* below.
 - **`navi push`** — requires Navidrome stopped (probes `NAVIDROME_PORT`, prompts unless
   `-y/--yes`, then writes its SQLite DB directly). Pushes play counts + ratings for
@@ -187,13 +187,15 @@ rows), pull-only, never written; backends are read-write (`NavidromeAdapter`).
   for one (playlist, remote). Read-only remotes apply only `theirs→ours` and store `theirs`
   as the new base (not the merged list) — that is what stops a downstream-deleted or
   local-only track from being resurrected.
-- **Orchestrator** (`orchestrator.py`): `reconcile(s, adapters, *, review)` runs every
-  playlist against the remotes in order. A pre-pass gathers each remote's base/membership and
-  `detect_conflicts` (`conflicts.py`) finds order-dependent (add-vs-remove) edits. Conflicted
-  (or, under `--review`, all changed) playlists go to the resolver (`resolver_tui.py`,
-  modeled on the dedup TUI): per playlist take a remote / keep ours / auto / abort. Overrides
-  are applied by forcing the resolved membership and priming each base to `theirs`, so the
-  same `_sync_pair` propagates it outward.
+- **Orchestrator** (`orchestrator.py`): `reconcile(s, adapters)` runs every playlist against
+  the remotes in order, in one pass and without prompting. It gathers each remote's
+  base/membership; `detect_conflicts` (`conflicts.py`) finds order-dependent (add-vs-remove)
+  edits. A clean playlist auto-merges pairwise. A conflicted one goes through
+  `resolve_latest`: fold every remote in order, then override *only* the conflicted tracks
+  with the multiplicity of the **last remote that actually edited each** (`verdicts()` — a
+  remote whose `theirs` count equals its own base abstains rather than winning by position).
+  The result is forced outward by priming each base to `theirs`, so the same `_sync_pair`
+  propagates it. Each auto-resolution prints the track and the remote that won it.
 - **`land` seeds, `sync` updates**: `unify_source_playlists` only writes membership when it
   *creates* a canonical playlist; existing playlists are owned by `sync`. Re-importing a
   snapshot never re-unions, so a downstream delete sticks.

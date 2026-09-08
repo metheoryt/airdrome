@@ -1,15 +1,15 @@
-"""Hard-conflict detection for a multi-remote reconcile.
+"""Hard-conflict detection and automatic resolution for a multi-remote reconcile.
 
 When one playlist is reconciled against several remotes in a run, the multiset 3-way
 merge auto-resolves almost everything. The exception is an *order-dependent* edit: a
 track one remote added (vs. its base) while another removed it (vs. its base). The final
-membership then depends on which remote merges first, so the engine must not guess — it
-surfaces these tracks for interactive resolution instead.
+membership then depends on which remote merges first, so the fold's arithmetic is not a
+decision — `detect_conflicts` names those tracks and `resolve_latest` settles each one by
+the last remote that actually edited it.
 """
 
 from collections import Counter
 from dataclasses import dataclass, field
-from enum import StrEnum
 
 from airdrome.enums import Source
 
@@ -30,25 +30,11 @@ class RemoteState:
     theirs: list[int]
 
 
-class Strategy(StrEnum):
-    """How the user resolves one conflicted playlist."""
-
-    AUTO = "auto"  # sequential 3-way merge across the remotes
-    OURS = "ours"  # keep canonical as-is, ignore the remotes' edits this run
-    TAKE = "take"  # one remote wins wholesale (needs Decision.remote)
-
-
-@dataclass(frozen=True)
-class Decision:
-    strategy: Strategy
-    remote: Source | None = None  # set iff strategy is TAKE
-
-
 @dataclass
 class PlaylistConflict:
-    """A playlist whose remotes disagree, packaged for the resolver.
+    """A playlist and every remote's view of it, packaged for resolution.
 
-    `states` are in reconcile order (sources first, then backends) so AUTO folds the
+    `states` are in reconcile order (sources first, then backends) so the fold runs the
     same way the orchestrator would apply them. `conflicts` is the set of canonical
     track ids `detect_conflicts(states)` flagged.
     """
@@ -60,19 +46,57 @@ class PlaylistConflict:
     conflicts: set[int] = field(default_factory=set)
 
 
-def resolve_final(conflict: PlaylistConflict, decision: Decision) -> list[int]:
-    """The canonical membership a chosen strategy yields for a conflicted playlist."""
-    if decision.strategy is Strategy.OURS:
-        return list(conflict.ours)
-    if decision.strategy is Strategy.TAKE:
-        for st in conflict.states:
-            if st.remote == decision.remote:
-                return list(st.theirs)
-        raise ValueError(f"remote {decision.remote} is not part of this conflict")
+def verdicts(conflict: PlaylistConflict) -> dict[int, tuple[Source, int]]:
+    """Per conflicted track, the deciding remote and the multiplicity it wants.
+
+    The decider is the *last remote in reconcile order that actually edited the track*.
+    A remote whose `theirs` count equals its own base did not touch it and abstains
+    rather than winning by position — otherwise a remote that merely reconciled last
+    would silently overrule the only peer with an opinion. Also what `sync` reports.
+    """
+    decided: dict[int, tuple[Source, int]] = {}
+    for st in conflict.states:  # reconcile order, so later editors overwrite earlier ones
+        base_c, theirs_c = Counter(st.base), Counter(st.theirs)
+        for track_id in sorted(conflict.conflicts):
+            if theirs_c[track_id] != base_c[track_id]:
+                decided[track_id] = (st.remote, theirs_c[track_id])
+    return decided
+
+
+def resolve_latest(conflict: PlaylistConflict) -> list[int]:
+    """The canonical membership for one playlist, resolving conflicts without a human.
+
+    Everything auto-merges: fold each remote in reconcile order, exactly as the pairwise
+    engine would. Then, for the flagged tracks only, force the last editing remote's
+    multiplicity — the fold's arithmetic (`ours + theirs - base`) is order-dependent for
+    those and so is not a decision. Non-conflicting edits from every remote survive.
+
+    Order follows reconcile decision #2: surplus copies are trimmed from the tail and
+    missing ones appended at the end, so a settled playlist reconciles to itself.
+    """
     merged = list(conflict.ours)
-    for st in conflict.states:  # AUTO: fold in reconcile order, matching the engine
+    for st in conflict.states:
         merged = _three_way_merge(st.base, merged, st.theirs)
-    return merged
+
+    decided = verdicts(conflict)
+    if not decided:
+        return merged
+
+    wanted = Counter(merged)  # what the fold settled on
+    for track_id, (_, count) in decided.items():
+        wanted[track_id] = count  # assignment, not Counter.update — the verdict replaces
+
+    final: list[int] = []
+    emitted: Counter[int] = Counter()
+    for track_id in merged:  # keep position; drop the copies the verdict cut
+        if emitted[track_id] < wanted[track_id]:
+            final.append(track_id)
+            emitted[track_id] += 1
+    for track_id, (_, count) in decided.items():  # append what the verdict added
+        while emitted[track_id] < count:
+            final.append(track_id)
+            emitted[track_id] += 1
+    return final
 
 
 def detect_conflicts(states: list[RemoteState]) -> set[int]:

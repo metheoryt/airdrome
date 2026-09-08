@@ -21,7 +21,7 @@ from airdrome.playlists.adapter import PlaylistAdapter
 from airdrome.playlists.source_remote import SourcePlaylistRemote
 
 from .navi import _guard_navidrome_stopped, _require_user
-from .options import DRY_RUN, REVIEW, YES
+from .options import DRY_RUN, YES
 from .state import AppState
 
 
@@ -37,7 +37,7 @@ def _build_adapter(remote: Source, state: AppState) -> PlaylistAdapter:
     return SourcePlaylistRemote(state.session, remote)
 
 
-def _run(ctx: typer.Context, remotes: tuple[Source, ...], *, review: bool, dry_run: bool, yes: bool) -> None:
+def _run(ctx: typer.Context, remotes: tuple[Source, ...], *, dry_run: bool, yes: bool) -> None:
     state: AppState = ctx.obj
     state.dry_run = dry_run
 
@@ -48,14 +48,14 @@ def _run(ctx: typer.Context, remotes: tuple[Source, ...], *, review: bool, dry_r
 
     with contextlib.ExitStack() as stack:
         adapters = [stack.enter_context(_build_adapter(r, state)) for r in remotes]
-        reconcile(state.session, adapters, review=review)
+        reconcile(state.session, adapters)
 
 
 def _command(remotes: tuple[Source, ...]) -> Callable[..., None]:
     """Build a subcommand bound to a fixed set of remotes."""
 
-    def cmd(ctx: typer.Context, review: bool = REVIEW, dry_run: bool = DRY_RUN, yes: bool = YES) -> None:
-        _run(ctx, remotes, review=review, dry_run=dry_run, yes=yes)
+    def cmd(ctx: typer.Context, dry_run: bool = DRY_RUN, yes: bool = YES) -> None:
+        _run(ctx, remotes, dry_run=dry_run, yes=yes)
 
     return cmd
 
