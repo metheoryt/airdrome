@@ -22,3 +22,23 @@ or [ROADMAP.md](../../ROADMAP.md) (forward-looking).
   found in this WSL 2 distro". So the compose Postgres, and therefore `uv run pytest`,
   cannot run from a worktree here at all; use the Windows checkout or another box.
   See the host memory for the underlying toggle.
+
+## Real-library provenance (2026-09-09)
+
+- **The 881 hand-made dedup groups came from `latitude:/mnt/immich/xs-keepers/repos/airdrome/`**
+  — an archived June 2026 checkout of this repo, the keepers pile from the retired `xs`
+  drive. It is the only place they survived the 2026-09-07 g513ie Windows wipe. That
+  directory also holds the non-reconstructible cloud exports (`apple/` 620 M,
+  `listenbrainz/` two zips, `spotify/`, `lastfm/`, `auto-dedup.history.json`).
+- **Live setup on g15:** `LIBRARY_DIR=/home/me/Music/Airdrome` (airdrome's managed output —
+  `Library/` + `Copies/`), imported from `/home/me/Music/PicardedMusic` (66 G, Picard-tagged,
+  the untouched source). The cloud exports were copied into `LIBRARY_DIR` alongside them.
+- **`land` is slow for a structural reason, not a broken box.** `_bind_track_files` runs
+  `possible_locations(max_suffix=2)` — 12-24 candidate paths per Apple source track — as one
+  `ILIKE '%…%'` per candidate: ~490k full scans of `trackfile` at 8-11 ms each, ~40 min for
+  27k source tracks. An index does not fix it (at ~7k files the planner costs a seq scan
+  cheaper than a forced `pg_trgm` lookup, 215 vs 256, though the lookup measures 0.28 ms).
+  The fix is batching the candidates against one in-memory dict of `source_path`.
+- Scrobble import dedupes on **timestamp alone, across platforms** (`get_fresh_scrobbles`,
+  "single-user database"). Overlapping exports of the same service are safe; two services
+  with clock skew would double-count the same play.
