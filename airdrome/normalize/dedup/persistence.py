@@ -46,6 +46,18 @@ def export_dedup_groups(session: Session) -> dict[str, dict]:
     return out
 
 
+# --- durable-mirror hand-off -----------------------------------------------
+# The snapshot is taken here, inside the writing transaction; `mirror.py` writes
+# it to disk after the commit. Its module docstring explains why the halves are
+# split. The key lives here so `persistence` needs no import of `mirror`.
+MIRROR_SNAPSHOT_KEY = "dedup_mirror"
+
+
+def stash_mirror_snapshot(session: Session) -> None:
+    """Record the post-flush group table for the after-commit mirror write."""
+    session.info[MIRROR_SNAPSHOT_KEY] = export_dedup_groups(session)
+
+
 def import_dedup_groups(session: Session, data: dict[str, dict]) -> tuple[int, int]:
     """Upsert dedup groups from the portable shape; identity = member-hash multiset.
 
@@ -71,6 +83,7 @@ def import_dedup_groups(session: Session, data: dict[str, dict]) -> tuple[int, i
             created += 1
             index[key] = group  # collapse duplicate entries within the same file
     session.flush()
+    stash_mirror_snapshot(session)
     return created, updated
 
 
@@ -105,6 +118,7 @@ def save_confirmed_groups(session: Session, pages: dict[str, Page]) -> None:
         session.add(group)
         n_saved += 1
     session.flush()
+    stash_mirror_snapshot(session)
     console.print(f"[dim]Saved {n_saved} confirmed group(s) to DB[/dim]")
 
 

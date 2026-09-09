@@ -84,9 +84,10 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   `--review`/`-r` the interactive TUI opens *after* the batch pass so you can adjust the
   proposed canons (`--match` filters the TUI by substring); choices persist as manual
   overrides feeding the next run.
-- **`dedup-export`/`dedup-import`** — round-trip confirmed dedup groups to/from JSON (default
-  `DUPLICATES_FILEPATH`); idempotent upsert keyed on the member set. These survive the
-  disposable DB across schema rebuilds; slated for automatic management (see ROADMAP.md).
+- **`dedup-import`** — manual entrance for a *foreign* or archived group file (idempotent upsert
+  keyed on the member set). The library's own groups need no command: they are mirrored to disk
+  after every commit that touched one, and restored by `dedup` into an empty table. See *Dedup
+  group mirror* below. (`dedup-export` was retired — the mirror is always current.)
 - **`sync <remote>` / `sync all`** — reconcile playlists across remotes (cloud sources +
   backends). One subcommand per remote (`apple_xml`, `apple_ms`, `navidrome`); `sync all`
   runs sources first, then backends. Fully non-interactive — hard conflicts auto-resolve to
@@ -151,6 +152,8 @@ Navidrome sync manages its own SQLite session and ignores `--dry-run`.
 **A rollback only undoes the DB.** A command that also writes outside the session — files,
 an external backend — must take `dry_run` as a *behavioral* argument and skip the side effect
 itself; `state.dry_run` alone is not enough (see `organize`, and `auto_deduplicate`).
+The other way to satisfy the rule is to hang the side effect off the commit itself, so a
+rollback never reaches it — what the dedup group mirror does.
 
 ### Key models (`models.py`)
 
@@ -170,6 +173,35 @@ itself; `state.dry_run` alone is not enough (see `organize`, and `auto_deduplica
 All text fields have `_norm` variants (lowercased, accents stripped). Fuzzy dedup and alias
 matching use PostgreSQL trigram similarity (`pg_trgm`), weighted artist/album_artist 75%,
 album 25%. Threshold defaults to 0.4.
+
+### Dedup group mirror (`normalize/dedup/mirror.py`)
+
+Confirmed dedup groups are hand-made, but the Postgres DB is disposable (recreated on schema
+change). So the DB is the working copy and `LIBRARY_DIR/.airdrome/duplicates.json` is the
+durable mirror — one-directional, DB → file. Colocating it with the library makes it
+per-library by construction and makes it travel with the library it describes;
+`DUPLICATES_FILEPATH` overrides the path.
+
+- **Snapshot and write are split on purpose.** `stash_mirror_snapshot` (in `persistence.py`)
+  exports the whole table inside the writing transaction, where pending inserts and deletes are
+  visible, and parks it in `session.info`. The `after_commit` listener that `install_mirror`
+  attaches (wired once, in the root callback) only serializes that dict. Exporting *in* the
+  listener would emit SQL with no transaction open; writing *before* the commit would let a
+  rollback leave the file ahead of the DB. An `after_soft_rollback` listener drops an unlanded
+  snapshot so the next unrelated commit can't write it.
+- **Always the whole table, never a delta** — `save_confirmed_groups` touches only the pages
+  materialized in its run, so nothing but the table is authoritative. Consequence: a group whose
+  hashes match no materialized page is preserved indefinitely, exactly as the DB does today.
+- **An empty export writes `{}`, it is not skipped.** This is load-bearing: a stale file left
+  behind by a deliberate full clear would re-seed the next empty table — the same resurrection
+  class of bug the playlist reconcile base kills.
+- **`restore_if_empty` seeds only an empty table**, so it never fights the DB: a group reset in
+  the TUI stays gone because that reset emptied the mirror too. It runs from `terminal/pipeline.py`
+  (not inside `auto_deduplicate`) so `settings` stays out of the domain layer, as with `organize`.
+  A mirror that fails to parse raises rather than being treated as absent.
+- **The old `data/duplicates.json` default is not migrated automatically** — nothing reads that
+  path any more. An existing install runs `airdrome dedup-import data/duplicates.json` once,
+  which seeds the table and writes the new mirror in the same commit (README says so too).
 
 ### Navidrome integration (`navidrome/`)
 
@@ -226,7 +258,7 @@ singleton is imported wherever config is needed.
 | `DB_DSN` | — | PostgreSQL DSN (required) |
 | `DB_ECHO` | `False` | SQLAlchemy query logging |
 | `LIBRARY_DIR` | — | Root for organized files (required; empty on first run) |
-| `DUPLICATES_FILEPATH` | `data/duplicates.json` | Default file for `dedup-export`/`dedup-import` |
+| `DUPLICATES_FILEPATH` | `LIBRARY_DIR/.airdrome/duplicates.json` | Override for the dedup group mirror (`settings.duplicates_file` resolves it) |
 | `NAVIDROME_DB_DSN` | `None` | Path to Navidrome's SQLite DB |
 | `NAVIDROME_USER` | `None` | Navidrome user that owns synced play counts/ratings |
 | `NAVIDROME_PORT` | `4533` | Port the `navidrome` commands probe to confirm the server is stopped |

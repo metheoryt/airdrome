@@ -1,6 +1,7 @@
 from .auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
 from .grouping import FIELDS, RECOMMENDED_SETS, CanonStrategy, canon_order, flag_set
 from .manual import Deduplicator
+from .mirror import install_mirror, restore_if_empty, write_mirror
 from .persistence import (
     apply_manual_overrides,
     export_dedup_groups,
@@ -26,5 +27,8 @@ __all__ = [
     "flag_set",
     "flatten_canon_chains",
     "import_dedup_groups",
+    "install_mirror",
     "recompute_main_files",
+    "restore_if_empty",
+    "write_mirror",
 ]

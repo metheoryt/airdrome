@@ -20,9 +20,9 @@ from airdrome.normalize.dedup import (
     Deduplicator,
     DeduplicatorUI,
     auto_deduplicate,
-    export_dedup_groups,
     flag_set,
     import_dedup_groups,
+    restore_if_empty,
 )
 
 from .options import DRY_RUN
@@ -89,6 +89,9 @@ def dedup(
     canons; your choices persist as manual overrides and feed the next batch run.
     """
     state: AppState = ctx.obj
+    # A rebuilt DB has no groups; seed them from the mirror before the batch pass
+    # reads stored overrides, or a schema rebuild would silently drop every canon.
+    restore_if_empty(state.session, settings.duplicates_file)
     flag_sets = [_parse_set(s) for s in sets] if sets else RECOMMENDED_SETS
     result = auto_deduplicate(state.session, flag_sets=flag_sets, strategy=canon)
 
@@ -108,28 +111,21 @@ def dedup(
         Deduplicator(state.session, flag_sets=flag_sets, strategy=canon, partial_match=match).run()
 
 
-def dedup_export(
-    ctx: typer.Context,
-    path: Path = typer.Argument(None, help="Output JSON file (default: DUPLICATES_FILEPATH)."),
-) -> None:
-    """Dump confirmed dedup groups from the DB to a portable JSON file."""
-    state: AppState = ctx.obj
-    dest = path or settings.duplicates_filepath
-    data = export_dedup_groups(state.session)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    done(f"Exported {len(data)} group(s) to {dest}")
-
-
 def dedup_import(
     ctx: typer.Context,
-    path: Path = typer.Argument(None, help="Input JSON file (default: DUPLICATES_FILEPATH)."),
+    path: Path = typer.Argument(None, help="Input JSON file (default: the library's mirror)."),
     dry_run: bool = DRY_RUN,
 ) -> None:
-    """Load confirmed dedup groups from a JSON file into the DB (idempotent)."""
+    """Load confirmed dedup groups from a JSON file into the DB (idempotent).
+
+    The library's own mirror is restored automatically by `dedup`, so this is the
+    manual entrance: seeding one library from another's file, or reviving an old
+    backup. Importing overwrites this library's mirror on commit, by design — what
+    you import becomes the durable copy.
+    """
     state: AppState = ctx.obj
     state.dry_run = dry_run
-    src = path or settings.duplicates_filepath
+    src = path or settings.duplicates_file
     if not src.exists():
         console.print(f"[red]No such file: {src}[/red]")
         raise typer.Exit(1)
@@ -142,5 +138,4 @@ def register(app: typer.Typer) -> None:
     """Attach the pipeline commands to the root app (they are top-level, not a group)."""
     app.command("organize")(organize)
     app.command("dedup")(dedup)
-    app.command("dedup-export")(dedup_export)
     app.command("dedup-import")(dedup_import)

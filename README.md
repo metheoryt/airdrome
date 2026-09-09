@@ -111,7 +111,7 @@ All settings load from a `.env` file at the project root (`airdrome/conf.py`).
 | `DB_DSN`           | ✅        | —       | PostgreSQL connection string, e.g. `postgresql+psycopg://postgres:postgres@localhost:5437/postgres` |
 | `DB_ECHO`          |          | `False` | Log every SQL statement (debugging)                                                                 |
 | `LIBRARY_DIR`      | ✅        | —       | Destination root for organized files. Must be empty on a fresh install.                             |
-| `DUPLICATES_FILEPATH` |       | `data/duplicates.json` | Default file for `dedup-export` / `dedup-import`                                     |
+| `DUPLICATES_FILEPATH` |       | `LIBRARY_DIR/.airdrome/duplicates.json` | Where confirmed duplicate groups are mirrored (see below)          |
 | `NAVIDROME_DB_DSN` |          | `None`  | Path to Navidrome's SQLite database (required for the `navidrome` commands)                         |
 | `NAVIDROME_USER`   |          | `None`  | Navidrome username that play counts / ratings are written for                                       |
 | `NAVIDROME_PORT`   |          | `4533`  | Port Airdrome probes to refuse syncing while Navidrome is running                                   |
@@ -151,7 +151,7 @@ airdrome organize                  # add --move to move instead of copy
 # 4. Deduplicate canonical tracks (fuzzy trigram matching)
 airdrome dedup                                 # automatic, flag-set driven
 airdrome dedup --review                        # batch, then open the TUI to adjust canons
-airdrome dedup-export                          # back up confirmed groups to JSON (re-import after a DB rebuild)
+                                               # your confirmed groups are mirrored to disk automatically
 
 # 5. Reconcile playlists across sources and Navidrome (stop Navidrome — it writes the backend)
 airdrome sync all                   # sources -> canonical -> Navidrome; interactive on conflicts
@@ -216,11 +216,30 @@ Rebuild `canon_id` from flag-sets + stored manual overrides.
 - `--review`/`-r` — after the batch pass, open the interactive TUI to adjust canons; `--match
   <substring>` filters the groups shown. Choices persist as manual overrides feeding the next run.
 
-### `airdrome dedup-export` / `airdrome dedup-import`
+### Your duplicate decisions survive a database rebuild
 
-Round-trip confirmed duplicate groups to a portable JSON file (default `DUPLICATES_FILEPATH`).
-Import is idempotent and matches groups by their member set, so your manual decisions survive a
-database rebuild.
+Deciding which of five copies of a song is the real one is work you do by hand, and the Postgres
+database is disposable — it gets recreated whenever the schema changes. So every confirmed group
+is mirrored to `LIBRARY_DIR/.airdrome/duplicates.json` the moment it is saved, and `dedup`
+restores that file automatically when it finds no groups in the database. Nothing to remember,
+no command to run.
+
+The file lives with the library rather than with Airdrome, so it backs up and travels with the
+music it describes, and two libraries can't overwrite each other's decisions.
+`DUPLICATES_FILEPATH` overrides the location.
+
+**Upgrading an existing install — one time.** The old default was `data/duplicates.json`, which
+nothing reads any more. If you have one, load it once and it becomes the new mirror:
+
+```bash
+airdrome dedup-import data/duplicates.json
+```
+
+### `airdrome dedup-import [path]`
+
+Load groups from *another* file — seeding a second library from the first, or reviving an old
+backup. Idempotent, matched by member set. What you import becomes this library's mirror.
+(`dedup-export` is gone: the mirror is always current, so there was nothing left to export.)
 
 ### `airdrome sync <remote>` / `airdrome sync all`
 

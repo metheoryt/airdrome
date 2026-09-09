@@ -3,11 +3,13 @@ from pathlib import Path
 import typer
 from sqlalchemy.orm import Session
 
+from airdrome.conf import settings
 from airdrome.console import console, done, set_verbosity, step
 from airdrome.ingest import BY_NAME, DataKind, Importer, detect
 from airdrome.library.unify import do_unify
 from airdrome.migrations import upgrade_to_head
 from airdrome.models import engine
+from airdrome.normalize.dedup.mirror import install_mirror
 from airdrome.scrobbles.augment_aliases import augment_aliases
 from airdrome.scrobbles.copy_plays import copy_plays
 from airdrome.scrobbles.match_aliases import match_aliases
@@ -65,6 +67,9 @@ def main(
     # duplicate_hash (an N+1 storm that looks like a freeze on a large library).
     session = ctx.with_resource(Session(engine, expire_on_commit=False))
     ctx.obj = AppState(session=session, dry_run=False)
+    # Wired for every command, not just `dedup`: the mirror follows commits, and the
+    # listener is inert unless one of them actually touched a dedup group.
+    install_mirror(session, settings.duplicates_file)
 
     def _finalize() -> None:
         if ctx.obj.dry_run:

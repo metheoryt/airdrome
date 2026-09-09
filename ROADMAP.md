@@ -19,19 +19,6 @@ Status legend: 💡 idea (unscoped) · 🧭 designed (settled, not built) · �
 
 The immediate, next-up work.
 
-- 🧭 **Auto-managed dedup JSON (drop manual export/import).** Confirmed dedup groups
-  (`dedupgroup`/`dedupgroupmember`) are real human work, but the Postgres DB is disposable
-  (recreated on schema change), so today they survive a rebuild only if you remember to run
-  `dedup-export` before and `dedup-import` after. Replace the two manual commands with
-  automatic persistence: mirror confirmed groups to a JSON file whenever they change (TUI
-  confirm), and restore from it into an empty DB on startup. One-directional (DB = working
-  copy, JSON = durable mirror); atomic write (temp file + rename) to survive a crash.
-  **Colocate the file with the library** — `LIBRARY_DIR/.airdrome/duplicates.json` — so it's
-  per-library by construction (no two-library clobber), travels and backs up *with* the
-  library, and needs no library→file mapping. `DUPLICATES_FILEPATH` stays as an override.
-  Keep `dedup-export`/`dedup-import` until this lands — otherwise a schema rebuild silently
-  loses canons. Leans into the self-repairing reconcile direction below.
-
 - 🧭 **Playlist editing tools (`merge` + `dedup-members`).** A new `playlists` command
   group: `merge <base> <other>...` folds human-specified near-duplicate playlists into one
   (tombstone table keeps it durable across re-`land`); `merge --same-name` auto-groups by
@@ -48,8 +35,8 @@ Navidrome is a player, not a library manager, and playlists are the one entity A
 can't shape indirectly through file tags (unlike track metadata). So playlists need a
 first-class management story of their own. **Built (2026-06-08):** `airdrome sync` reconciles
 playlists across remotes — Airdrome as hub, every peer a remote with a per-`(playlist, remote)`
-base, interactive resolver on conflicts. "How it works today" lives in AGENTS.md *Playlist
-reconcile*; the long-form rationale + rejected alternatives are in
+base, and conflicts auto-resolved per track by the last remote that edited it. "How it works
+today" lives in AGENTS.md *Playlist reconcile*; the long-form rationale + rejected alternatives are in
 [docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
 `land --rebuild-playlists` still nukes and rebuilds from source.
 

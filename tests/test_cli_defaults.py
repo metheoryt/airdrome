@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
 from airdrome.normalize.dedup import RECOMMENDED_SETS, AutoDedupResult
@@ -21,9 +22,15 @@ runner = CliRunner()
 
 @pytest.fixture()
 def stub_session(monkeypatch):
-    """Replace the callback's DB session + migration with stubs so the CLI never hits Postgres."""
+    """Replace the callback's DB session + migration with stubs so the CLI never hits Postgres.
+
+    An *unbound real* Session, not a MagicMock: the callback attaches SQLAlchemy event
+    listeners to it (the dedup mirror), which a mock silently accepts in a way that
+    would never work against a real session. Unbound means any query still fails loudly,
+    so a command that reaches the DB has to be stubbed too.
+    """
     monkeypatch.setattr("airdrome.terminal.app.upgrade_to_head", lambda: None)
-    monkeypatch.setattr("airdrome.terminal.app.Session", lambda *a, **k: MagicMock())
+    monkeypatch.setattr("airdrome.terminal.app.Session", lambda *a, **k: Session())
 
 
 def test_organize_defaults_to_copy(stub_session, monkeypatch):
@@ -43,15 +50,33 @@ def test_dedup_defaults_to_recommended_sets(stub_session, monkeypatch):
     """`dedup` with no `--set` uses RECOMMENDED_SETS."""
     spy = MagicMock(return_value=AutoDedupResult(groups=[], auto_twins=0, manual_changes=0))
     monkeypatch.setattr("airdrome.terminal.pipeline.auto_deduplicate", spy)
+    monkeypatch.setattr("airdrome.terminal.pipeline.restore_if_empty", MagicMock(return_value=0))
 
     assert runner.invoke(app, ["dedup"]).exit_code == 0
     assert spy.call_args.kwargs["flag_sets"] == RECOMMENDED_SETS
+
+
+def test_dedup_restores_the_mirror_before_the_batch_pass(stub_session, monkeypatch):
+    """Order matters: the batch pass reads stored overrides, so seeding must precede it."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "airdrome.terminal.pipeline.restore_if_empty",
+        lambda *a, **k: calls.append("restore") or 0,
+    )
+    monkeypatch.setattr(
+        "airdrome.terminal.pipeline.auto_deduplicate",
+        lambda *a, **k: calls.append("auto") or AutoDedupResult(groups=[], auto_twins=0, manual_changes=0),
+    )
+
+    assert runner.invoke(app, ["dedup"]).exit_code == 0
+    assert calls == ["restore", "auto"]
 
 
 def test_dedup_explicit_set_overrides_default(stub_session, monkeypatch):
     """An explicit `--set` is parsed and used instead of the recommended default."""
     spy = MagicMock(return_value=AutoDedupResult(groups=[], auto_twins=0, manual_changes=0))
     monkeypatch.setattr("airdrome.terminal.pipeline.auto_deduplicate", spy)
+    monkeypatch.setattr("airdrome.terminal.pipeline.restore_if_empty", MagicMock(return_value=0))
 
     result = runner.invoke(app, ["dedup", "--set", "artist,album"])
     assert result.exit_code == 0

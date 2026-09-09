@@ -8,10 +8,8 @@ airdrome import C:\Users\methe\Music\PicardedMusic\
 # match tracks between each other, create canonical tracks and playlists
 airdrome land -t 0.4 --merge-playlists
 
-# deduplicate
-airdrome dedup-import  # load manual choices file (if left from previous runs)
+# deduplicate (manual choices are restored from, and mirrored back to, the library automatically)
 airdrome dedup -s "artist,duration" -s "artist,year" -s "album_artist,duration" -c year --review  # batch, then manual review
-airdrome dedup-export # save back to a file
 
 # copy all files into configured directory. Main files separately, copies - separately.
 airdrome organize
