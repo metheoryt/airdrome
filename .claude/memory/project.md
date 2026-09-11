@@ -14,14 +14,10 @@ or [ROADMAP.md](../../ROADMAP.md) (forward-looking).
   — see README *Configuration*). The repo has no `.orca/worktree-setup.sh`, so this is
   manual per worktree.
 - The test suite additionally needs the compose Postgres up (`docker compose up -d`,
-  port 5437) — a doc-only change can be made and committed from a worktree without it,
-  but any code change must be verified where Docker is reachable.
-- **Docker is *not* reachable from the WSL distro that hosts these Orca worktrees**
-  (Ubuntu-26.04 on `g614jv`). `command -v docker` succeeds — Docker Desktop puts a
-  shim on `PATH` — but every invocation dies with "The command 'docker' could not be
-  found in this WSL 2 distro". So the compose Postgres, and therefore `uv run pytest`,
-  cannot run from a worktree here at all; use the Windows checkout or another box.
-  See the host memory for the underlying toggle.
+  port 5437). **On g15 (native Ubuntu, Docker 29.8.0 at `/usr/bin/docker`) this works
+  from any checkout** — verified 2026-09-11, `airdrome-db-1` up 14 h. The old "Docker
+  is unreachable, use another box" caveat described the destroyed `g614jv` WSL distro
+  and is now in global memory as a WSL-only trap.
 
 ## Real-library provenance (2026-09-09)
 
