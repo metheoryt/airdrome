@@ -290,6 +290,21 @@ round-trip correctness matters.
 - Use `get_or_create()` for idempotency; re-running commands is safe.
 - `typer.Argument`/`typer.Option` sentinels as defaults are intended (exempt from B008);
   optional no-op ingest/sync hooks are exempt from B027.
+- Ruff's select list also carries **`ANN`** (annotation presence) — gortex's native Python
+  resolver keys off declared types, so a missing param/return annotation is a lost graph edge,
+  not just style. `ANN` is ignored wholesale for `tests/*`, `alembic/versions/*.py` and
+  `alembic/env.py`; `ANN401` (bare `Any`) is scoped to `models.py` and `cloud/sources.py`, the
+  two genuinely dynamic boundaries — anywhere else a bare `Any` is an error.
+  <!-- conflicts-with: "rules `E,F,I,W,UP,B,SIM,C4,PIE,RUF`" -->
+  <!-- src: airdrome e0daf7a | 2026-09-12 -->
+- Type checking is **`ty`** (`uvx ty check`), configured in `pyproject.toml`.
+  `[tool.ty.environment]` pins it to `.venv` / 3.14 — without that every first-party and
+  third-party import degrades to unresolved and the diagnostics are noise — and
+  `[tool.ty.src]` covers `airdrome`, `tests`, `alembic`. It is in neither pre-commit nor the
+  pytest gate, so run it by hand; it carries a standing nonzero diagnostic count (mostly
+  pre-existing `| None` narrowing gaps), which is a baseline to compare against rather than a
+  clean bar to hold.
+  <!-- src: airdrome e0daf7a | 2026-09-12 -->
 
 ## Dedup tuning notes
 

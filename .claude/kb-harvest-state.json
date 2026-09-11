@@ -1,15 +1,19 @@
 {
   "last_refresh": {
-    "commit": "c4d5423f2c687f6f03e9c05ac4c9b5cfaffdbd00",
-    "date": "2026-07-26",
+    "commit": "fcbff686ea3a939e011a365d5f1d775bb011a8c8",
+    "date": "2026-09-12",
     "sessions_processed": [
-      "05f647e0-802d-46a4-80e3-f3421feed202",
-      "073b2744-bc35-4756-a217-b226cabc5668"
+      "f284b5fb-12d6-495c-802e-dee1b30a9419",
+      "0ff09805-610a-4caf-8a2a-377c7283e204",
+      "e30626c8-b48e-41aa-88bf-1c644e6ba74e",
+      "3b314309-19e6-40d2-a79a-e33b49210cf2",
+      "862242fe-e363-45b9-b556-578e9866fa0f"
     ],
     "tiers_touched": [
       "project",
+      "claude-md",
       "global",
-      "host:g614jv"
+      "host:g15"
     ]
   },
   "sessions": {
@@ -26,6 +30,41 @@
       "id_hash": "c0687b9230f8b11637d70a11aae8982a0a0f70d7",
       "last_line": 118,
       "last_ts": "2026-07-25T23:00:22.064Z"
+    },
+    "0ff09805-610a-4caf-8a2a-377c7283e204": {
+      "cwd": "/home/me/my/airdrome",
+      "host": "g513ie",
+      "id_hash": "934fd7024b149088aa88f4bacc6e93080b6ae789",
+      "last_line": 880,
+      "last_ts": "2026-09-09T15:52:46.451Z"
+    },
+    "3b314309-19e6-40d2-a79a-e33b49210cf2": {
+      "cwd": "/home/me/my/airdrome",
+      "host": "g513ie",
+      "id_hash": "874285568f56ec6b77fe281ee446fe0da6084dbd",
+      "last_line": 147,
+      "last_ts": "2026-09-08T16:40:38.656Z"
+    },
+    "862242fe-e363-45b9-b556-578e9866fa0f": {
+      "cwd": "/home/me/my/airdrome",
+      "host": "g513ie",
+      "id_hash": "886d6265fd595a6f0c464aa171806f17c146806e",
+      "last_line": 108,
+      "last_ts": "2026-09-08T05:26:38.660Z"
+    },
+    "e30626c8-b48e-41aa-88bf-1c644e6ba74e": {
+      "cwd": "/home/me/my/airdrome",
+      "host": "g513ie",
+      "id_hash": "dd4bfca0bd25498de22219f3149e7593d6fbdf9c",
+      "last_line": 729,
+      "last_ts": "2026-09-08T05:20:19.998Z"
+    },
+    "f284b5fb-12d6-495c-802e-dee1b30a9419": {
+      "cwd": "/home/me/my/airdrome",
+      "host": "g513ie",
+      "id_hash": "bbab265ed540b683f1ffc80cf19cd82094af39e3",
+      "last_line": 3289,
+      "last_ts": "2026-09-09T12:56:40.034Z"
     }
   }
 }
