@@ -34,3 +34,24 @@ host:g15 | add | **Cover art never downloads in Picard on this box, and the caus
 host:g15 | add | **Two music trees, two roles.** `~/Music/PicardedMusic` (66 G, 6,986 audio files — 5,775 mp3 / 1,211 m4a) is the Picard-tagged source of truth, copied from the iTunes library and never written by airdrome; `~/Music/Airdrome` is airdrome's `LIBRARY_DIR` — its managed output (`Library/` + `Copies/`, ~64 G copied, plus the `.airdrome/duplicates.json` mirror and the cloud exports). `~/Music/OldMusic` is a third, untouched pile. Do not point `LIBRARY_DIR` at PicardedMusic: `organize` would write a second layout inside the tree it just imported, and the next `import` would re-ingest airdrome's own output. | ~/.claude/host-memory.md | sessions f284b5fb, 0ff09805 | high
 
 host:g15 | add | **The Picard tagging helpers and the pre-tagging tag baseline are dotfiles-tracked on branch `g15`**: `Music/tagging-tools/{README.md,apply-picard-settings.py,audit.py,worklist.py}` and `Music/picard-baseline-*.json` (the allow-line is a glob, so a future snapshot needs no `.gitignore` edit). `worklist.txt` is deliberately untracked — it regenerates from `worklist.py`. The baseline is the one irreplaceable file: it is the snapshot of every file's tags before mass retagging, and it cannot be regenerated once Picard has overwritten them. | ~/.claude/host-memory.md | session 0ff09805 | high
+
+---
+
+# /cyphy:memory-review decision — 2026-09-12 (applied on g15)
+
+Every row decided. 13 applied, 0 rejected.
+
+APPLIED -> ~/.claude/memory/global.md (5): `gortex init` also skips an EXISTING
+project-scope .mcp.json (folded into the existing user-scope-skip bullet as its `edit`
+row asked); the PreToolUse hook blocks a Bash command by its TEXT; the CLI has no bare
+verbs; an MCP server via uvx needs `mcp<2` pinned; `wsl.exe -l -q` over non-interactive
+ssh returns nothing.
+APPLIED -> ~/.claude/memory/personality/practices.md (1): a failing urllib POST hides
+its reason in e.read().
+APPLIED -> ~/.claude/host-memory.md (2): Picard cover art blocked by the ISP SNI filter;
+the tagging helpers + the irreplaceable pre-tagging baseline are dotfiles-tracked on g15.
+APPLIED -> airdrome/.claude/memory/project.md (5): Picard 3 QSettings config; the
+bundled AcoustID application key; mutagen returns MP4 freeform atoms as bytes; Navidrome
+MP4 mapping limits; the two music trees and why LIBRARY_DIR must not point at
+PicardedMusic. Routed out of the `global` tier per Maxim's decision this session —
+domain facts do not belong in a store loaded in every session on every box.

@@ -89,3 +89,56 @@ or [ROADMAP.md](../../ROADMAP.md) (forward-looking).
   parallel session landed on `main` between two commits of another on 2026-09-08; nothing was
   lost, but re-read `git log` before assuming your HEAD is the newest thing on the branch.
   <!-- src: airdrome c257a88 | 2026-09-12 -->
+
+## Picard / tagging vendor facts (routed here from the 2026-09-12 shared proposals)
+
+The harvest tagged these `global`; `/memory-review` routed them here on
+2026-09-12 because they are domain facts, not fleet-wide ones. Source: session
+`0ff09805`.
+
+- **MusicBrainz Picard 3's config is a QSettings INI that Picard rewrites WHOLE on
+  exit**, so any external edit must be made with Picard CLOSED and then verified
+  across a real launch/quit cycle (md5 the ini before and after). Write it through
+  Picard's own config API (`sys.path.insert(0,'/usr/lib/picard')`;
+  `import picard.options`; `picard.config.setup_config(app, ini)`) because
+  structured values such as `list_of_scripts` are pickled QVariant blobs, not plain
+  ini text. Option names changed in 3: `standardize_artists` →
+  `standardize_artist_names` (now a `StandardizeArtistNames` Enum), `image_filename`
+  → `cover_image_filename`. `picard-cli` supports only `completions`, `plugins`,
+  `profiles` — **there is no headless tagging.**
+- **Picard needs no AcoustID key to Scan.** It ships its own *application* key
+  (`ACOUSTID_KEY = 'v8pQ6oyB'` in `picard/const/__init__.py`) and uses it for every
+  lookup; the `acoustid_apikey` setting is the user's *account* key and is passed as
+  `user=` to `/submit` only, i.e. it enables contributing fingerprints back.
+  Submissions are public and permanent, so submit only from matches already
+  confirmed. (Verified end to end: an untagged file resolved at score 0.985 with no
+  user key set.)
+- **mutagen returns MP4 freeform atom values as `bytes`.** `str()` on one yields
+  `"b'<uuid>'"`, so the identical MusicBrainz album ID compares UNEQUAL between an
+  `.m4a` and the `.mp3` beside it — which fakes "this file changed" findings on any
+  mixed-format folder (it faked 26 of 50 in the case measured). Decode explicitly
+  (`value.decode('utf-8','replace')`) on both sides, and remember a JSON snapshot
+  taken with the naive `str()` needs the same unwrapping on read-back.
+- **Navidrome tag mapping, two limits that only bite MP4** (read from
+  `navidrome/resources/mappings.yaml`, not inferred): there is **no MP4 alias for
+  `ALBUMARTISTS`**, and on MP4 Picard's `date` lands in `©day`, which Navidrome
+  reads as *releasedate*. So of Navidrome's three documented Picard tagger scripts,
+  the multi-value `ARTISTS` one works on m4a while the `ALBUMARTISTS` and
+  release/original-date ones are partly inert there; MP3 is unaffected. Also:
+  Picard 3 writes `TXXX:ALBUMARTISTS` natively, so `$setmulti(albumartists,…)` only
+  adds a duplicate lowercase frame, and `$if(%_recordingcomment%,$set(subtitle,…))`
+  fills `TIT3` with bare words like "explicit" that Navidrome renders as a track
+  subtitle.
+
+## Two music trees, two roles (g15, measured 2026-09-12)
+
+- `~/Music/PicardedMusic` (66 G, 6,986 audio files — 5,775 mp3 / 1,211 m4a) is the
+  **Picard-tagged source of truth**, copied from the iTunes library and never
+  written by airdrome.
+- `~/Music/Airdrome` is airdrome's `LIBRARY_DIR` — its managed output (`Library/` +
+  `Copies/`, ~64 G copied, plus the `.airdrome/duplicates.json` mirror and the cloud
+  exports).
+- `~/Music/OldMusic` is a third, untouched pile.
+- **Do not point `LIBRARY_DIR` at PicardedMusic**: `organize` would write a second
+  layout inside the tree it just imported, and the next `import` would re-ingest
+  airdrome's own output.
