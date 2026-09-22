@@ -1,7 +1,7 @@
 {
   "last_refresh": {
-    "commit": "7a89bd698f32c0d500da866513e33bddbe467266",
-    "date": "2026-09-12",
+    "commit": "f8e82af",
+    "date": "2026-09-23",
     "tiers_touched": [],
     "sessions_processed": []
   },
@@ -24,7 +24,7 @@
       "cwd": "/home/me/my/airdrome",
       "host": "g513ie",
       "id_hash": "934fd7024b149088aa88f4bacc6e93080b6ae789",
-      "last_line": 880,
+      "last_line": 881,
       "last_ts": "2026-09-09T15:52:46.451Z"
     },
     "3b314309-19e6-40d2-a79a-e33b49210cf2": {
@@ -52,7 +52,7 @@
       "cwd": "/home/me/my/airdrome",
       "host": "g513ie",
       "id_hash": "bbab265ed540b683f1ffc80cf19cd82094af39e3",
-      "last_line": 3290,
+      "last_line": 3294,
       "last_ts": "2026-09-09T12:56:40.034Z"
     }
   }
