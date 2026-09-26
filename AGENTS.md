@@ -283,7 +283,7 @@ round-trip correctness matters.
 
 ## Conventions
 
-- Line length 110 (Ruff), target `py314`, rules `E,F,I,W,UP,B,SIM,C4,PIE,RUF`.
+- Line length 110 (Ruff), target `py314`, rules `E,F,I,W,UP,B,SIM,C4,PIE,RUF,ANN`.
 - Imports: first-party `airdrome` group separated; `factories` known-local; two blank lines
   after the imports block.
 - All datetimes are timezone-aware UTC.
@@ -295,7 +295,6 @@ round-trip correctness matters.
   not just style. `ANN` is ignored wholesale for `tests/*`, `alembic/versions/*.py` and
   `alembic/env.py`; `ANN401` (bare `Any`) is scoped to `models.py` and `cloud/sources.py`, the
   two genuinely dynamic boundaries — anywhere else a bare `Any` is an error.
-  <!-- conflicts-with: "rules `E,F,I,W,UP,B,SIM,C4,PIE,RUF`" -->
   <!-- src: airdrome e0daf7a | 2026-09-12 -->
 - Type checking is **`ty`** (`uvx ty check`), configured in `pyproject.toml`.
   `[tool.ty.environment]` pins it to `.venv` / 3.14 — without that every first-party and
