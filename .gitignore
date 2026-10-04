@@ -17,3 +17,9 @@ __pycache__/
 # metheoryt/airdrome/); .claude/memory is a symlink to it. No trailing slash: a
 # `/`-suffixed pattern does not match a symlink.
 .claude/memory
+
+# Harvest state lives outside the repo: the watermark and review proposals in
+# agent-memory (projects/metheoryt/airdrome/harvest/), run backups in
+# ~/.local/state/memory-harvest/.
+.claude/harvest
+.claude/kb-harvest-state.json
