@@ -12,3 +12,8 @@ __pycache__/
 # gortex: local index state + auto-generated routing skills (never committed)
 .gortex/
 .claude/skills/generated/
+
+# Project memory lives in the agent-memory repo (~/.claude/memory/projects/
+# metheoryt/airdrome/); .claude/memory is a symlink to it. No trailing slash: a
+# `/`-suffixed pattern does not match a symlink.
+.claude/memory
