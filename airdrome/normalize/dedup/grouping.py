@@ -25,7 +25,7 @@ def flag_set(*active: str) -> dict[str, bool]:
 
 # Recommended auto-dedup flag-sets: precise yet mass. Each gates every merge on a matching
 # duration OR year, so edits/remixes/live cuts don't collapse — reaching ~98% of the reckless
-# artist-only ceiling without its false merges (see AGENTS.md "Dedup tuning notes"). Used as the
+# artist-only ceiling without its false merges (see CLAUDE.md "Dedup tuning notes"). Used as the
 # `dedup` CLI default; the library function keeps its own all-fields fallback.
 RECOMMENDED_SETS = [
     flag_set("artist", "duration"),

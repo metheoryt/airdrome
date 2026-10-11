@@ -1,7 +1,7 @@
 # Playlist reconcile — Airdrome as hub
 
 **Status:** ✅ built 2026-06-08 as `airdrome sync <remote>` / `sync all`. "How it works today"
-lives in [AGENTS.md](../../AGENTS.md) *Playlist reconcile*; this file is the long-form rationale
+lives in [CLAUDE.md](../../CLAUDE.md) *Playlist reconcile*; this file is the long-form rationale
 and the alternatives we rejected.
 
 ## Mission — what is the source of truth?

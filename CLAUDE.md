@@ -1,1 +1,329 @@
-See [AGENTS.md](AGENTS.md) for all project guidance. This file is a pointer kept for tooling that looks for `CLAUDE.md` by convention.
+# CLAUDE.md
+
+Guidance for AI coding agents working in this repository. These instructions OVERRIDE
+default behavior — follow them exactly.
+
+## How project knowledge is organized
+
+Durable knowledge lives in git, split by the question it answers — not in a chronological
+journal and not in out-of-tree auto-memory. When you settle something worth keeping, put it
+where its *reader* will look:
+
+| Doc | Reader | Answers |
+|---|---|---|
+| **README.md** | a user running the tool | install / configure / run; observable command behavior |
+| **CLAUDE.md** (this file; `AGENTS.md` links to it) | an agent about to edit the code | where things live, load-bearing invariants, conventions, workflow |
+| **[docs/design/](docs/design/)** | someone asking *why* | rationale, rejected alternatives, designed-but-unbuilt plans |
+| **[ROADMAP.md](ROADMAP.md)** | planning next work | to-do ideas, open questions, agreed-but-unbuilt (summaries that link to docs/design/) |
+
+Keep this file a **current-state map** — terse facts an editor needs in context. Push the *why*
+(and the alternatives you rejected) into `docs/design/` and link to it; don't inline long
+rationale here. Auto-memory is reserved for cross-project personal facts with no home in the repo.
+
+## Project
+
+Airdrome migrates a music library plus scrobble/play history from cloud services
+(Spotify, Apple Music, Last.fm, ListenBrainz) into [Navidrome](https://www.navidrome.org/),
+a self-hosted music server: ingest metadata, deduplicate tracks, organize files on disk,
+sync play history and playlists.
+
+Single-user, personal-data project. There is no production database to protect — schema
+changes recreate the DB rather than migrate it (see *Migrations*).
+
+## Commands
+
+The interpreter lives in `.venv`. Anything using project packages runs via `uv run <cmd>`
+or with the venv activated (`.venv/Scripts/activate` on Windows).
+
+```bash
+uv sync                       # install (Python 3.14+)
+docker compose up -d          # PostgreSQL on port 5437 (provides pg_trgm)
+ruff check . && ruff format .  # lint + format (also pre-commit hooks)
+uv run pytest                 # tests (need PostgreSQL up)
+airdrome --help
+```
+
+## CLI surface
+
+End-to-end flow: `import <path>...` → `land` → `organize` → `dedup` → `sync all` →
+`navi push`. Every write command is idempotent and takes `--dry-run`/`-n` (rolls back
+instead of committing). Global `-v/--verbose` shows per-item detail (file picks, misses);
+`-q/--quiet` suppresses non-essential output (both on the root callback, set via
+`console.set_verbosity`). Run any command with `--help` for flags.
+
+The top level is the pipeline plus `status`; three groups hold the rest — `sync` (playlist
+reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping).
+
+- **`status`** — read-only "where am I?" snapshot: config sanity (DB connectivity, `LIBRARY_DIR`
+  state, Navidrome config + whether it's running) and per-stage counts (imported / landed /
+  files / dedup / synced). Bypasses the root callback's session setup (early return keyed on the
+  command name) and opens its own session, so it reports an unreachable DB instead of crashing —
+  and never applies migrations. Lives in `terminal/status.py`.
+- **`import <path>...`** — auto-detect each source and ingest its tracks/playlists/scrobbles.
+  Per-source and dumb; pass many paths or a directory. `--as <source>` forces a source for
+  every path; `--no-tracks`/`--no-playlists`/`--no-scrobbles` skip a kind. All importers
+  resolve up front, so an unrecognized/ambiguous path fails before anything is written.
+- **`land`** — build the canonical graph from *everything imported* (run once, after all
+  imports). Four numbered steps (printed via `console.step`): `do_unify` → `augment_aliases`
+  → `match_aliases` → `copy_plays`. `-t/--threshold` (fuzzy alias match, default 0.4);
+  `-m/--merge-playlists` (collapse same-name playlists, newest anchors); `--rebuild-playlists`
+  (drop + rebuild canonical playlists from source, discarding backend-sync links).
+- **`organize`** — copy (default) or `--move`/`-m` bound files into `LIBRARY_DIR`.
+  `select_main` picks the best copy (bitrate, then container). (The `FileOrganizer`/
+  `organize_library` engine still defaults to *move*; only the CLI defaults to copy — the
+  safer, non-destructive user default.) The per-file "picking best" lines are verbose-only.
+  `--dry-run` is threaded into `FileOrganizer` (not just the session rollback): `transfer`
+  checks both preconditions, then returns the planned path without creating directories or
+  calling `shutil` — so `library_path` and the count are the real ones, and the summary reads
+  "would be moved/copied". The one thing it can't see is two tracks planning the *same*
+  destination; that needs planned paths tracked across calls.
+- **`dedup`** — batch rebuild of `Track.canon_id` from N flag-sets + stored manual overrides.
+  `-s/--set` (repeatable, comma-separated fields; title always implicit), `-c/--canon`
+  (`added`/`year`). With no `--set` the CLI uses `RECOMMENDED_SETS` (see *Dedup tuning notes*);
+  the `auto_deduplicate` library function still falls back to a single all-fields set. With
+  `--review`/`-r` the interactive TUI opens *after* the batch pass so you can adjust the
+  proposed canons (`--match` filters the TUI by substring); choices persist as manual
+  overrides feeding the next run.
+- **`dedup-import`** — manual entrance for a *foreign* or archived group file (idempotent upsert
+  keyed on the member set). The library's own groups need no command: they are mirrored to disk
+  after every commit that touched one, and restored by `dedup` into an empty table. See *Dedup
+  group mirror* below. (`dedup-export` was retired — the mirror is always current.)
+- **`sync <remote>` / `sync all`** — reconcile playlists across remotes (cloud sources +
+  backends). One subcommand per remote (`apple_xml`, `apple_ms`, `navidrome`); `sync all`
+  runs sources first, then backends. Fully non-interactive — hard conflicts auto-resolve to
+  the last remote that edited the track. `-n`/`-y`. The Navidrome-stopped guard + WAL checkpoint
+  fire only when a writable backend is in scope. See *Playlist reconcile* below.
+- **`navi push`** — requires Navidrome stopped (probes `NAVIDROME_PORT`, prompts unless
+  `-y/--yes`, then writes its SQLite DB directly). Pushes play counts + ratings for
+  `NAVIDROME_USER`. (Playlists moved to `sync`.)
+- **`maint renormalize`** — recompute `_norm` fields on tracks, aliases, and files (the escape
+  hatch for a normalization-rule change, instead of a full reimport).
+
+## Architecture
+
+### Data flow
+
+1. **Import** (`ingest/`) — `import` auto-detects each source and writes raw
+   `SourceTrack`/`SourcePlaylist`/`TrackFile` + `TrackAlias`/`TrackAliasScrobble` rows.
+   Format parsers live under `cloud/` (Spotify, Last.fm, ListenBrainz, iTunes XML, Apple
+   Media Services) plus a local folder scanner.
+2. **Land** (`library/unify.py`, `scrobbles/`) — unify source rows into canonical
+   `Track`/`Playlist`, bind files, then augment, fuzzy-match (`pg_trgm`), and copy scrobbles
+   into `TrackPlay` history. Needs the full picture.
+3. **Organize** (`library/organize.py`) — move/copy bound files into a structured directory.
+4. **Deduplicate** (`normalize/dedup/`) — group duplicates via trigram matching; twins link
+   to a canon via `Track.canon_id`. Confirmed groups live in `dedupgroup`/`dedupgroupmember`
+   (import identity = the member-hash multiset, not the label).
+5. **Sync** — push play counts + ratings into Navidrome's SQLite DB (`navidrome/`), and
+   reconcile playlists across remotes (`playlists/`, see *Playlist reconcile*).
+
+### Import / source design
+
+- One `Importer` ABC in `ingest/base.py` (named `Importer`, not `Source`, to avoid colliding
+  with the `Source` enum): `provides: ClassVar[DataKind]`, `classmethod detect(path)`,
+  no-op `import_tracks/playlists/scrobbles`, and `ingest()` running them in dependency order.
+  `sources.py` holds the concrete importers; `registry.py` (`detect`/`BY_NAME`) is loud on 0
+  or >1 matches.
+- `Source` is one StrEnum collapsing platform + provider (APPLE_XML, APPLE_MS, SPOTIFY,
+  LASTFM, LISTENBRAINZ, NAVIDROME) with a `.service` property (both Apple values → "apple").
+  Apple is one *service* but two *export providers*; the (provider, source_id) split is
+  load-bearing — fine granularity is canonical, coarse "service" is derived.
+- Apple Media Services exports bury activity files in a *nested* zip (layout varies), so
+  `AppleMsImporter.detect` recurses into nested zips.
+- Folder scan writes only `TrackFile`; `do_unify` promotes orphan `TrackFile`s to `Track`
+  (no `SourceTrack(FOLDER)` layer, no FOLDER enum value).
+- Spotify plays under 30 seconds are excluded.
+
+### Session lifecycle
+
+Sessions are created centrally in the root `app` callback (`terminal/app.py`) and stored as
+`AppState(session, dry_run)` on `ctx.obj`; a close hook commits, or rolls back under
+`--dry-run`. `upgrade_to_head()` runs inside the callback (not at import), so `--help` and
+arg errors don't hit the DB. `expire_on_commit=False` keeps ORM objects live across the
+interactive deduplicator's repeated commits.
+
+**When adding a CLI command:** take `ctx: typer.Context` first, read `state: AppState =
+ctx.obj`, set `state.dry_run = dry_run` if exposed, pass `state.session` to business logic.
+Business logic takes `s: Session` and uses `s.flush()` for intermediate persistence — it
+must **not** call `s.commit()`. Intentional exceptions: the interactive `Deduplicator`
+commits on the user's keypress; `auto_deduplicate` commits (with a behavioral `dry_run`);
+Navidrome sync manages its own SQLite session and ignores `--dry-run`.
+
+**A rollback only undoes the DB.** A command that also writes outside the session — files,
+an external backend — must take `dry_run` as a *behavioral* argument and skip the side effect
+itself; `state.dry_run` alone is not enough (see `organize`, and `auto_deduplicate`).
+The other way to satisfy the rule is to hang the side effect off the commit itself, so a
+rollback never reaches it — what the dedup group mirror does.
+
+### Key models (`models.py`)
+
+- **`Track`** — canonical track; normalized `_norm` title/artist/album fields; unique on
+  (title, artist, album, album_artist). Self-referential `canon_id` links a twin to its
+  canon — and is *terminal* (a canon is never itself a twin; no chains), so readers resolve
+  with a single hop.
+- **`TrackFile`** — audio file on disk with Mutagen-extracted metadata; `is_main` flags the
+  best-bitrate copy; `library_path` is the organized destination; `enrich()` reads tags from
+  `absolute_path` into the row.
+- **`TrackAlias`** — one scrobble-source entry per unique title+artist+album+platform.
+- **`TrackAliasScrobble`** — an individual play event; `copy_plays` materializes matched
+  aliases into canonical **`TrackPlay`** history.
+
+### Normalization & matching (`normalize/`, `match.py`)
+
+All text fields have `_norm` variants (lowercased, accents stripped). Fuzzy dedup and alias
+matching use PostgreSQL trigram similarity (`pg_trgm`), weighted artist/album_artist 75%,
+album 25%. Threshold defaults to 0.4.
+
+### Dedup group mirror (`normalize/dedup/mirror.py`)
+
+Confirmed dedup groups are hand-made, but the Postgres DB is disposable (recreated on schema
+change). So the DB is the working copy and `LIBRARY_DIR/.airdrome/duplicates.json` is the
+durable mirror — one-directional, DB → file. Colocating it with the library makes it
+per-library by construction and makes it travel with the library it describes;
+`DUPLICATES_FILEPATH` overrides the path.
+
+- **Snapshot and write are split on purpose.** `stash_mirror_snapshot` (in `persistence.py`)
+  exports the whole table inside the writing transaction, where pending inserts and deletes are
+  visible, and parks it in `session.info`. The `after_commit` listener that `install_mirror`
+  attaches (wired once, in the root callback) only serializes that dict. Exporting *in* the
+  listener would emit SQL with no transaction open; writing *before* the commit would let a
+  rollback leave the file ahead of the DB. An `after_soft_rollback` listener drops an unlanded
+  snapshot so the next unrelated commit can't write it.
+- **Always the whole table, never a delta** — `save_confirmed_groups` touches only the pages
+  materialized in its run, so nothing but the table is authoritative. Consequence: a group whose
+  hashes match no materialized page is preserved indefinitely, exactly as the DB does today.
+- **An empty export writes `{}`, it is not skipped.** This is load-bearing: a stale file left
+  behind by a deliberate full clear would re-seed the next empty table — the same resurrection
+  class of bug the playlist reconcile base kills.
+- **`restore_if_empty` seeds only an empty table**, so it never fights the DB: a group reset in
+  the TUI stays gone because that reset emptied the mirror too. It runs from `terminal/pipeline.py`
+  (not inside `auto_deduplicate`) so `settings` stays out of the domain layer, as with `organize`.
+  A mirror that fails to parse raises rather than being treated as absent.
+- **The old `data/duplicates.json` default is not migrated automatically** — nothing reads that
+  path any more. An existing install runs `airdrome dedup-import data/duplicates.json` once,
+  which seeds the table and writes the new mirror in the same commit (README says so too).
+
+### Navidrome integration (`navidrome/`)
+
+`navidrome/models.py` maps Navidrome's SQLite schema read-only; sync writes `Annotation`
+(play counts, ratings) per user and checkpoints WAL before writes. Track sync is
+dedup-group-aware: exactly one `is_main` file exists per group (owned by whichever member
+has the best copy — often a twin, not the canon), but plays are **summed** and rating/loved
+**aggregated** across the whole group, so plays on other members aren't dropped. Both writers
+keep the one-main invariant — `organize` picks it across canon+twins, and
+`recompute_main_files` re-picks it whenever the canon graph changes. Selection only flips the
+flag; files already on disk are not relocated (that is the reconcile roadmap).
+
+### Playlist reconcile (`playlists/`)
+
+Why this shape (hub model) + rejected alternatives:
+[docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
+
+Airdrome is the source-of-truth **hub**; every peer is a `PlaylistAdapter` (`adapter.py`)
+*remote* reconciled against a per-`(playlist, remote)` **base** (`PlaylistLink.synced_track_ids`).
+`writable=False` marks **read-only** remotes — `SourcePlaylistRemote` (Apple `SourcePlaylist`
+rows), pull-only, never written; backends are read-write (`NavidromeAdapter`).
+
+- **Engine** (`sync.py`): `_sync_pair` does a multiset 3-way merge (`base`/`ours`/`theirs`)
+  for one (playlist, remote). Read-only remotes apply only `theirs→ours` and store `theirs`
+  as the new base (not the merged list) — that is what stops a downstream-deleted or
+  local-only track from being resurrected.
+- **Orchestrator** (`orchestrator.py`): `reconcile(s, adapters)` runs every playlist against
+  the remotes in order, in one pass and without prompting. It gathers each remote's
+  base/membership; `detect_conflicts` (`conflicts.py`) finds order-dependent (add-vs-remove)
+  edits. A clean playlist auto-merges pairwise. A conflicted one goes through
+  `resolve_latest`: fold every remote in order, then override *only* the conflicted tracks
+  with the multiplicity of the **last remote that actually edited each** (`verdicts()` — a
+  remote whose `theirs` count equals its own base abstains rather than winning by position).
+  The result is forced outward by priming each base to `theirs`, so the same `_sync_pair`
+  propagates it. Each auto-resolution prints the track and the remote that won it.
+- **`land` seeds, `sync` updates**: `unify_source_playlists` only writes membership when it
+  *creates* a canonical playlist; existing playlists are owned by `sync`. Re-importing a
+  snapshot never re-unions, so a downstream delete sticks.
+
+### Migrations
+
+No production DB — recreate on schema change. All prior migrations are squashed into one
+autogenerated initial schema (which also runs `CREATE EXTENSION pg_trgm`). On a model change:
+edit models → delete the existing migration → `uv run alembic revision --autogenerate`
+against an empty DB. Schema is auto-applied at CLI startup.
+
+## Configuration (`conf.py`)
+
+A pydantic-settings `Settings` loads from `.env` at the project root; the `settings`
+singleton is imported wherever config is needed.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DB_DSN` | — | PostgreSQL DSN (required) |
+| `DB_ECHO` | `False` | SQLAlchemy query logging |
+| `LIBRARY_DIR` | — | Root for organized files (required; empty on first run) |
+| `DUPLICATES_FILEPATH` | `LIBRARY_DIR/.airdrome/duplicates.json` | Override for the dedup group mirror (`settings.duplicates_file` resolves it) |
+| `NAVIDROME_DB_DSN` | `None` | Path to Navidrome's SQLite DB |
+| `NAVIDROME_USER` | `None` | Navidrome user that owns synced play counts/ratings |
+| `NAVIDROME_PORT` | `4533` | Port the `navidrome` commands probe to confirm the server is stopped |
+
+`/data/`, `/navi/`, `/dist/`, `.env` are gitignored. Treat `data/` as local runtime state the
+user backs up separately — don't optimize its serialization for "cleaner git diffs"; only
+round-trip correctness matters.
+
+## Workflow
+
+- Solo project, no PRs. Work directly on `main` by default. Branch from `main` only when the
+  task is serious/risky or there is already a lot of uncommitted work in progress; when done and
+  confirmed, **squash-merge** the branch back into `main` and delete it.
+- **Check the current branch before committing** (`git branch --show-current` / `git status`) —
+  don't assume the branch from earlier in the session; a merge between turns can land you back on
+  `main` unexpectedly.
+- Always `git push` after committing/merging to `main`; **never force-push**.
+- Cover changes with meaningful tests; lean on pytest fixtures heavily.
+- Give every function and method a one-line docstring.
+- Comment non-obvious code, explaining the decision — the more complicated, the more explicit.
+- Call out places that can be simplified as you go.
+
+## Conventions
+
+- Line length 110 (Ruff), target `py314`, rules `E,F,I,W,UP,B,SIM,C4,PIE,RUF,ANN`.
+- Imports: first-party `airdrome` group separated; `factories` known-local; two blank lines
+  after the imports block.
+- All datetimes are timezone-aware UTC.
+- Use `get_or_create()` for idempotency; re-running commands is safe.
+- `typer.Argument`/`typer.Option` sentinels as defaults are intended (exempt from B008);
+  optional no-op ingest/sync hooks are exempt from B027.
+- Ruff's select list also carries **`ANN`** (annotation presence) — gortex's native Python
+  resolver keys off declared types, so a missing param/return annotation is a lost graph edge,
+  not just style. `ANN` is ignored wholesale for `tests/*`, `alembic/versions/*.py` and
+  `alembic/env.py`; `ANN401` (bare `Any`) is scoped to `models.py` and `cloud/sources.py`, the
+  two genuinely dynamic boundaries — anywhere else a bare `Any` is an error.
+  <!-- src: airdrome e0daf7a | 2026-09-12 -->
+- Type checking is **`ty`** (`uvx ty check`), configured in `pyproject.toml`.
+  `[tool.ty.environment]` pins it to `.venv` / 3.14 — without that every first-party and
+  third-party import degrades to unresolved and the diagnostics are noise — and
+  `[tool.ty.src]` covers `airdrome`, `tests`, `alembic`. It is in neither pre-commit nor the
+  pytest gate, so run it by hand; it carries a standing nonzero diagnostic count (mostly
+  pre-existing `| None` narrowing gaps), which is a baseline to compare against rather than a
+  clean bar to hold.
+  <!-- src: airdrome e0daf7a | 2026-09-12 -->
+
+## Dedup tuning notes
+
+- Recommended `dedup` sets (precise yet mass): `-s "artist,duration" -s
+  "artist,year" -s "album_artist,duration"` — reaches ~98% of the reckless `artist`-only
+  ceiling while gating every merge on a matching duration OR year, so edits/remixes/live cuts
+  don't collapse. These are codified as `RECOMMENDED_SETS` (`normalize/dedup/grouping.py`) and
+  are the no-`--set` CLI default.
+- Bare `-s "artist"` is dangerous (no discriminator). "All fields" only finds exact-dup files.
+- `compute_auto_dedup_groups` skips a track when *all* selected non-title key fields are blank.
+- `loved` is deliberately out of canon ordering — a group's loved status is derived from the
+  whole group, so it must not decide which member is canon. The merge re-query must use the
+  same `canon_order(strategy)` or single vs. merged groups disagree on `group[0]`.
+
+## Roadmap
+
+[ROADMAP.md](ROADMAP.md) tracks forward-looking work (playlist management, a Telegram management
+bot, the filesystem ⇄ Airdrome reconcile pipeline). Read it at the start of any non-trivial task.
+
+**When a new idea surfaces** in a dialog — a feature, a "we should eventually…", or a design
+we settle on but won't build now — **ask the user whether to add it to ROADMAP.md**, and
+record it there if they agree. When an item ships, move its current-state into this file (and
+mark its `docs/design/` write-up built), then remove it from the roadmap.

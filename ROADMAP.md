@@ -1,14 +1,14 @@
 # Airdrome Roadmap
 
 The single place to track to-do ideas, open design questions, and agreed-but-unbuilt
-work. Code-level "how it works today" lives in [AGENTS.md](AGENTS.md); this file is for
+work. Code-level "how it works today" lives in [CLAUDE.md](CLAUDE.md); this file is for
 what we *want to do next*.
 
 **For agents:** skim this file at the start of any non-trivial task so suggestions line
 up with the plan. When a new idea surfaces in conversation — a feature, a "we should
 eventually…", a design we settle on but won't build yet — **ask whether to add it here**,
 and if yes, drop it under the right section with a status marker. When an item ships,
-fold the durable design into AGENTS.md and remove it here.
+fold the durable design into CLAUDE.md and remove it here.
 
 Status legend: 💡 idea (unscoped) · 🧭 designed (settled, not built) · 🔨 in progress ·
 🅿️ parked. Done items are deleted, not checked off — git history is the archive.
@@ -66,7 +66,7 @@ can't shape indirectly through file tags (unlike track metadata). So playlists n
 first-class management story of their own. **Built (2026-06-08):** `airdrome sync` reconciles
 playlists across remotes — Airdrome as hub, every peer a remote with a per-`(playlist, remote)`
 base, and conflicts auto-resolved per track by the last remote that edited it. "How it works
-today" lives in AGENTS.md *Playlist reconcile*; the long-form rationale + rejected alternatives are in
+today" lives in CLAUDE.md *Playlist reconcile*; the long-form rationale + rejected alternatives are in
 [docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
 `land --rebuild-playlists` still nukes and rebuilds from source.
 
@@ -159,7 +159,7 @@ Full design — 12 settled decisions and the three-layer build order — lives i
   **The measurement that settled it (2026-09-09, live library).** Sampling 300 dated rows of
   the real Last.fm CSV against the imported ListenBrainz history: **300/300 already present
   within ±90 s, but only 4/300 to the second.** The CSV is minute-resolution and
-  `get_fresh_scrobbles` dedupes on the exact timestamp (see AGENTS.md), so importing it would
+  `get_fresh_scrobbles` dedupes on the exact timestamp (see CLAUDE.md), so importing it would
   have added ~200k duplicate plays that nothing downstream catches. ListenBrainz is also a
   strict superset in range and volume: 2011-04-17 → 2026-06-06 / 221,601 plays, against the
   CSV's 201,456 dated rows ending 2025-12-28. **And that CSV was never an official export** —
