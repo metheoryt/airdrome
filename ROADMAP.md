@@ -59,6 +59,79 @@ The immediate, next-up work.
 
 ---
 
+## Identity & acquisition (architecture review, 2026-10-16)
+
+The review's one finding: the three places that still feel off — iTunes-shaped file binding,
+the playlist 3-way merge, the size of dedup — share a cause. **Track identity is built from
+strings and paths, and every subsystem patches that its own way** (`ILIKE` on a rebuilt Apple
+path, weighted `pg_trgm`, the exact 4-tuple unique key, flag-set buckets). The items below are
+one programme, ordered; each is 💡 until its own discussion settles it.
+
+Live numbers that scoped it (2026-10-16): 13,243 canonical tracks after dedup, **6,879 of them
+with no file anywhere in their group**; 6,986 files, all bound; 202,584 plays; 26,745 / 79,051
+aliases matched. The file-less half is mostly streaming pass-through (tracks played once or
+twice and never added), but it also hides unmatched duplicates of tracks that *were* listened
+to, and the odd gem that never reached the library — so it is classified, never cut by play
+count alone.
+
+- 💡 **Identity ladder.** One `resolve(claims) -> Track` with ordered matchers — MusicBrainz
+  recording id from tags → acoustic fingerprint (chromaprint / `fpcalc`) → normalized tags →
+  the Apple path rebuild as an *opt-in last* matcher. Every binding (file→track, alias→track,
+  twin→canon) records `method` + `confidence`, so a better matcher can later upgrade a weaker
+  binding and a wrong match can be audited. This is what makes `import <any directory>` work:
+  scan → enrich (tags, MBID, fingerprint, `content_hash`) → resolve, no iTunes layout assumed.
+  Also widens `MusicScanner.EXTENSIONS` (ogg/opus/wav/aiff/wma) and stops `organize` mirroring
+  Apple's layout as the only option.
+  - Dedup shrinks rather than disappears: with recording identity most twins collapse at `land`,
+    and what is left is "several files of one recording → pick the best" (`select_main_file`
+    already does that) plus *file-less* duplicates among the ghosts, which only metadata can
+    group — so the manual review path and the 881 hand-made groups stay.
+- 💡 **Fingerprint-first ingest, no Picard prerequisite.** Picard tagging of the library is in
+  progress and the CD/DVD rips are untagged; tagging them by hand first is the thing that
+  frustrates. Airdrome can do what Picard does underneath: `fpcalc` → AcoustID lookup → MBID
+  (free API key, ~3 req/s, ~40 min for 7k files), or compare fingerprints locally without the
+  lookup. Then "point it at the CD rips and tell me which recordings I don't already have" is
+  one command, and Picard becomes optional polish afterwards, not a gate.
+- 💡 **`wanted` — the file-less tracks as a first-class list, classified.** Signals, not a play
+  threshold: plays spread over months vs. one session, membership in any playlist, loved /
+  rated, present in a *library* source (Apple XML / Spotify saved) vs. streaming-history only,
+  and an unresolved near-duplicate of a track that has a file (run the ghost dedup first).
+  Reasons `missing` and `upgrade` (bitrate under a cutoff). Output feeds the acquisition loop
+  below and the Telegram bot's upload feature.
+- 💡 **Acquisition loop over Soulseek.** `wanted` → CSV for `slsk-batchdl`, or `slskd`'s REST
+  API directly → drop folder → `ingest_one` (fs-reconcile layer 3) → fingerprint confirms it is
+  the wanted recording. Soulseek is the right network for single tracks; torrents are not.
+  **Avoid Lidarr**: its metadata server was down or rate-limited through 2025–2026 (issue
+  #5498, reopened 2026-01). Reference designs: Soularr (`cutoff_unmet` = upgrades),
+  DroppedNeedle v2 (2026-07, Lidarr-free wanted→slskd→tag→organize→auto-upgrade).
+- 💡 **Spotify as a live read-write remote.** The editing picture (2026-10-16): Spotify / Apple
+  Music stay in daily use — loved tracks and playlists change there — *and* Navidrome is where
+  the offline collection is played and its playlists edited. Two live editors, so the
+  per-remote base + 3-way merge is confirmed as the right engine, not complexity to cut. What
+  changes: Spotify has a Web API, so it can be a `writable` remote polled live instead of a
+  snapshot import; Apple stays export-only (MusicKit needs a paid developer account). Tracks
+  only Navidrome has stay Airdrome/Navidrome-only — the engine already keeps a remote's
+  unrepresentable tracks out of that remote's base. Loved / ratings then want the parked
+  "extend the hub model to tracks" item.
+- 💡 **Scrobbles going forward: multi-scrobbler → ListenBrainz; Airdrome backfills history only.**
+  multi-scrobbler forwards live plays from Spotify, Apple Music and Subsonic/Navidrome (~33
+  sources). Reinforces the Last.fm/Spotify importer sunset under *Ingest sources*.
+- 💡 **Open: PostgreSQL → SQLite + in-memory fuzzy (rapidfuzz).** Postgres is required only for
+  `pg_trgm`, and the 40-minute `land` shows the indexes are not carrying the load at 16k tracks.
+  One file, no Docker, is the beets-like feel. Decide after the identity ladder lands — it
+  changes how much fuzzy matching is left.
+- 🅿️ **beets as the library layer** (import / organize / `chroma` fingerprints / `duplicates`
+  with `duplicate_action: upgrade`, 2.14) with Airdrome reduced to history + playlists +
+  Navidrome writes. Would halve Airdrome but beets wants to own the layout. Revisit only if the
+  library half still feels heavy after the identity ladder.
+- Reference points from the 2026-10 survey: Navidrome 0.64 (plugins since 0.61, faster m3u
+  import, smart playlists still beta, no play-count import — the direct SQLite write stays);
+  NaviSync (Last.fm → Navidrome plays), NaviSpot / navify (Spotify playlists → Subsonic with a
+  missing-track report); Picard 3.0 (`picard-cli`, plugin API). No project found with a
+  per-remote base for playlist reconcile — that part is Airdrome's own.
+
+---
+
 ## Playlist management
 
 Navidrome is a player, not a library manager, and playlists are the one entity Airdrome
@@ -69,6 +142,10 @@ base, and conflicts auto-resolved per track by the last remote that edited it. "
 today" lives in CLAUDE.md *Playlist reconcile*; the long-form rationale + rejected alternatives are in
 [docs/design/playlist-reconcile.md](docs/design/playlist-reconcile.md).
 `land --rebuild-playlists` still nukes and rebuilds from source.
+
+Where playlists are edited (2026-10-16): Spotify / Apple Music *and* Navidrome, both live — see
+*Identity & acquisition* for what that settles (the 3-way engine stays; Spotify becomes a live
+writable remote).
 
 - 💡 **Backend orphan cleanup after merge.** When `playlists merge` absorbs a playlist, its
   Navidrome counterpart is left as a stale orphan (its `PlaylistLink` is gone, so `sync` neither
