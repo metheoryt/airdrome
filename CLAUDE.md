@@ -63,9 +63,17 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   Per-source and dumb; pass many paths or a directory. `--as <source>` forces a source for
   every path; `--no-tracks`/`--no-playlists`/`--no-scrobbles` skip a kind. All importers
   resolve up front, so an unrecognized/ambiguous path fails before anything is written.
+  **Music folders** (any directory; mp3/m4a/flac/ogg/opus/wav/aiff/wma) go in as one batch. An empty
+  library gets the plain bulk scan (binding left to `land`); otherwise `classify` (`library/scan.py`)
+  collapses repeats (md5, then fingerprint) and reports each recording as **new** / **have** /
+  **upgrade** (kbps above the group's best file). Only new recordings and upgrades are imported,
+  bound at once through the ladder. Probes of loose files are cached in `ScanCache` (path + size +
+  mtime → md5, fingerprint, tag id), so skipped files are not re-fingerprinted.
 - **`land`** — build the canonical graph from *everything imported* (run once, after all
   imports). Four numbered steps (printed via `console.step`): `do_unify` → `augment_aliases`
-  → `match_aliases` → `copy_plays`. `-t/--threshold` (fuzzy alias match, default 0.4);
+  → `match_aliases` → `copy_plays`. Step 1 binds files by the in-memory Apple path rebuild, then
+  the identity ladder; its summary counts bindings per method. `-t/--threshold` (fuzzy alias
+  match, default 0.4);
   `-m/--merge-playlists` (collapse same-name playlists, newest anchors); `--rebuild-playlists`
   (drop + rebuild canonical playlists from source, discarding backend-sync links).
 - **`organize`** — copy (default) or `--move`/`-m` bound files into `LIBRARY_DIR`.
@@ -76,10 +84,18 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   checks both preconditions, then returns the planned path without creating directories or
   calling `shutil` — so `library_path` and the count are the real ones, and the summary reads
   "would be moved/copied". The one thing it can't see is two tracks planning the *same*
-  destination; that needs planned paths tracked across calls.
-- **`dedup`** — batch rebuild of `Track.canon_id` from N flag-sets + stored manual overrides.
+  destination; that needs planned paths tracked across calls. **Upgrade swap** (the one narrow
+  relocation): when a group's best file is not the one already placed in `Library/`, `swap_upgrade`
+  moves the old main to the next free `Copies/` path and puts the upgrade at the freed `Library/`
+  path. Nothing is overwritten: if the upgrade's transfer fails, the old main goes back unless the
+  upgrade already landed (then the DB records the upgrade as main); a partial upgrade under a new
+  extension is removed. Any other re-bind still relocates nothing (fs-reconcile #12). A swap that
+  changes the extension reads to Navidrome as a remove + add — `navi push` after its rescan.
+- **`dedup`** — batch rebuild of `Track.canon_id` from recording-identity groups
+  (`normalize/dedup/recording.py`) + N flag-sets + stored manual overrides.
   `-s/--set` (repeatable, comma-separated fields; title always implicit), `-c/--canon`
-  (`added`/`year`). With no `--set` the CLI uses `RECOMMENDED_SETS` (see *Dedup tuning notes*);
+  (`added`/`year`; the compilation rank leads `canon_order` for every group, so `-c` only breaks
+  ties after it). With no `--set` the CLI uses `RECOMMENDED_SETS` (see *Dedup tuning notes*);
   the `auto_deduplicate` library function still falls back to a single all-fields set. With
   `--review`/`-r` the interactive TUI opens *after* the batch pass so you can adjust the
   proposed canons (`--match` filters the TUI by substring); choices persist as manual
@@ -98,6 +114,12 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   `NAVIDROME_USER`. (Playlists moved to `sync`.)
 - **`maint renormalize`** — recompute `_norm` fields on tracks, aliases, and files (the escape
   hatch for a normalization-rule change, instead of a full reimport).
+- **`maint enrich`** — re-enrich pass over existing `TrackFile`s (fs-reconcile #11): tags, ids,
+  md5 from `absolute_path`, fingerprint via `fpcalc` (`--workers`). Skips unchanged files unless
+  `--force`; a fingerprint is reset only when the bytes changed. Changes no binding.
+- **`maint acoustid`** — fills `recording_mbid` (method `acoustid`) for fingerprinted files without
+  one, only when the top AcoustID result scores ≥ 0.9 and names one recording. `--limit N`. Needs
+  `ACOUSTID_CLIENT_KEY`; an invalid key aborts, any other failure is counted.
 
 ## Architecture
 
@@ -106,13 +128,16 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
 1. **Import** (`ingest/`) — `import` auto-detects each source and writes raw
    `SourceTrack`/`SourcePlaylist`/`TrackFile` + `TrackAlias`/`TrackAliasScrobble` rows.
    Format parsers live under `cloud/` (Spotify, Last.fm, ListenBrainz, iTunes XML, Apple
-   Media Services) plus a local folder scanner.
-2. **Land** (`library/unify.py`, `scrobbles/`) — unify source rows into canonical
-   `Track`/`Playlist`, bind files, then augment, fuzzy-match (`pg_trgm`), and copy scrobbles
-   into `TrackPlay` history. Needs the full picture.
+   Media Services) plus a local folder scanner. `maint enrich` / `maint acoustid` add identity
+   evidence to existing files.
+2. **Land** (`library/unify.py`, `library/ladder.py`, `scrobbles/`) — unify source rows into
+   canonical `Track`/`Playlist`, bind files (Apple path rebuild first, then the identity ladder
+   for the rest — see *Identity ladder*), then augment aliases, bind them through the alias
+   ladder, and copy scrobbles into `TrackPlay` history. Needs the full picture.
 3. **Organize** (`library/organize.py`) — move/copy bound files into a structured directory.
-4. **Deduplicate** (`normalize/dedup/`) — group duplicates via trigram matching; twins link
-   to a canon via `Track.canon_id`. Confirmed groups live in `dedupgroup`/`dedupgroupmember`
+4. **Deduplicate** (`normalize/dedup/`) — group duplicates by recording identity (shared
+   recording id, close fingerprint) ahead of the flag-set buckets; twins link to a canon via
+   `Track.canon_id`. Confirmed groups live in `dedupgroup`/`dedupgroupmember`
    (import identity = the member-hash multiset, not the label).
 5. **Sync** — push play counts + ratings into Navidrome's SQLite DB (`navidrome/`), and
    reconcile playlists across remotes (`playlists/`, see *Playlist reconcile*).
@@ -130,8 +155,10 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   load-bearing — fine granularity is canonical, coarse "service" is derived.
 - Apple Media Services exports bury activity files in a *nested* zip (layout varies), so
   `AppleMsImporter.detect` recurses into nested zips.
-- Folder scan writes only `TrackFile`; `do_unify` promotes orphan `TrackFile`s to `Track`
-  (no `SourceTrack(FOLDER)` layer, no FOLDER enum value).
+- Folder scan writes only `TrackFile`; `do_unify` resolves orphan `TrackFile`s through the
+  ladder (no `SourceTrack(FOLDER)` layer, no FOLDER enum value). `read_tags` (`library/tags.py`)
+  decodes mutagen's bytes values (MP4 freeform, ID3 UFID) explicitly — `str(bytes)` breaks id
+  equality across containers.
 - Spotify plays under 30 seconds are excluded.
 
 ### Session lifecycle
@@ -162,8 +189,8 @@ rollback never reaches it — what the dedup group mirror does.
   canon — and is *terminal* (a canon is never itself a twin; no chains), so readers resolve
   with a single hop.
 - **`TrackFile`** — audio file on disk with Mutagen-extracted metadata; `is_main` flags the
-  best-bitrate copy; `library_path` is the organized destination; `enrich()` reads tags from
-  `absolute_path` into the row.
+  best-bitrate copy; `library_path` is the organized destination; `enrich()` reads tags, ids and
+  md5 from `absolute_path` into the row (no fingerprint — `fingerprint_files` adds it).
 - **`TrackAlias`** — one scrobble-source entry per unique title+artist+album+platform.
 - **`TrackAliasScrobble`** — an individual play event; `copy_plays` materializes matched
   aliases into canonical **`TrackPlay`** history.
@@ -173,6 +200,27 @@ rollback never reaches it — what the dedup group mirror does.
 All text fields have `_norm` variants (lowercased, accents stripped). Fuzzy dedup and alias
 matching use PostgreSQL trigram similarity (`pg_trgm`), weighted artist/album_artist 75%,
 album 25%. Threshold defaults to 0.4.
+
+### Identity ladder (`library/ladder.py`, `library/fingerprint.py`, `normalize/dedup/recording.py`)
+
+Rationale, calibration and acceptance numbers:
+[docs/design/identity-ladder.md](docs/design/identity-ladder.md).
+
+- **Rung order.** File → track: Apple path rebuild first (in memory, `PathTailIndex`; beats the
+  file's tags), then `resolve_file`: recording id → fingerprint → tags, a new `Track` from tags
+  last. Alias → track: player-submitted id → exact tags → trigram fuzzy; the ListenBrainz-mapped id
+  only breaks ties, never binds or groups. Every binding records `BindMethod` + confidence
+  (`TrackFile.bind_*`, `TrackAlias.match_*`, `Track.canon_*`).
+- **`Track` rows are never re-keyed or merged.** Recording identity groups tracks as twins, which
+  keeps `duplicate_hash` and the hand-made groups valid.
+- **One recording id per group.** A track's id is the one its files agree on (`recording_of_track`);
+  disagreeing files leave it with none (`dedup` reports it as conflicted). Nothing binds or links
+  across two ids. A stored "not duplicates" review is a hard, transitive cannot-link in `dedup`.
+- **Fingerprints:** stored as signed int32 (mask `0xFFFFFFFF` before comparing). `FP_MATCH = 0.89`;
+  a match links only when durations differ by ≤ 2 s (`FP_MAX_DURATION_GAP`), else it is a review
+  candidate.
+- **`ACOUSTID_CLIENT_KEY` is a `SecretStr`** and every Typer app sets
+  `pretty_exceptions_show_locals=False`; never print the key.
 
 ### Dedup group mirror (`normalize/dedup/mirror.py`)
 
@@ -212,7 +260,8 @@ has the best copy — often a twin, not the canon), but plays are **summed** and
 **aggregated** across the whole group, so plays on other members aren't dropped. Both writers
 keep the one-main invariant — `organize` picks it across canon+twins, and
 `recompute_main_files` re-picks it whenever the canon graph changes. Selection only flips the
-flag; files already on disk are not relocated (that is the reconcile roadmap).
+flag; the next `organize` relocates only for the upgrade swap (a better copy displacing the
+placed main), and any other relocation is the reconcile roadmap.
 
 ### Playlist reconcile (`playlists/`)
 
@@ -262,6 +311,7 @@ singleton is imported wherever config is needed.
 | `NAVIDROME_DB_DSN` | `None` | Path to Navidrome's SQLite DB |
 | `NAVIDROME_USER` | `None` | Navidrome user that owns synced play counts/ratings |
 | `NAVIDROME_PORT` | `4533` | Port the `navidrome` commands probe to confirm the server is stopped |
+| `ACOUSTID_CLIENT_KEY` | `None` | AcoustID *application* key for `maint acoustid` (never print it) |
 
 `/data/`, `/navi/`, `/dist/`, `.env` are gitignored. Treat `data/` as local runtime state the
 user backs up separately — don't optimize its serialization for "cleaner git diffs"; only

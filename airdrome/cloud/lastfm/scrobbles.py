@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from airdrome.enums import Source
 from airdrome.models import TrackAlias
-from airdrome.scrobbles.parser import ScrobbleParser
+from airdrome.scrobbles.parser import ScrobbleParser, ScrobbleRecord
 
 from .schemas import LastFMScrobble
 
@@ -35,6 +35,8 @@ class LastFMScrobbleParser(ScrobbleParser):
     def __init__(self, filepath: str) -> None:
         self.filepath = filepath
 
-    def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
+    def _iterate_scrobbles(self) -> Iterator[ScrobbleRecord]:
         for record in get_lastfm_records(self.filepath):
-            yield TrackAlias(artist=record.artist, album=record.album, title=record.title), record.date
+            yield ScrobbleRecord(
+                TrackAlias(artist=record.artist, album=record.album, title=record.title), record.date
+            )

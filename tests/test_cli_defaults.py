@@ -119,3 +119,20 @@ def test_status_reports_unreachable_db(monkeypatch):
     assert result.exit_code == 0
     assert "unreachable" in result.stdout
     migrate.assert_not_called()
+
+
+def test_import_batches_music_folders(stub_session, monkeypatch, tmp_path):
+    """Several music folders go to one importer, so `classify` can collapse repeats across them."""
+    seen: list[list] = []
+    monkeypatch.setattr(
+        "airdrome.ingest.sources.MusicFolderImporter.ingest", lambda self, s, kinds: seen.append(self.roots)
+    )
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d in (a, b):
+        d.mkdir()
+        (d / "song.mp3").write_bytes(b"x")
+
+    result = runner.invoke(app, ["import", str(a), str(b)])
+
+    assert result.exit_code == 0, result.output
+    assert seen == [[a, b]]

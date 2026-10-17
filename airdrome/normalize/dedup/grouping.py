@@ -1,7 +1,8 @@
+from collections.abc import Set as AbstractSet
 from enum import StrEnum
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import ColumnElement, and_, case, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from airdrome.models import Track
 
@@ -34,81 +35,140 @@ RECOMMENDED_SETS = [
 ]
 
 
+# Album-artist values (normalized) that mark a various-artists compilation, beside the
+# `compilation` flag itself.
+VARIOUS_ARTISTS = ("various artists", "various")
+
+
+def _is_compilation(t: type[Track]) -> ColumnElement[bool]:
+    """SQL predicate: `t` is a compilation member (flagged, or credited to various artists)."""
+    return or_(t.compilation.is_(True), t.album_artist_norm.in_(VARIOUS_ARTISTS))
+
+
+def _compilation_rank() -> ColumnElement[int]:
+    """Leading canon key: 0 = a compilation the owner has >= 2 tracks of, 1 = not a compilation,
+    2 = a compilation the owner has a single track of.
+
+    The owner's rule (docs/design/identity-ladder.md, *Canon choice*): prefer the original album,
+    but a compilation/OST wins when the owner has >= 2 tracks from it. A SQL `CASE` over a
+    correlated per-album count, so the query-time order and `merge_overlapping_groups`' re-query
+    agree by construction. A blank album is no compilation identity, so it never counts.
+    """
+    other = aliased(Track)
+    per_album = (
+        select(func.count())
+        .where(other.album_norm == Track.album_norm, other.album_norm != "", _is_compilation(other))
+        .correlate(Track)
+        .scalar_subquery()
+    )
+    is_comp = _is_compilation(Track)
+    return case((and_(is_comp, per_album >= 2), 0), (is_comp, 2), else_=1)
+
+
 def canon_order(strategy: CanonStrategy = CanonStrategy.ADDED) -> list:
     """Return order_by clauses placing the preferred canon first.
 
-    `loved` is intentionally excluded: a group's loved status is derived from
-    the whole group, so it must not decide which member is canon. `id` is the
-    final, stable tiebreaker. The chosen strategy's key leads; the other date
-    key follows as a tiebreaker.
+    The compilation rank leads (see `_compilation_rank`). `loved` is intentionally excluded: a
+    group's loved status is derived from the whole group, so it must not decide which member is
+    canon. `id` is the final, stable tiebreaker. The chosen strategy's key comes next; the other
+    date key follows as a tiebreaker.
     """
     added = Track.date_added.asc().nulls_last()
     year = Track.year.asc().nulls_last()
     if strategy is CanonStrategy.YEAR:
-        return [year, added, Track.id]
-    return [added, year, Track.id]
+        return [_compilation_rank(), year, added, Track.id]
+    return [_compilation_rank(), added, year, Track.id]
 
 
 def merge_overlapping_groups(
     session: Session,
     groups: list[tuple[str, list[Track]]],
     strategy: CanonStrategy = CanonStrategy.ADDED,
+    cannot_link: AbstractSet[frozenset[int]] = frozenset(),
 ) -> list[tuple[str, list[Track]]]:
-    """Union-find over groups: any two sharing a track collapse into one page.
+    """Union-find over tracks: any two groups sharing a track collapse into one page.
 
     Surfacing the full component together lets the user resolve all canon
     picks for those tracks in one place — and structurally prevents
     cross-page picks from creating canon chains (e.g. T3->T2 chosen on
     one page and T2->T1 on another). Multi-group components are re-queried
     so members come back in canon-priority order.
+
+    `cannot_link` holds track-id pairs that must never share a component (a stored "not
+    duplicates" choice). The union runs per track, not per group, so the veto is transitive: a
+    union is refused when it would put any vetoed pair together, directly or through a third
+    track, and every track still lands in exactly one component. A group a veto splits comes back
+    as its surviving pieces; a piece of one track is dropped.
     """
-    n = len(groups)
-    if n == 0:
+    if not groups:
         return []
 
-    parent = list(range(n))
+    partners: dict[int, set[int]] = {}
+    for pair in cannot_link:
+        a, b = tuple(pair)
+        partners.setdefault(a, set()).add(b)
+        partners.setdefault(b, set()).add(a)
+
+    parent: dict[int, int] = {}
+    members: dict[int, set[int]] = {}  # root -> the component's track ids
 
     def find(x: int) -> int:
+        """Root of `x`'s component, halving the path as it goes."""
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
     def union(a: int, b: int) -> None:
+        """Join the components of `a` and `b`, unless that would co-locate a cannot-link pair."""
         ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
+        if ra == rb:
+            return
+        small, large = sorted((members[ra], members[rb]), key=len)
+        # Components are disjoint, so every cross pair would be new: check them all.
+        if any(not partners.get(x, set()).isdisjoint(large) for x in small):
+            return
+        parent[ra] = rb
+        members[rb] |= members.pop(ra)
 
-    first_group: dict[int, int] = {}
-    for i, (_, tracks) in enumerate(groups):
-        for t in tracks:
-            if t.id is None:
-                continue
-            if t.id in first_group:
-                union(first_group[t.id], i)
-            else:
-                first_group[t.id] = i
+    group_ids: list[list[int]] = []
+    for _, tracks in groups:
+        ids = [t.id for t in tracks if t.id is not None]
+        group_ids.append(ids)
+        for tid in ids:
+            if tid not in parent:
+                parent[tid] = tid
+                members[tid] = {tid}
+        # A star from the group's first member (its canon candidate): under a veto, the pieces
+        # that stay are the ones joined to that candidate.
+        for tid in ids[1:]:
+            union(ids[0], tid)
 
-    components: dict[int, list[int]] = {}
-    for i in range(n):
-        components.setdefault(find(i), []).append(i)
+    # Which groups feed each component, in input order.
+    sources: dict[int, list[int]] = {}
+    for i, ids in enumerate(group_ids):
+        for root in dict.fromkeys(find(tid) for tid in ids):
+            sources.setdefault(root, []).append(i)
 
     merged: list[tuple[str, list[Track]]] = []
     emitted: set[int] = set()
-    for i, _ in enumerate(groups):
-        root = find(i)
-        if root in emitted:
-            continue
-        emitted.add(root)
-        member_idxs = components[root]
-        key = " + ".join(sorted({groups[idx][0] for idx in member_idxs}))
-        if len(member_idxs) == 1:
-            merged.append((key, groups[member_idxs[0]][1]))
-            continue
-        ids = {t.id for idx in member_idxs for t in groups[idx][1] if t.id is not None}
-        tracks = list(
-            session.scalars(select(Track).where(Track.id.in_(ids)).order_by(*canon_order(strategy)))
-        )
-        merged.append((key, tracks))
+    for i, ids in enumerate(group_ids):
+        for root in dict.fromkeys(find(tid) for tid in ids):
+            if root in emitted:
+                continue
+            emitted.add(root)
+            src = sources[root]
+            key = " + ".join(sorted({groups[idx][0] for idx in src}))
+            if len(src) == 1 and members[root] == set(ids):
+                merged.append((key, groups[i][1]))  # an intact single group passes through as-is
+                continue
+            if len(members[root]) < 2:
+                continue
+            tracks = list(
+                session.scalars(
+                    select(Track).where(Track.id.in_(members[root])).order_by(*canon_order(strategy))
+                )
+            )
+            merged.append((key, tracks))
 
     return merged

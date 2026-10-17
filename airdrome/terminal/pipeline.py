@@ -45,7 +45,11 @@ _SET_HELP = (
     "Listed fields are included; title is always implicit. Multiple --sets union-find-merge "
     "their groups."
 )
-_CANON_HELP = "Which member of each group becomes canon: 'added' (earliest added) or 'year' (oldest release)."
+_CANON_HELP = (
+    "Which member of each group becomes canon: 'added' (earliest added) or 'year' (oldest release). "
+    "Applied after the compilation rule, which leads for every group: the original album wins unless "
+    "you own >= 2 tracks of the compilation."
+)
 
 
 def organize(
@@ -79,11 +83,13 @@ def dedup(
     ),
     match: str = typer.Option("", "--match", help="With --review, filter groups by a substring."),
 ) -> None:
-    """Rebuild Track.canon_id from N flag-sets + stored manual overrides.
+    """Rebuild Track.canon_id from recording identity + N flag-sets + stored manual overrides.
 
-    The batch pass is a clean slate: all canon_ids are reset, each --set produces its own
-    bucket-grouping, overlapping groups across sets are merged, then stored manual choices
-    layer on top and any canon chain is flattened. With no --set the recommended sets are used.
+    The batch pass is a clean slate: all canon_ids are reset, recording identity (shared
+    recording id, close fingerprint match) groups tracks ahead of the flag-sets, each --set
+    produces its own bucket-grouping, overlapping groups are merged (never across a stored
+    "not duplicates" choice), then stored manual choices layer on top and any canon chain is
+    flattened. With no --set the recommended sets are used.
 
     With --review, the interactive deduplicator opens afterward so you can adjust the proposed
     canons; your choices persist as manual overrides and feed the next batch run.
@@ -102,9 +108,14 @@ def dedup(
             canons = [None] + [group[0].id] * (len(group) - 1)
             console.print(DeduplicatorUI.compose_table("auto-dedup", group, canons))
 
+    conflicted = (
+        f"; {result.conflicted} track(s) with conflicting recording ids left out (-v lists them)"
+        if result.conflicted
+        else ""
+    )
     done(
         f"{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
-        f" + {result.manual_changes} manual override(s) from stored choices"
+        f" + {result.manual_changes} manual override(s) from stored choices{conflicted}"
     )
 
     if review:

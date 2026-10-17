@@ -56,6 +56,11 @@ connect it to a FLAC on your disk.
   `SourcePlaylist`, `TrackAlias`), then *landed* into one canonical `Track`/`Playlist`
   graph. Sources are never edited in place, so a re-import is always safe and the raw
   record stays available when a matching rule changes.
+- **An identity ladder, strongest evidence first.** A file reaches its track by MusicBrainz
+  recording id (read from tags, or looked up on AcoustID), then by its acoustic fingerprint
+  (chromaprint), then by its tags — and every binding records which rung made it, so automatic
+  merges can be listed and audited. Untagged rips work: the fingerprint says "you already have
+  this recording" without any tagging first.
 - **Fuzzy matching in the database.** Scrobble metadata is bound to canonical tracks with
   PostgreSQL trigram similarity (`pg_trgm`) over normalized text, with a tunable threshold —
   so "Sigur Rós — Untitled #1" and "Sigur Ros - Untitled 1 (Vaka)" land on the same track
@@ -80,6 +85,11 @@ Design rationale, rejected alternatives and the measured data behind each decisi
 - [uv](https://docs.astral.sh/uv/)
 - Docker (for the bundled PostgreSQL, which provides the `pg_trgm` fuzzy matching used
   throughout deduplication and alias matching)
+- `fpcalc` from [Chromaprint](https://acoustid.org/chromaprint) on the `PATH` (Debian/Ubuntu:
+  `apt install libchromaprint-tools`) — fingerprints every audio file
+- Optional: an AcoustID **application** key (register one at
+  [acoustid.org/new-application](https://acoustid.org/new-application); the account's user key
+  will not work) for `maint acoustid`
 
 ## Setup
 
@@ -115,6 +125,7 @@ All settings load from a `.env` file at the project root (`airdrome/conf.py`).
 | `NAVIDROME_DB_DSN` |          | `None`  | Path to Navidrome's SQLite database (required for the `navidrome` commands)                         |
 | `NAVIDROME_USER`   |          | `None`  | Navidrome username that play counts / ratings are written for                                       |
 | `NAVIDROME_PORT`   |          | `4533`  | Port Airdrome probes to refuse syncing while Navidrome is running                                   |
+| `ACOUSTID_CLIENT_KEY` |       | `None`  | AcoustID application key for fingerprint lookups (unset disables the lookup)                        |
 
 ## Supported sources
 
@@ -128,7 +139,7 @@ Use `--as <name>` to force one when detection is ambiguous or fails.
 | `spotify`      | Spotify              | extended-streaming-history JSON        | scrobbles                    |
 | `listenbrainz` | ListenBrainz         | `.jsonl` export                        | scrobbles                    |
 | `lastfm`       | Last.fm              | CSV export (`artist,album,track,date`) | scrobbles                    |
-| `folder`       | Music folder         | directory of `.mp3`/`.m4a`/`.flac`     | tracks                       |
+| `folder`       | Music folder         | any directory of mp3/m4a/flac/ogg/opus/wav/aiff/wma | tracks          |
 
 ## Migration pipeline
 
@@ -140,6 +151,10 @@ committing.
 # 1. Import every source you have (one invocation, any mix of exports / folders)
 airdrome import ./exports/itunes/Library.xml ./exports/Apple_Media_Services.zip \
                 ./exports/spotify_history/ /mnt/music
+
+# 1b. Read recording ids, md5 and fingerprints of the files (land also fingerprints what it needs)
+airdrome maint enrich --workers 8
+airdrome maint acoustid            # optional: fill missing recording ids from AcoustID
 
 # 2. Build the canonical graph from everything imported: unify Track/Playlist
 #    records, bind on-disk files, then augment/match/copy scrobbles into play history.
@@ -177,6 +192,19 @@ it reports an unreachable database instead of failing.
 Auto-detect the source at each `<path>` and import its tracks, playlists, and scrobbles.
 Accepts any number of paths; each is detected and ingested independently.
 
+Music folders are compared against the library first (unless it is empty). Repeats are collapsed
+(identical bytes, identical audio), and each recording is reported once:
+
+- **new** — nothing in the library matches it by recording id, fingerprint or tags
+- **have** — the library already holds a copy at least as good (bitrate)
+- **upgrade** — a higher-bitrate copy than any the library has; `organize` then puts it in
+  `Library/` and moves the old main file to `Copies/`
+
+Only new recordings and upgrades are imported; with `-n` the report is all you get. Files that are
+not imported are remembered by path, size and mtime, so the next run does not fingerprint them
+again (a `-n` run does not keep that memory). A new file with no title tag that matches nothing
+is imported unbound and counted on its own line: tag it, then run `maint enrich` and `land`.
+
 - `--as <name>` — force a source for every path (see table above)
 - `--no-tracks` / `--no-playlists` / `--no-scrobbles` — skip a data kind
 - `--dry-run`, `-n`
@@ -187,8 +215,10 @@ suppresses non-essential output.
 ### `airdrome land`
 
 Build the canonical graph from everything imported — run once, after all imports. Unifies source
-tracks/playlists into canonical `Track`/`Playlist` records and binds on-disk files, then augments,
-fuzzy-matches, and materializes scrobbles into `TrackPlay` play history. Idempotent.
+tracks/playlists into canonical `Track`/`Playlist` records and binds on-disk files (Apple's own
+file naming first, then recording id → fingerprint → tags for the rest), then augments, matches
+scrobbles to tracks (submitted recording id → exact tags → fuzzy), and materializes them into
+`TrackPlay` play history. Idempotent.
 
 - `--threshold`, `-t` — fuzzy alias-match similarity (default `0.4`)
 - `--merge-playlists`, `-m` — collapse same-name playlists into one canonical (newest anchors)
@@ -205,9 +235,17 @@ as each track's main.
   reports a missing source or an occupied destination, but writes nothing to disk. It cannot see a
   collision between two tracks that resolve to the *same* destination — a real run would hit that.
 
+When an `import`ed upgrade replaces a main file of another format (say a FLAC for an MP3), Navidrome
+sees the old file removed and a new one added. Once Navidrome has scanned the change, run
+`navi push` (Navidrome stopped) so the play counts and ratings land on the new file.
+
 ### `airdrome dedup`
 
-Rebuild `canon_id` from flag-sets + stored manual overrides.
+Rebuild `canon_id` from recording identity + flag-sets + stored manual overrides. Tracks sharing a
+recording id, or whose fingerprints match with durations within 2 s, are grouped first; a wider
+duration gap is only offered in `--review`. A group you marked "not duplicates" is never joined
+automatically. Inside a group the original album is canon, unless you own ≥ 2 tracks of the
+compilation/OST it is also on.
 
 - `--set`/`-s` `"artist,album,year"` — comparison flag-set (repeatable; multiple sets union-merge
   their groups). With no `--set`, the recommended sets are used.
@@ -270,6 +308,25 @@ sync`.)
 
 Recompute the `_norm` text fields for tracks, aliases, and files (escape hatch for a
 normalization-rule change, instead of a full reimport).
+
+### `airdrome maint enrich`
+
+Re-read every known file from disk: tags, MusicBrainz recording id, AcoustID id, md5, and the
+chromaprint fingerprint (needs `fpcalc`). Unchanged files are skipped unless `--force`. Changes no
+binding; prints how many files carry a recording id and a fingerprint.
+
+- `--workers N` — parallel `fpcalc` processes (default 4)
+- `--force`, `--dry-run`/`-n`
+
+### `airdrome maint acoustid`
+
+Look up fingerprinted files that have no recording id on AcoustID (needs `ACOUSTID_CLIENT_KEY`,
+about 3 requests per second). A recording id is stored only when the best result scores ≥ 0.9 and
+names exactly one recording; everything else is counted as ambiguous. Database only — nothing is
+written into the files.
+
+- `--limit N` — look up at most N files
+- `--dry-run`/`-n` — the lookups still happen; nothing is saved
 
 ## Development
 

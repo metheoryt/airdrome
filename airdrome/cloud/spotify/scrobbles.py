@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from airdrome.enums import Source
 from airdrome.models import TrackAlias
-from airdrome.scrobbles.parser import ScrobbleParser
+from airdrome.scrobbles.parser import ScrobbleParser, ScrobbleRecord
 
 
 class SpotifyRecord(BaseModel):
@@ -43,5 +43,6 @@ class SpotifyScrobbleParser(ScrobbleParser):
     def __init__(self, dirpath: str) -> None:
         self.dirpath = dirpath
 
-    def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
-        yield from get_spotify_streaming_history(self.dirpath)
+    def _iterate_scrobbles(self) -> Iterator[ScrobbleRecord]:
+        for alias, at in get_spotify_streaming_history(self.dirpath):
+            yield ScrobbleRecord(alias, at)

@@ -19,9 +19,9 @@ Status legend: 💡 idea (unscoped) · 🧭 designed (settled, not built) · �
 
 The immediate, next-up work.
 
-- 🧭 **Identity ladder + fingerprints** — first item of the *Identity & acquisition* programme
-  below; decided 2026-10-16, to be built in a fresh session. Lands before `wanted` so CD rips
-  and untagged files are not counted as ghosts.
+- 💡 **`wanted`** — next in the *Identity & acquisition* programme below, now that the identity
+  ladder has landed (2026-10-17, [docs/design/identity-ladder.md](docs/design/identity-ladder.md);
+  current state in CLAUDE.md *Identity ladder*). Wants its own design discussion first.
 
 - 🧭 **Playlist editing tools (`merge` + `dedup-members`).** A new `playlists` command
   group: `merge <base> <other>...` folds human-specified near-duplicate playlists into one
@@ -42,24 +42,11 @@ The immediate, next-up work.
     to backfill a `playlist_merge` tombstone for each source playlist that currently holds no
     canonical of its own, in the same change.
 
-- 🧭 **Batch the file-binding pass in `land`.** `_bind_track_files` asks the database one
-  `ILIKE '%…%'` question per candidate path, and `possible_locations(max_suffix=2)` yields
-  12–24 candidates per Apple source track — so a real run (27k source tracks, 7k files)
-  issues ~490k full scans of `trackfile` at 8–11 ms each. Measured 2026-09-09 against the
-  live library: **~40 minutes for step 1/4 alone**, DB-bound at 100% CPU with no progress
-  output — the "N+1 storm that looks like a freeze" the `terminal/app.py` comment warns of.
-  **An index is not the fix.** A forced `pg_trgm` GIN lookup measures 0.28 ms against the
-  scan's 8–11 ms, but at ~7k rows the planner costs the seq scan *cheaper* (215 vs 256) and
-  ignores the index — so adding one changes nothing at this library size and only starts
-  paying off at some larger, unmeasured one. The fix is to stop asking the database: load
-  `source_path` for the unbound files once, and match candidates against an in-memory index
-  of path tails. A dict/suffix lookup is what that ILIKE actually expresses, so it can
-  preserve the semantics the comment there documents — case-insensitive matching, and
-  `autoescape` keeping `_`/`%` literal (paths sanitize `/` to `_`, e.g. "AC_DC"). Keep both
-  current behaviours: one `rel_path` may hit several files (dedup by id), and only files
-  with `track_id is None` bind. Should turn ~40 min into seconds.
-  - Step 3/4 (alias→track matching) took **~48 minutes** in the same run. Unprofiled — it
-    may be the same shape of problem or a different one. Measure before assuming.
+- 💡 **`land` step 3/4 (alias→track matching) is slow.** Re-measured 2026-10-17 on a rebuild of
+  the live library: **42:51** for 79,051 aliases (26,764 matched) — the alias ladder (submitted id → exact → fuzzy)
+  left it about where it was (~48 min on 2026-09-09).
+  Unprofiled — measure before assuming. (Step 1's ~40-minute `ILIKE` storm is gone: the identity
+  ladder's in-memory path index binds the live library's files in ~2 min.)
 
 ---
 
@@ -71,7 +58,10 @@ strings and paths, and every subsystem patches that its own way** (`ILIKE` on a 
 path, weighted `pg_trgm`, the exact 4-tuple unique key, flag-set buckets). The items below are
 one programme. **Decided 2026-10-16 (build order):** (1) identity ladder + fingerprints,
 (2) `wanted`, (3) Spotify as a live remote. The 🧭 items are settled; 💡 ones still want their own
-discussion. Build (1) in a fresh session.
+discussion. **(1) is built (2026-10-17)** — current state in CLAUDE.md *Identity ladder*, design
+and acceptance numbers in [docs/design/identity-ladder.md](docs/design/identity-ladder.md); still
+open from it: upgrading an agreeing binding's method, relocation on re-bind (fs-reconcile #12),
+writing ids into tags, `organize` layouts other than Apple's.
 
 Live numbers that scoped it (2026-10-16): 13,243 canonical tracks after dedup, **6,879 of them
 with no file anywhere in their group**; 6,986 files, all bound; 202,584 plays; 26,745 / 79,051
@@ -80,26 +70,6 @@ twice and never added), but it also hides unmatched duplicates of tracks that *w
 to, and the odd gem that never reached the library — so it is classified, never cut by play
 count alone.
 
-- 🧭 **Identity ladder.** One `resolve(claims) -> Track` with ordered matchers — MusicBrainz
-  recording id from tags → acoustic fingerprint (chromaprint / `fpcalc`) → normalized tags →
-  the Apple path rebuild as an *opt-in last* matcher. Every binding (file→track, alias→track,
-  twin→canon) records `method` + `confidence`, so a better matcher can later upgrade a weaker
-  binding and a wrong match can be audited. This is what makes `import <any directory>` work:
-  scan → enrich (tags, MBID, fingerprint, `content_hash`) → resolve, no iTunes layout assumed.
-  Also widens `MusicScanner.EXTENSIONS` (ogg/opus/wav/aiff/wma) and stops `organize` mirroring
-  Apple's layout as the only option.
-  - Dedup shrinks rather than disappears: with recording identity most twins collapse at `land`,
-    and what is left is "several files of one recording → pick the best" (`select_main_file`
-    already does that) plus *file-less* duplicates among the ghosts, which only metadata can
-    group — so the manual review path and the 881 hand-made groups stay.
-- 🧭 **Fingerprint-first ingest, no Picard prerequisite.** Picard tagging of the library is in
-  progress and the CD/DVD rips are untagged; tagging them by hand first is the thing that
-  frustrates. Airdrome can do what Picard does underneath: `fpcalc` → AcoustID lookup → MBID
-  (free API key, ~3 req/s, ~40 min for 7k files), or compare fingerprints locally without the
-  lookup. **Decided: both modes** — the fingerprint is computed once and stored on `TrackFile`;
-  local comparison answers "do I already have this recording" offline, the AcoustID lookup (he
-  has an account) is a separate command that adds the MBID. Then "point it at the CD rips and tell me which recordings I don't already have" is
-  one command, and Picard becomes optional polish afterwards, not a gate.
 - 💡 **`wanted` — the file-less tracks as a first-class list, classified.** Signals, not a play
   threshold: plays spread over months vs. one session, membership in any playlist, loved /
   rated, present in a *library* source (Apple XML / Spotify saved) vs. streaming-history only,

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from airdrome.library import MAIN_SUBDIR, MUSIC_SUBDIR
+from airdrome.library import COPIES_SUBDIR, MAIN_SUBDIR, MUSIC_SUBDIR
 from airdrome.library.organize import FileOrganizer
 from airdrome.models import Track, TrackFile
 
@@ -157,3 +157,168 @@ def test_on_item_callback_called(session, tmp_path):
     organizer.organize(session, _on_item=lambda i: calls.append(i))
 
     assert len(calls) == 2
+
+
+# ── upgrade swap ────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def placed_main(session, tmp_path: Path) -> tuple[Track, TrackFile, Path]:
+    """A track whose 128 kbps mp3 main already sits in Library/, plus one copy already in Copies/."""
+    dst_dir = tmp_path / "library"
+    track = Track(title="Song", artist="Artist", album="Album")
+    session.add(track)
+    session.flush()
+    rel = Path(MAIN_SUBDIR) / MUSIC_SUBDIR / track.generate_relative_path(ext="mp3")
+    copy_rel = Path(COPIES_SUBDIR) / MUSIC_SUBDIR / track.generate_relative_path(ext="mp3")
+    for r, payload in ((rel, b"old main"), (copy_rel, b"old copy")):
+        (dst_dir / r).parent.mkdir(parents=True, exist_ok=True)
+        (dst_dir / r).write_bytes(payload)
+    main = TrackFile(source_path=tmp_path / "gone/a.mp3", library_path=rel, is_main=True, bitrate=128_000)
+    copy = TrackFile(source_path=tmp_path / "gone/b.mp3", library_path=copy_rel, bitrate=96_000)
+    main.track = copy.track = track
+    session.add_all([main, copy])
+    session.flush()
+    return track, main, dst_dir
+
+
+def _add_upgrade(session, tmp_path: Path, track: Track, ext: str = "flac") -> TrackFile:
+    """An unplaced, higher-bitrate file of `track`, as `import` leaves an upgrade."""
+    src = tmp_path / "loose" / f"song.{ext}"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"better")
+    tf = TrackFile(source_path=src, bitrate=900_000)
+    tf.track = track
+    session.add(tf)
+    session.flush()
+    return tf
+
+
+def test_swap_upgrade_relocates_old_main_to_next_free_copy(session, tmp_path, placed_main) -> None:
+    """The upgrade takes the freed Library/ path (its own extension); the old main moves to Copies/."""
+    track, main, dst_dir = placed_main
+    freed = main.library_path
+    new = _add_upgrade(session, tmp_path, track)
+
+    n = FileOrganizer(dst_dir=dst_dir).organize(session)
+
+    assert n == 1
+    assert new.library_path == freed.with_suffix(".flac")
+    assert (dst_dir / new.library_path).read_bytes() == b"better"
+    assert not (dst_dir / freed).exists()
+    # Suffix 0 is the existing copy's, so the old main takes the next free one.
+    assert main.library_path == Path(COPIES_SUBDIR) / MUSIC_SUBDIR / track.generate_relative_path(
+        ext="mp3", suffix=1
+    )
+    assert (dst_dir / main.library_path).read_bytes() == b"old main"
+    assert new.is_main and not main.is_main
+
+
+def test_swap_in_copy_mode_still_moves_the_old_main(session, tmp_path, placed_main) -> None:
+    """Copy mode copies the upgrade in from its folder, but the old main is moved inside the library."""
+    track, main, dst_dir = placed_main
+    new = _add_upgrade(session, tmp_path, track, ext="mp3")
+    freed = main.library_path
+
+    FileOrganizer(dst_dir=dst_dir, copy=True).organize(session)
+
+    assert new.source_path.exists()
+    assert new.library_path == freed
+    assert (dst_dir / freed).read_bytes() == b"better"
+    assert (dst_dir / main.library_path).read_bytes() == b"old main"
+
+
+def test_dry_run_swap_plans_without_touching_disk(session, tmp_path, placed_main) -> None:
+    """Under dry run the swap only plans paths, even when the upgrade wants the very path it frees."""
+    track, main, dst_dir = placed_main
+    new = _add_upgrade(session, tmp_path, track, ext="mp3")
+    freed = main.library_path
+    before = sorted(p for p in dst_dir.rglob("*"))
+
+    FileOrganizer(dst_dir=dst_dir, dry_run=True).organize(session)
+
+    assert new.library_path == freed
+    assert main.library_path.parts[0] == COPIES_SUBDIR
+    assert sorted(p for p in dst_dir.rglob("*")) == before
+    assert (dst_dir / freed).read_bytes() == b"old main"
+    assert new.source_path.exists()
+
+
+def test_failed_swap_puts_the_old_main_back(session, tmp_path, placed_main, monkeypatch) -> None:
+    """If the upgrade's transfer fails, the old main returns to Library/ on disk and in the DB."""
+    track, main, dst_dir = placed_main
+    new = _add_upgrade(session, tmp_path, track, ext="mp3")
+    freed = main.library_path
+    real = FileOrganizer.transfer
+
+    def failing(self, src_abs, dst_abs, **kw):
+        if src_abs == new.source_path:
+            raise OSError("disk full")
+        return real(self, src_abs, dst_abs, **kw)
+
+    monkeypatch.setattr(FileOrganizer, "transfer", failing)
+
+    with pytest.raises(OSError, match="disk full"):
+        FileOrganizer(dst_dir=dst_dir).organize(session)
+
+    session.expire_all()
+    assert main.library_path == freed and main.is_main
+    assert (dst_dir / freed).read_bytes() == b"old main"
+    assert new.library_path is None and new.source_path.read_bytes() == b"better"
+    assert sorted(p.name for p in (dst_dir / COPIES_SUBDIR).rglob("*.mp3")) == [
+        "Song.mp3"
+    ]  # only the old copy
+
+
+def test_failed_swap_never_overwrites_an_upgrade_that_already_landed(
+    session, tmp_path, placed_main, monkeypatch
+) -> None:
+    """A failure after the upgrade was moved into Library/ leaves it there; the old main stays in Copies/."""
+    track, main, dst_dir = placed_main
+    new = _add_upgrade(session, tmp_path, track, ext="mp3")
+    freed = main.library_path
+    real = FileOrganizer.transfer
+
+    def lands_then_fails(self, src_abs, dst_abs, **kw):
+        result = real(self, src_abs, dst_abs, **kw)
+        if src_abs == new.source_path:
+            raise OSError("fsync failed")  # the move completed: the source is gone, the file is at freed
+        return result
+
+    monkeypatch.setattr(FileOrganizer, "transfer", lands_then_fails)
+
+    with pytest.raises(OSError, match="fsync failed"):
+        FileOrganizer(dst_dir=dst_dir).organize(session)
+
+    assert (dst_dir / freed).read_bytes() == b"better"
+    assert not new.source_path.exists()
+    # The DB follows the disk: the upgrade is the placed main, the old main is parked in Copies/.
+    assert new.library_path == freed and new.is_main
+    assert main.library_path.parts[0] == COPIES_SUBDIR and not main.is_main
+    assert (dst_dir / main.library_path).read_bytes() == b"old main"
+
+
+def test_failed_cross_extension_swap_removes_the_partial_upgrade(
+    session, tmp_path, placed_main, monkeypatch
+) -> None:
+    """M-3: a copy of a .flac upgrade that dies midway leaves no partial .flac beside the restored mp3."""
+    track, main, dst_dir = placed_main
+    new = _add_upgrade(session, tmp_path, track, ext="flac")
+    freed = main.library_path
+    target = dst_dir / freed.with_suffix(".flac")
+    real = FileOrganizer.transfer
+
+    def partial_then_fails(self, src_abs, dst_abs, **kw):
+        if src_abs == new.source_path:
+            dst_abs.write_bytes(b"bet")  # half-written, source untouched
+            raise OSError("disk full")
+        return real(self, src_abs, dst_abs, **kw)
+
+    monkeypatch.setattr(FileOrganizer, "transfer", partial_then_fails)
+
+    with pytest.raises(OSError, match="disk full"):
+        FileOrganizer(dst_dir=dst_dir, copy=True).organize(session)
+
+    assert not target.exists()
+    assert main.library_path == freed and (dst_dir / freed).read_bytes() == b"old main"
+    assert new.library_path is None and new.source_path.read_bytes() == b"better"

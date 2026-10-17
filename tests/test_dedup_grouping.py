@@ -87,3 +87,43 @@ def test_skips_tracks_with_none_id(session):
 
     # since `unflushed` doesn't participate in the union-find, g0 and g1 stay disjoint
     assert len(merged) == 2
+
+
+# --- cannot-link veto ---
+
+
+def test_cannot_link_splits_a_single_group(session):
+    a = make_track(session, "A")
+    b = make_track(session, "B")
+    c = make_track(session, "C")
+
+    merged = merge_overlapping_groups(session, [("g0", [a, b, c])], cannot_link={frozenset({a.id, b.id})})
+
+    # star from the group's first member: a-b is refused, a-c holds; lone b is dropped
+    assert [{t.id for t in tracks} for _, tracks in merged] == [{a.id, c.id}]
+
+
+def test_cannot_link_is_transitive_across_groups(session):
+    a = make_track(session, "A")
+    b = make_track(session, "B")
+    c = make_track(session, "C")
+
+    merged = merge_overlapping_groups(
+        session, [("g0", [c, a]), ("g1", [c, b])], cannot_link={frozenset({a.id, b.id})}
+    )
+
+    # b may not join through c; every track lands in exactly one output group
+    assert [{t.id for t in tracks} for _, tracks in merged] == [{a.id, c.id}]
+
+
+def test_cannot_link_pair_already_together_does_not_block_other_unions(session):
+    a = make_track(session, "A")
+    b = make_track(session, "B")
+    c = make_track(session, "C")
+
+    # g0 has no veto inside it; the a-c pair is vetoed only across g0 and g1
+    merged = merge_overlapping_groups(
+        session, [("g0", [a, b]), ("g1", [b, c])], cannot_link={frozenset({a.id, c.id})}
+    )
+
+    assert [{t.id for t in tracks} for _, tracks in merged] == [{a.id, b.id}]

@@ -4,16 +4,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 
 import sqlalchemy as sa
-from mutagen import File
 from sqlalchemy import ForeignKey, Index, UniqueConstraint, create_engine, select, text
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, validates
 from sqlalchemy.types import TypeDecorator
 
 from .cloud.apple.utils import generate_path
 from .conf import settings
-from .enums import Source
+from .enums import BindMethod, Source
 from .library import MAIN_SUBDIR
+from .library.tags import file_md5, read_tags
 from .normalize.norm import normalize_name
 
 
@@ -153,6 +154,9 @@ class Track(Base):
     # canon_id chains (A->B->C) never exist. Enforced at write time by
     # flatten_canon_chains(); all readers may resolve with a single hop.
     canon_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="SET NULL"), index=True)
+    # How the twin->canon link was made; meaningful only while canon_id is set.
+    canon_method: Mapped[BindMethod | None] = mapped_column(sa.Enum(BindMethod, native_enum=False))
+    canon_confidence: Mapped[float | None]
     canon: Mapped[Track | None] = relationship(
         "Track",
         foreign_keys=[canon_id],
@@ -301,6 +305,17 @@ class TrackFile(Base):
     track_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), index=True)
     track: Mapped[Track | None] = relationship(back_populates="files")
 
+    # Identity-ladder evidence. mbid_source: MBID = read from a tag, ACOUSTID = looked up.
+    recording_mbid: Mapped[str | None] = mapped_column(index=True)
+    mbid_source: Mapped[BindMethod | None] = mapped_column(sa.Enum(BindMethod, native_enum=False))
+    acoustid_id: Mapped[str | None]
+    content_hash: Mapped[str | None] = mapped_column(index=True)  # md5 hex of the file bytes
+    # chromaprint values stored as signed int32 (uint32 does not fit Postgres INTEGER)
+    fingerprint: Mapped[list[int] | None] = mapped_column(ARRAY(sa.Integer))
+    fp_duration: Mapped[float | None]
+    bind_method: Mapped[BindMethod | None] = mapped_column(sa.Enum(BindMethod, native_enum=False))
+    bind_confidence: Mapped[float | None]
+
     duration: Mapped[float | None]
     bitrate: Mapped[int | None]
     date: Mapped[str | None]
@@ -346,25 +361,25 @@ class TrackFile(Base):
         return self.source_path
 
     def enrich(self) -> None:
-        audio = File(self.absolute_path)
-        if audio is None:
-            raise ValueError("Unsupported or corrupted file")
-        tags = audio.tags or {}
-
-        def get(*keys: str) -> str | None:
-            for k in keys:
-                if k in tags:
-                    v = tags[k]
-                    return "; ".join(v) if isinstance(v, list) else str(v)
-            return None
-
-        self.artist = get("TPE1", "©ART")
-        self.album = get("TALB", "©alb")
-        self.album_artist = get("TPE2", "aART")
-        self.title = get("TIT2", "©nam")
-        self.date = get("TDRC", "TDOR", "©day")
-        self.duration = audio.info.length
-        self.bitrate = getattr(audio.info, "bitrate", 0)
+        """Read tags, ids and the md5 of the file at `absolute_path` into this row (no fingerprint)."""
+        path = self.absolute_path
+        t = read_tags(path)
+        self.artist = t.artist
+        self.album = t.album
+        self.album_artist = t.album_artist
+        self.title = t.title
+        self.date = t.date
+        self.duration = t.duration
+        self.bitrate = t.bitrate
+        self.acoustid_id = t.acoustid_id
+        if t.recording_mbid:
+            self.recording_mbid = t.recording_mbid
+            self.mbid_source = BindMethod.MBID
+        elif self.mbid_source != BindMethod.ACOUSTID:
+            # No tag id: keep an AcoustID lookup result across a re-read, drop anything else.
+            self.recording_mbid = None
+            self.mbid_source = None
+        self.content_hash = file_md5(path)
 
 
 @dataclass(frozen=True)
@@ -494,6 +509,8 @@ class TrackAlias(Base):
 
     track_id: Mapped[int | None] = mapped_column(ForeignKey("track.id"), index=True)
     track: Mapped[Track | None] = relationship(back_populates="aliases")
+    match_method: Mapped[BindMethod | None] = mapped_column(sa.Enum(BindMethod, native_enum=False))
+    match_confidence: Mapped[float | None]
 
     scrobbles: Mapped[list[TrackAliasScrobble]] = relationship(
         back_populates="alias", cascade="all, delete-orphan"
@@ -517,6 +534,9 @@ class TrackAliasScrobble(Base):
     alias: Mapped[TrackAlias] = relationship(back_populates="scrobbles")
     date: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), unique=True)
     platform: Mapped[Source] = mapped_column(sa.Enum(Source, native_enum=False))
+    # MusicBrainz ids carried by the scrobble: what the player submitted vs what the service mapped.
+    submitted_mbid: Mapped[str | None]
+    mapped_mbid: Mapped[str | None]
 
 
 class TrackPlay(Base):
@@ -643,6 +663,21 @@ class DedupGroupMember(Base):
     group: Mapped[DedupGroup] = relationship(back_populates="members")
     member_hash: Mapped[str] = mapped_column(index=True)
     canon_hash: Mapped[str | None]
+
+
+class ScanCache(Base):
+    """Per-path memo of expensive file analysis, valid while (size, mtime) are unchanged."""
+
+    __tablename__ = "scancache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    path: Mapped[str] = mapped_column(unique=True)
+    size: Mapped[int] = mapped_column(sa.BigInteger)
+    mtime: Mapped[float]
+    content_hash: Mapped[str | None]
+    fingerprint: Mapped[list[int] | None] = mapped_column(ARRAY(sa.Integer))
+    fp_duration: Mapped[float | None]
+    recording_mbid: Mapped[str | None]
 
 
 engine = create_engine(str(settings.db_dsn), echo=settings.db_echo)

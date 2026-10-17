@@ -67,6 +67,13 @@ Consequence: **tag changes do nothing physical until they reach the Track.**
     stays put; unify still only promotes orphans. Accepted limitation: an in-place tag edit that
     **changes identity** won't relocate the file until re-bind is built (organize keys off the
     unchanged Track).
+    **Partly superseded (2026-10-17, [identity-ladder.md](identity-ladder.md)):** the identity
+    ladder *is* the re-bind mechanism, but so far it resolves only *unbound* files: a bound file is
+    never re-resolved, so it never moves between tracks (upgrading an agreeing binding's method to
+    a stronger rung, which the design allows, is not built yet either). The one relocation built is the upgrade swap in
+    `organize` (old main `Library/` → `Copies/`, the better copy into `Library/`). Relocation on a
+    genuine re-bind stays deferred. Decision #11's re-enrich pass exists as `maint enrich`, and
+    #8's `content_hash` is computed by it.
 
 ## Build plan — three layers, each its own branch + tests
 

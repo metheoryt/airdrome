@@ -8,6 +8,7 @@ from airdrome.models import Track
 from .auto import compute_auto_dedup_groups
 from .grouping import CanonStrategy, flag_set, merge_overlapping_groups
 from .persistence import load_confirmed_groups, recompute_main_files, save_confirmed_groups
+from .recording import compute_recording_groups
 
 
 # Loose defaults for human review: three single-field sets (artist | album_artist
@@ -168,7 +169,13 @@ class Deduplicator:
     def fill_state(self) -> None:
         # Same grouping engine as auto-dedup: bucket per flag-set, then
         # union-merge overlapping groups so a track lands on a single page.
-        raw: list[tuple[str, list[Track]]] = []
+        # Recording groups come first: the automatic ones so every recording link can be
+        # reviewed and undone, and the review-only ones (fingerprint matches too far apart in
+        # duration to link silently) as unconfirmed candidates. No cannot-link veto here: the
+        # reviewer is the authority, and splitting a stored group's page would stop its stored
+        # choice from matching it.
+        auto, review = compute_recording_groups(self.s, self.strategy)
+        raw: list[tuple[str, list[Track]]] = [(_group_label(g), g) for g in (*auto, *review)]
         for flags in self.flag_sets:
             for group in compute_auto_dedup_groups(self.s, strategy=self.strategy, **flags):
                 raw.append((_group_label(group), group))

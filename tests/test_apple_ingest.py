@@ -9,6 +9,8 @@ from airdrome.cloud.sources import SourcePlaylist, SourcePlaylistTrack, SourceTr
 from airdrome.enums import Source
 from airdrome.library.unify import do_unify, unify_source_playlists, unify_source_tracks
 from airdrome.models import Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
+from airdrome.normalize.dedup.persistence import stored_cannot_links, stored_canons
+from tests.factories import make_dedup_group, make_track
 
 
 def _xml_track(session, source_id):
@@ -493,3 +495,41 @@ def test_do_unify_rebuild_playlists_drops_and_recreates(session):
     assert session.scalars(select(PlaylistLink)).all() == []
     rebuilt = session.scalars(select(Playlist).where(Playlist.name == "Real")).one()
     assert {pt.track_id for pt in rebuilt.tracks} == {_canonical_track_id(session, "Test Track")}
+
+
+# ── stored dedup groups keep their hashes (I-1, unify stage 1) ───────────────────
+
+
+def _data_with_hashed_fields() -> dict:
+    """An XML track carrying every hashed field a backfill could fill: year, length, track number."""
+    data = _track_data()
+    data.update({"Year": 1999, "Total Time": 200_000, "Track Number": 3})
+    return data
+
+
+def test_unify_never_backfills_hashed_fields_of_a_stored_group_member(session):
+    """A source track landing on a stored group's member leaves its hash, so the group still governs."""
+    member = make_track(session, "Test Track", "Test Artist", "Test Album", album_artist="Test Artist")
+    other = make_track(session, "Test Track", "Test Artist", "Live", album_artist="Test Artist")
+    make_dedup_group(session, [(member, None), (other, None)])  # "not duplicates"
+    canons, vetoes = stored_canons(session), stored_cannot_links(session)
+    assert canons and vetoes
+    data = _data_with_hashed_fields()
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    unify_source_tracks(session)
+
+    assert _xml_track(session, data["Track ID"]).one().track_id == member.id
+    assert (member.year, member.duration, member.track_n) == (None, None, None)
+    assert (stored_canons(session), stored_cannot_links(session)) == (canons, vetoes)
+
+
+def test_unify_backfills_hashed_fields_outside_stored_groups(session):
+    """With no stored group naming it, an existing track still takes year, length and track number."""
+    t = make_track(session, "Test Track", "Test Artist", "Test Album", album_artist="Test Artist")
+    data = _data_with_hashed_fields()
+    do_import_tracks(session, {str(data["Track ID"]): data})
+
+    unify_source_tracks(session)
+
+    assert (t.year, t.duration, t.track_n) == (1999, 200, 3)

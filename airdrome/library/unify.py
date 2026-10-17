@@ -9,8 +9,8 @@ rows (whatever a given import wrote) into the canonical records the rest of Aird
 2. **Source playlists** — every non-folder ``SourcePlaylist`` becomes or merges into a
    canonical ``Playlist``, deduplicated both by name (merge) and by identical track set (skip).
 3. **Orphan files** — ``TrackFile`` rows that *no* source claimed (e.g. scanned from disk but
-   never imported) are adopted: matched to an existing canonical ``Track`` by their own tags,
-   or made into one if no match exists.
+   never imported) go through the identity ladder (``ladder.resolve_file``): recording id →
+   fingerprint → tags, a new ``Track`` from tags being the last resort.
 
 Binding files — the subtle part
 --------------------------------
@@ -20,24 +20,26 @@ can disagree: tags get edited, go stale, or are missing entirely. So files reach
 through **two complementary passes with different join keys**, in this order:
 
   1. By **filename** (stage 1, ``_bind_track_files``): ``possible_locations`` rebuilds the Apple
-     on-disk path from the *source's* metadata and substring-matches ``source_path``. This binds
-     a file to its source track even when the file's own tags are messy or absent.
-  2. By **tags** (stage 3, ``_unify_orphan_files``): whatever the filename pass left unbound is
-     adopted via the file's embedded tags.
+     on-disk path from the *source's* metadata and tail-matches ``source_path`` through an in-memory
+     index (``PathTailIndex``). This binds a file to its source track even when the file's own tags
+     are messy or absent.
+  2. By **the ladder** (stage 3, ``_unify_orphan_files``): whatever the filename pass left unbound
+     is resolved by its recording id, then its fingerprint, then its embedded tags.
 
 Pass 1 is not redundant with pass 2: dropping it would re-route tag-divergent files into pass 2,
-which would mint a *second* canonical track from the tags — leaving one track with the source
-data and no file, and a duplicate with the file and no source data.
+whose tags rung would mint a *second* canonical track from the tags — leaving one track with the
+source data and no file, and a duplicate with the file and no source data. (Fingerprints cannot
+rescue those: an Apple source track has no audio to compare.)
 
 "Idempotent" means re-running unify only fills gaps: existing canonical records are reused and
-their NULL fields backfilled, never duplicated. Stages 1 and 3 share ``_upsert_track`` for that
-get-or-create-then-backfill logic; they differ only in where the metadata and files come from.
+their NULL fields backfilled, never duplicated — except a hashed field of a stored dedup group's
+member (``ladder.backfill``). Stage 1 uses ``upsert_track`` for that get-or-create-then-backfill
+logic; stage 3's ladder splits the two, backfilling only a track it binds to.
 """
 
-import contextlib
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from rich.progress import Progress, TaskID, TextColumn
 from sqlalchemy import delete, func, select
@@ -45,8 +47,11 @@ from sqlalchemy.orm import Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.console import console, detail, make_progress
-from airdrome.enums import Source
-from airdrome.models import AwareDatetime, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
+from airdrome.enums import BindMethod, Source
+from airdrome.library.enrich import fingerprint_files
+from airdrome.library.ladder import LadderContext, resolve_file, stored_member_hashes, upsert_track
+from airdrome.library.pathindex import PathTailIndex
+from airdrome.models import AwareDatetime, Playlist, PlaylistLink, PlaylistTrack, TrackFile
 
 
 def _progress(summary: str) -> Progress:
@@ -54,40 +59,34 @@ def _progress(summary: str) -> Progress:
     return make_progress(TextColumn(summary))
 
 
-def _upsert_track(s: Session, *, defaults: dict, **key: object) -> tuple[Track, bool, bool]:
-    """Get-or-create a canonical Track by ``key``, backfilling NULLs from ``defaults``.
-
-    Returns ``(track, created, updated)``: ``created`` if a new row was made, ``updated`` if an
-    existing row had any NULL fields filled. Shared by the source-track and orphan-file stages.
-    """
-    track, created = Track.get_or_create(s, defaults=defaults, **key)
-    updated = not created and track.fill_nulls(defaults)
-    return track, created, updated
-
-
 # ── Stage 1: source tracks ─────────────────────────────────────────────────────
 
 
-def _bind_track_files(source_track: SourceTrack, s: Session) -> list[TrackFile]:
-    """Find unbound TrackFiles whose on-disk path matches this source track's Apple naming.
+def _bind_track_files(source_track: SourceTrack, s: Session, index: PathTailIndex) -> list[TrackFile]:
+    """Bind unbound TrackFiles whose on-disk path matches this source track's Apple naming.
 
     This is the *filename* binding pass (see module docstring): it joins on ``source_path``, not
-    on the file's embedded tags, so it still works when those tags diverge from the source.
+    on the file's embedded tags, so it still works when those tags diverge from the source. The
+    path-tail ``index`` was built once per run; each bound file is claimed in it so no second
+    source track can take it.
     """
-    # source_path matching is a substring LIKE, so a single rel_path can hit multiple files
-    # (same tail under different roots), and overlapping possible_locations can re-hit the same
-    # file — hence .all() instead of .one_or_none() (which would raise), keyed by id to dedup.
-    # icontains (ILIKE), not contains (LIKE): the path rebuilt from source metadata and the path
-    # stored on disk routinely differ only in case, and a case-sensitive match drops those files.
-    # autoescape=True keeps '_' and '%' literal — paths sanitize '/' to '_' (e.g. "AC_DC"), and an
-    # unescaped '_' is a single-char LIKE wildcard that would silently over-match.
-    tfs: dict[int, TrackFile] = {}
+    # One rel_path can hit several files (same tail under different roots) and overlapping
+    # possible_locations can re-hit the same file — hence dict keyed by id to dedup.
+    # Matching is case-insensitive (the rebuilt path and the stored one routinely differ in case)
+    # and on a component boundary; '_' stays literal (paths sanitize '/' to '_', e.g. "AC_DC").
+    ids: dict[int, None] = {}
     for rel_path in source_track.possible_locations(max_suffix=2):
-        stmt = select(TrackFile).where(TrackFile.source_path.icontains(rel_path, autoescape=True))
-        for tf in s.scalars(stmt):
-            if tf.track_id is None:
-                tfs[tf.id] = tf
-    return list(tfs.values())
+        ids.update(dict.fromkeys(index.lookup(rel_path)))
+    if not ids:
+        return []
+    stmt = select(TrackFile).where(TrackFile.id.in_(ids), TrackFile.track_id.is_(None)).order_by(TrackFile.id)
+    tfs = list(s.scalars(stmt))
+    for tf in tfs:
+        # The path is rebuilt from the source track's own metadata, so it outranks tag evidence.
+        tf.bind_method = BindMethod.APPLE_PATH
+        tf.bind_confidence = 0.9
+        index.claim(tf.id)
+    return tfs
 
 
 def expects_local_file(st: SourceTrack) -> bool:
@@ -106,7 +105,10 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
     """Yield ``(created, updated, n_files_bound)`` per unlinked SourceTrack as it is unified."""
     # Process in insertion order: makes runs reproducible and gives a deterministic "first import wins"
     # for canonical metadata — the earliest-inserted source row creates the Track and sets its defaults,
-    # later siblings only backfill NULLs (see _upsert_track).
+    # later siblings only backfill NULLs (see upsert_track).
+    index = PathTailIndex.build(s)
+    # Empty on a fresh DB (groups are restored by `dedup`), so a first `land` backfills everything.
+    stored_hashes = stored_member_hashes(s)
     stmt = select(SourceTrack).where(SourceTrack.track_id.is_(None)).order_by(SourceTrack.id)
     for st in s.scalars(stmt):
         st: SourceTrack
@@ -122,13 +124,14 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
             "album_rating": st.album_rating if not st.album_rating_computed else None,
             "date_added": st.date_added,
         }
-        track, created, updated = _upsert_track(
+        track, created, updated = upsert_track(
             s,
             title=st.title,
             artist=st.artist,
             album=st.album,
             album_artist=st.album_artist,
             defaults=defaults,
+            stored_hashes=stored_hashes,
         )
         st.track = track
 
@@ -136,7 +139,7 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
         # Appends stay idempotent without a membership check here: _bind_track_files dedups within a
         # call and only returns unbound files, and the per-source-track flush below sets track_id so
         # the next source track's guard skips files already claimed.
-        tfs = _bind_track_files(st, s)
+        tfs = _bind_track_files(st, s, index)
         for tf in tfs:
             track.files.append(tf)
         # Warn only on a genuine miss. The same physical file usually has two source rows (Apple XML
@@ -362,53 +365,40 @@ def unify_source_playlists(
 # ── Stage 3: orphan files ───────────────────────────────────────────────────────
 
 
-def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> tuple[int, int]:
-    """Adopt titled TrackFiles that the filename pass left unbound. Returns ``(created, updated)``.
+def _unify_orphan_files(s: Session, progress: Progress, task: TaskID) -> LadderContext:
+    """Resolve every TrackFile the filename pass left unbound through the identity ladder.
 
-    This is the *tags* binding pass (see module docstring): ``_upsert_track`` matches the file's
-    embedded tags to an existing canonical Track when it can, and only creates a new one if not —
-    so a file whose tags happen to match a source-built track binds to it rather than duplicating.
+    Returns the run's ``LadderContext``, whose ``stats`` count created/updated tracks, files left
+    ``unbound``, and bindings per method. Files lacking a fingerprint get one first, so ``land`` works
+    without a prior ``maint enrich``; a file that cannot be fingerprinted still reaches the tags rung.
     """
-    created = updated = 0
-    # Insertion order for reproducibility, mirroring the source-track stage.
-    stmt = (
-        select(TrackFile)
-        .where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))
-        .order_by(TrackFile.id)
-    )
-    for tf in s.scalars(stmt):
-        year = None
-        if tf.date:
-            with contextlib.suppress(ValueError, IndexError):
-                year = int(tf.date[:4])
-        defaults = {
-            "duration": round(tf.duration) if tf.duration else None,
-            "year": year,
-        }
-        try:
-            st = tf.source_path.stat()
-            # st_ctime is creation on Windows / inode-change on Linux; mtime is content edit.
-            # min() yields the oldest known timestamp for the file across platforms.
-            defaults["date_added"] = datetime.fromtimestamp(min(st.st_ctime, st.st_mtime), tz=UTC)
-        except OSError:
-            pass
+    # Insertion order for reproducibility, mirroring the source-track stage. No title filter: a file
+    # with junk or missing tags can still resolve by recording id or fingerprint.
+    orphans = list(s.scalars(select(TrackFile).where(TrackFile.track_id.is_(None)).order_by(TrackFile.id)))
+    # A missing file cannot be fingerprinted; skip it rather than spawn fpcalc just to fail.
+    unprinted = [tf for tf in orphans if tf.fingerprint is None and tf.absolute_path.is_file()]
+    if unprinted:
+        console.print(f"  fingerprinting {len(unprinted)} unbound file(s)")
+        fingerprint_files(s, unprinted)
 
-        track, was_created, was_updated = _upsert_track(
-            s,
-            title=tf.title,
-            artist=tf.artist,
-            album=tf.album,
-            album_artist=tf.album_artist,
-            defaults=defaults,
-        )
-        created += was_created
-        updated += was_updated
-
-        tf.track = track
+    ctx = LadderContext.build(s)
+    pending: list[TrackFile] = []
+    for tf in orphans:
+        if resolve_file(s, tf, ctx) is None:
+            pending.append(tf)
         s.flush()
-        progress.update(task, advance=1, created=created, updated=updated)
-
-    return created, updated
+        progress.update(task, advance=1, created=ctx.stats["created"], updated=ctx.stats["updated"])
+    # A title-less file resolved before its tagged sibling found nothing in ctx yet; the sibling's
+    # binding may now match it (and that binding may enable another). Retry until a pass binds none,
+    # so one land binds what a second land would.
+    while pending:
+        still = [tf for tf in pending if resolve_file(s, tf, ctx) is None]
+        s.flush()
+        if len(still) == len(pending):
+            break
+        pending = still
+    ctx.stats["unbound"] = len(pending)
+    return ctx
 
 
 # ── Orchestration ───────────────────────────────────────────────────────────────
@@ -445,11 +435,6 @@ def do_unify(s: Session, *, merge_playlists: bool = False, rebuild_playlists: bo
         select(func.count()).select_from(SourceTrack).where(SourceTrack.track_id.is_(None))
     ).one()
     pl_count = s.scalars(select(func.count()).select_from(SourcePlaylist).where(~SourcePlaylist.folder)).one()
-    orphan_count = s.scalars(
-        select(func.count())
-        .select_from(TrackFile)
-        .where(TrackFile.track_id.is_(None), TrackFile.title.is_not(None))
-    ).one()
 
     with _progress(
         "[green]{task.fields[created]} new[/green]  "
@@ -472,15 +457,27 @@ def do_unify(s: Session, *, merge_playlists: bool = False, rebuild_playlists: bo
         task = progress.add_task("Playlists", total=pl_count, pl_created=0, tr_linked=0)
         pl_created, tr_linked = unify_source_playlists(s, progress, task, merge_by_name=merge_playlists)
 
+    # Counted after stage 1, which binds many of them; whatever is still unbound enters the ladder.
+    orphan_count = s.scalars(
+        select(func.count()).select_from(TrackFile).where(TrackFile.track_id.is_(None))
+    ).one()
     with _progress(
         "[green]{task.fields[created]} new[/green]  [yellow]{task.fields[updated]} updated[/yellow]"
     ) as progress:
         task = progress.add_task("Orphan files", total=orphan_count, created=0, updated=0)
-        orphan_created, orphan_updated = _unify_orphan_files(s, progress, task)
+        ladder = _unify_orphan_files(s, progress, task).stats
 
     console.print(
         f"  Tracks: [green]{created} new[/green]  [yellow]{updated} updated[/yellow]  "
         f"[cyan]{files_bound} files bound[/cyan]\n"
         f"  Playlists: [magenta]{pl_created} new[/magenta]  [blue]{tr_linked} tracks linked[/blue]\n"
-        f"  Orphan files: [green]{orphan_created} new[/green]  [yellow]{orphan_updated} updated[/yellow]"
+        f"  Orphan files: [green]{ladder['created']} new[/green]  "
+        f"[yellow]{ladder['updated']} updated[/yellow]  [red]{ladder['unbound']} left unbound[/red]  "
+        f"[cyan]by {_method_summary(ladder)}[/cyan]"
     )
+
+
+def _method_summary(stats: Counter[str]) -> str:
+    """``method n`` pairs for the ladder's bindings, in rung order; ``none`` when nothing was bound."""
+    parts = [f"{m} {stats[m]}" for m in BindMethod if stats[m]]
+    return ", ".join(parts) or "none"

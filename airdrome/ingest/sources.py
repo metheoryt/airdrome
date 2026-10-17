@@ -8,6 +8,8 @@ from functools import cached_property
 from pathlib import Path
 from typing import ClassVar
 
+from rich.markup import escape
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from airdrome.cloud.apple.media_services import import_ms_playlist, import_ms_track
@@ -18,13 +20,15 @@ from airdrome.cloud.lastfm import LastFMScrobbleParser
 from airdrome.cloud.listenbrainz import ListenBrainzScrobbleParser
 from airdrome.cloud.spotify import SpotifyScrobbleParser
 from airdrome.console import console, make_import_progress, make_progress
-from airdrome.library.scan import MusicScanner
+from airdrome.library.ladder import resolve_file
+from airdrome.library.scan import Candidate, MusicScanner, Verdict, classify, library_context
+from airdrome.library.tags import AUDIO_EXTENSIONS
+from airdrome.models import TrackFile
 from airdrome.scrobbles.parser import ScrobbleParser
 
 from .base import DataKind, Importer
 
 
-_AUDIO_EXTENSIONS = {".mp3", ".m4a", ".flac"}
 _MS_SIGNATURES = ("Apple Music Library Tracks", "Apple Music Play Activity")
 
 
@@ -235,16 +239,72 @@ class LastFmImporter(_ScrobbleImporter):
         return False
 
 
+def _report_line(c: Candidate) -> str:
+    """One report line: verdict, artist — title, and the copy count.
+
+    Loose files are often untagged, so a blank tag falls back to the matched library track's, then
+    (title only) to the file name.
+    """
+    canon = c.group_canon
+    artist = c.tags.artist or (canon.artist if canon else None)
+    title = c.tags.title or (canon.title if canon else None) or c.best.name
+    copies = f"  [dim]\\[{len(c.paths)} copies][/dim]" if len(c.paths) > 1 else ""
+    return f"  {c.verdict.value:<7}  {escape(artist or '?')} — {escape(title)}{copies}"
+
+
 class MusicFolderImporter(Importer):
     name = "folder"
     label = "Music folder"
     provides = DataKind.TRACKS
 
+    def __init__(self, path: Path, *more: Path) -> None:
+        """Import `path` and any `more` folders as one batch, so repeats across them collapse."""
+        super().__init__(path)
+        self.roots = [path, *more]
+
     @classmethod
     def detect(cls, path: Path) -> bool:
         if not path.is_dir():
             return False
-        return any(p.suffix.lower() in _AUDIO_EXTENSIONS for p in path.rglob("*") if p.is_file())
+        return any(p.suffix.lower() in AUDIO_EXTENSIONS for p in path.rglob("*") if p.is_file())
 
     def import_tracks(self, s: Session) -> None:
-        MusicScanner(target_path=self.path).run(s)
+        """Empty library: scan it all. Otherwise classify, report, import new recordings and upgrades."""
+        if not s.scalar(select(exists().where(TrackFile.id.is_not(None)))):
+            # Nothing to compare against: the PicardedMusic-style bulk scan, binding left to `land`.
+            for root in self.roots:
+                MusicScanner(target_path=root).run(s)
+            return
+
+        ctx = library_context(s)
+        candidates = classify(s, self.roots, ctx=ctx)
+        # The report comes before any write, so `-n` (which only rolls back) prints the same thing.
+        for c in candidates:
+            console.print(_report_line(c))
+
+        to_import = unbound = 0
+        for c in candidates:
+            if c.verdict is Verdict.HAVE or c.in_library:
+                continue
+            tf = c.to_trackfile()
+            s.add(tf)
+            s.flush()
+            # Binding now (not at `land`) puts an upgrade in its group, so `organize` can swap it in.
+            # None: no rung matched and there is no title to make a Track from (R4). Until it is tagged
+            # nothing binds it later either, so it is reported below rather than silently counted.
+            unbound += resolve_file(s, tf, ctx) is None
+            s.flush()
+            to_import += 1
+
+        counts = {v: sum(c.verdict is v for c in candidates) for v in Verdict}
+        _done(
+            "Files",
+            f"[green]{counts[Verdict.NEW]}[/green] new, {counts[Verdict.UPGRADE]} upgrade, "
+            # Mode-neutral wording: under -n the same line prints, and the session is rolled back.
+            f"[dim]{counts[Verdict.HAVE]} have[/dim] — {to_import} file(s) to import",
+        )
+        if unbound:
+            console.print(
+                f"  [yellow]{unbound} new file(s) have no tags:[/yellow] imported unbound — tag them, "
+                "then `maint enrich` + `land`"
+            )

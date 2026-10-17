@@ -25,7 +25,9 @@ from .options import DRY_RUN, YES
 from .state import AppState
 
 
-sync_app = typer.Typer(help="Reconcile playlists across remotes (cloud sources + backends).")
+sync_app = typer.Typer(
+    help="Reconcile playlists across remotes (cloud sources + backends).", pretty_exceptions_show_locals=False
+)
 
 # `sync all` order: read-only sources first, then read-write backends.
 ALL_REMOTES = (Source.APPLE_XML, Source.APPLE_MS, Source.NAVIDROME)

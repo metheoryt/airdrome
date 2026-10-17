@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from airdrome.enums import Source
 from airdrome.models import TrackAlias
-from airdrome.scrobbles.parser import ScrobbleParser
+from airdrome.scrobbles.parser import ScrobbleParser, ScrobbleRecord
 
 from .package import AppleMediaServicesPackage
 
@@ -56,6 +56,6 @@ class AppleScrobbleParser(ScrobbleParser):
     def __init__(self, path: Path) -> None:
         self._package = AppleMediaServicesPackage(path)
 
-    def _iterate_scrobbles(self) -> Iterator[tuple[TrackAlias, datetime]]:
+    def _iterate_scrobbles(self) -> Iterator[ScrobbleRecord]:
         for r in _parse_play_activity(self._package.play_activity_text()):
-            yield TrackAlias(album=r.album_name, title=r.song_name), r.event_ts
+            yield ScrobbleRecord(TrackAlias(album=r.album_name, title=r.song_name), r.event_ts)

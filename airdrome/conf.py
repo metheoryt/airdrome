@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, PostgresDsn
+from pydantic import Field, PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     navidrome_db_dsn: str | None = None
     navidrome_user: str | None = None
     navidrome_port: int = 4533
+
+    # AcoustID application key for fingerprint lookups; unset disables the lookup rung.
+    acoustid_client_key: SecretStr | None = None
 
     @property
     def duplicates_file(self) -> Path:

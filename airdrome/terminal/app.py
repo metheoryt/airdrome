@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from airdrome.conf import settings
 from airdrome.console import console, done, set_verbosity, step
 from airdrome.ingest import BY_NAME, DataKind, Importer, detect
+from airdrome.ingest.sources import MusicFolderImporter
 from airdrome.library.unify import do_unify
 from airdrome.migrations import upgrade_to_head
 from airdrome.models import engine
@@ -37,7 +38,7 @@ Typical flow (run in order):
 Run `status` anytime for a read-only snapshot of config and pipeline progress.
 Every write command is idempotent and takes --dry-run/-n. Run any command with --help."""
 
-app = typer.Typer(help=_HELP)
+app = typer.Typer(help=_HELP, pretty_exceptions_show_locals=False)
 app.command("status")(status)
 pipeline.register(app)
 app.add_typer(sync_app, name="sync")
@@ -119,7 +120,11 @@ def import_(
     no_scrobbles: bool = typer.Option(False, "--no-scrobbles", help="Skip importing scrobbles"),
     dry_run: bool = DRY_RUN,
 ) -> None:
-    """Auto-detect the source at each PATH and import its tracks, playlists, and scrobbles."""
+    """Auto-detect the source at each PATH and import its tracks, playlists, and scrobbles.
+
+    Music folders are classified against the library first: each recording is reported as new, have
+    or upgrade, and only new recordings and upgrades are imported (with -n, only reported).
+    """
     state: AppState = ctx.obj
     state.dry_run = dry_run
 
@@ -134,7 +139,19 @@ def import_(
     # Resolve every importer up front so an unrecognized/ambiguous path fails before we write anything.
     plan = [(path, _resolve_importer(path, as_)) for path in paths]
 
-    for path, importer_cls in plan:
+    # Music folders go in as one batch at the first folder's place: `classify` collapses repeats
+    # across all of them, so a song copied into two of the given folders is reported once.
+    folders = [path for path, cls in plan if cls is MusicFolderImporter]
+    importers: list[Importer] = []
+    for path, cls in plan:
+        if cls is not MusicFolderImporter:
+            importers.append(cls(path))
+        elif path is folders[0]:
+            importers.append(MusicFolderImporter(*folders))
+
+    for importer in importers:
+        importer_cls = type(importer)
+        path = ", ".join(map(str, getattr(importer, "roots", [importer.path])))
         kinds = importer_cls.provides & wanted
         if not kinds:
             console.print(
@@ -146,7 +163,7 @@ def import_(
             f"[bold]Importing {importer_cls.label}[/bold] "
             f"[dim]{path} ({', '.join(k.name.lower() for k in kinds)})[/dim]"
         )
-        importer_cls(path).ingest(state.session, kinds)
+        importer.ingest(state.session, kinds)
 
 
 @app.command("land")

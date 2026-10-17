@@ -17,7 +17,7 @@ from .options import YES
 from .state import AppState
 
 
-navi_app = typer.Typer(help="Sync into Navidrome")
+navi_app = typer.Typer(help="Sync into Navidrome", pretty_exceptions_show_locals=False)
 
 
 def _require_user() -> str:

@@ -30,3 +30,20 @@ _SERVICE: dict[Source, str] = {
     Source.LISTENBRAINZ: "listenbrainz",
     Source.NAVIDROME: "navidrome",
 }
+
+
+class BindMethod(StrEnum):
+    """How an identity link (file->track, alias->track, twin->canon) was established.
+
+    The rungs of the identity ladder, strongest evidence first, plus the manual override.
+    On `TrackFile.mbid_source` only MBID (read from a tag) and ACOUSTID (looked up) occur.
+    """
+
+    MBID = "mbid"
+    ACOUSTID = "acoustid"
+    FINGERPRINT = "fingerprint"
+    TAGS_EXACT = "tags_exact"
+    TAGS_FUZZY = "tags_fuzzy"
+    APPLE_PATH = "apple_path"
+    DEDUP_FLAGS = "dedup_flags"
+    MANUAL = "manual"

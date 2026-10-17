@@ -380,3 +380,20 @@ def test_flatten_multiple_disconnected_chains(session):
     session.refresh(z)
     assert c.canon_id == a.id
     assert z.canon_id == x.id
+
+
+def test_overrides_mark_manual_links_and_clear_unlinked(session):
+    from airdrome.enums import BindMethod
+
+    t1 = make_track(session, "Song", "Artist", "Album A")
+    t2 = make_track(session, "Song", "Artist", "Album B")
+    t3 = make_track(session, "Song", "Artist", "Album C")
+    t2.canon_id, t2.canon_method = t1.id, BindMethod.DEDUP_FLAGS  # auto already agreed
+    t3.canon_id, t3.canon_method, t3.canon_confidence = t1.id, BindMethod.FINGERPRINT, 0.9
+    session.flush()
+    make_dedup_group(session, [(t1, None), (t2, t1), (t3, None)])
+
+    apply_manual_overrides(session)
+
+    assert (t2.canon_id, t2.canon_method, t2.canon_confidence) == (t1.id, BindMethod.MANUAL, 1.0)
+    assert (t3.canon_id, t3.canon_method, t3.canon_confidence) == (None, None, None)

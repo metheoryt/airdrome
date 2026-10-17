@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: bc7f40a34db0
+Revision ID: 01b3d36531f5
 Revises:
-Create Date: 2026-06-05 20:21:58.744478
+Create Date: 2026-10-17 08:52:05.888226
 
 """
 
@@ -16,7 +16,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = "bc7f40a34db0"
+revision: str = "01b3d36531f5"
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -57,6 +57,19 @@ def upgrade() -> None:
         sa.Column("date_modified", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("platform", "source_id"),
+    )
+    op.create_table(
+        "scancache",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("path", sa.String(), nullable=False),
+        sa.Column("size", sa.BigInteger(), nullable=False),
+        sa.Column("mtime", sa.Float(), nullable=False),
+        sa.Column("content_hash", sa.String(), nullable=True),
+        sa.Column("fingerprint", postgresql.ARRAY(sa.Integer()), nullable=True),
+        sa.Column("fp_duration", sa.Float(), nullable=True),
+        sa.Column("recording_mbid", sa.String(), nullable=True),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("path"),
     )
     op.create_table(
         "source_playlist",
@@ -107,6 +120,23 @@ def upgrade() -> None:
         sa.Column("album_artist_norm", sa.String(), nullable=False),
         sa.Column("album_norm", sa.String(), nullable=False),
         sa.Column("canon_id", sa.Integer(), nullable=True),
+        sa.Column(
+            "canon_method",
+            sa.Enum(
+                "MBID",
+                "ACOUSTID",
+                "FINGERPRINT",
+                "TAGS_EXACT",
+                "TAGS_FUZZY",
+                "APPLE_PATH",
+                "DEDUP_FLAGS",
+                "MANUAL",
+                name="bindmethod",
+                native_enum=False,
+            ),
+            nullable=True,
+        ),
+        sa.Column("canon_confidence", sa.Float(), nullable=True),
         sa.ForeignKeyConstraint(["canon_id"], ["track.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("title", "artist", "album", "album_artist"),
@@ -183,8 +213,8 @@ def upgrade() -> None:
         sa.Column("synced_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["playlist_id"], ["playlist.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("remote", "external_id"),
         sa.UniqueConstraint("playlist_id", "remote"),
+        sa.UniqueConstraint("remote", "external_id"),
     )
     op.create_index(op.f("ix_playlistlink_playlist_id"), "playlistlink", ["playlist_id"], unique=False)
     op.create_table(
@@ -252,6 +282,23 @@ def upgrade() -> None:
         sa.Column("title_norm", sa.String(), nullable=False),
         sa.Column("album_norm", sa.String(), nullable=False),
         sa.Column("track_id", sa.Integer(), nullable=True),
+        sa.Column(
+            "match_method",
+            sa.Enum(
+                "MBID",
+                "ACOUSTID",
+                "FINGERPRINT",
+                "TAGS_EXACT",
+                "TAGS_FUZZY",
+                "APPLE_PATH",
+                "DEDUP_FLAGS",
+                "MANUAL",
+                name="bindmethod",
+                native_enum=False,
+            ),
+            nullable=True,
+        ),
+        sa.Column("match_confidence", sa.Float(), nullable=True),
         sa.ForeignKeyConstraint(
             ["track_id"],
             ["track.id"],
@@ -293,6 +340,44 @@ def upgrade() -> None:
         sa.Column("library_path", airdrome.models.PathType(), nullable=True),
         sa.Column("is_main", sa.Boolean(), nullable=False),
         sa.Column("track_id", sa.Integer(), nullable=True),
+        sa.Column("recording_mbid", sa.String(), nullable=True),
+        sa.Column(
+            "mbid_source",
+            sa.Enum(
+                "MBID",
+                "ACOUSTID",
+                "FINGERPRINT",
+                "TAGS_EXACT",
+                "TAGS_FUZZY",
+                "APPLE_PATH",
+                "DEDUP_FLAGS",
+                "MANUAL",
+                name="bindmethod",
+                native_enum=False,
+            ),
+            nullable=True,
+        ),
+        sa.Column("acoustid_id", sa.String(), nullable=True),
+        sa.Column("content_hash", sa.String(), nullable=True),
+        sa.Column("fingerprint", postgresql.ARRAY(sa.Integer()), nullable=True),
+        sa.Column("fp_duration", sa.Float(), nullable=True),
+        sa.Column(
+            "bind_method",
+            sa.Enum(
+                "MBID",
+                "ACOUSTID",
+                "FINGERPRINT",
+                "TAGS_EXACT",
+                "TAGS_FUZZY",
+                "APPLE_PATH",
+                "DEDUP_FLAGS",
+                "MANUAL",
+                name="bindmethod",
+                native_enum=False,
+            ),
+            nullable=True,
+        ),
+        sa.Column("bind_confidence", sa.Float(), nullable=True),
         sa.Column("duration", sa.Float(), nullable=True),
         sa.Column("bitrate", sa.Integer(), nullable=True),
         sa.Column("date", sa.String(), nullable=True),
@@ -336,6 +421,8 @@ def upgrade() -> None:
         postgresql_ops={"artist_norm": "gin_trgm_ops"},
         postgresql_where=sa.text("artist_norm <> ''"),
     )
+    op.create_index(op.f("ix_trackfile_content_hash"), "trackfile", ["content_hash"], unique=False)
+    op.create_index(op.f("ix_trackfile_recording_mbid"), "trackfile", ["recording_mbid"], unique=False)
     op.create_index(
         "ix_trackfile_title_norm_trgm",
         "trackfile",
@@ -383,6 +470,8 @@ def upgrade() -> None:
             ),
             nullable=False,
         ),
+        sa.Column("submitted_mbid", sa.String(), nullable=True),
+        sa.Column("mapped_mbid", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(["alias_id"], ["trackalias.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("date"),
@@ -436,6 +525,8 @@ def downgrade() -> None:
         postgresql_using="gin",
         postgresql_ops={"title_norm": "gin_trgm_ops"},
     )
+    op.drop_index(op.f("ix_trackfile_recording_mbid"), table_name="trackfile")
+    op.drop_index(op.f("ix_trackfile_content_hash"), table_name="trackfile")
     op.drop_index(
         "ix_trackfile_artist_norm_trgm",
         table_name="trackfile",
@@ -521,6 +612,7 @@ def downgrade() -> None:
     )
     op.drop_table("track")
     op.drop_table("source_playlist")
+    op.drop_table("scancache")
     op.drop_table("playlist")
     op.drop_table("dedupgroup")
     # ### end Alembic commands ###

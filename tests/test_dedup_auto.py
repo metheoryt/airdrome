@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from airdrome.enums import BindMethod
 from airdrome.normalize.dedup.auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
 from airdrome.normalize.dedup.grouping import CanonStrategy, flag_set
 
@@ -248,6 +249,7 @@ def test_auto_deduplicate_applies_stored_manual_overrides(session):
     session.refresh(t1)
     session.refresh(t2)
 
-    assert result.manual_changes >= 1
+    assert result.manual_changes == 2  # the flip: t2 loses its auto canon, t1 gains t2
     assert t2.canon_id is None  # user's pick
     assert t1.canon_id == t2.id
+    assert t1.canon_method == BindMethod.MANUAL

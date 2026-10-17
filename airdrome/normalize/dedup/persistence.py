@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from itertools import combinations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased
 
 from airdrome.console import console
+from airdrome.enums import BindMethod
 from airdrome.models import DedupGroup, DedupGroupMember, Track, TrackGroup
 
 
@@ -156,48 +158,87 @@ def load_confirmed_groups(session: Session, pages: dict[str, Page]) -> None:
     console.print(f"[dim]Loaded {n_restored}/{len(index)} group(s) from DB[/dim]")
 
 
-def apply_manual_overrides(session: Session) -> int:
-    """Apply stored manual dedup choices onto Track.canon_id.
+def stored_canons(session: Session) -> dict[int, int | None]:
+    """Track id -> the canon its stored group assigns (None: the track is a root of its group).
 
-    A stored group governs its tracks entirely: for every group still fully
-    present in the library (same member-hash multiset), each member's
-    canon_id is set to the stored choice (or cleared), overriding any auto
-    canon. Caller is responsible for committing.
+    Only groups still fully present in the library (same member-hash multiset) govern their
+    tracks, so a partial, possibly-misleading choice is never applied. A member whose stored
+    canon is no longer in the library is left out.
     """
     index = _load_stored_index(session)
     if not index:
-        return 0
+        return {}
 
     by_hash: dict[str, list[Track]] = {}
     for t in session.scalars(select(Track)):
         by_hash.setdefault(t.duplicate_hash, []).append(t)
 
-    changed = 0
+    governed: dict[int, int | None] = {}
     for hashes, group in index.items():
         present = tuple(sorted(h for h in hashes if h in by_hash))
-        # Require the whole group to still be present so we never apply a
-        # partial, possibly-misleading override.
         if present != hashes:
             continue
-        canon_by_member = {m.member_hash: m.canon_hash for m in group.members}
-        for member_hash, tracks in by_hash.items():
-            if member_hash not in canon_by_member:
-                continue
-            canon_hash = canon_by_member[member_hash]
+        for m in group.members:
             canon_id = None
-            if canon_hash is not None:
-                canon_tracks = by_hash.get(canon_hash)
+            if m.canon_hash is not None:
+                canon_tracks = by_hash.get(m.canon_hash)
                 if not canon_tracks:
                     continue
                 canon_id = canon_tracks[0].id
-            for t in tracks:
-                new_canon = None if canon_id == t.id else canon_id
-                if t.canon_id != new_canon:
-                    t.canon_id = new_canon
-                    session.add(t)
-                    changed += 1
+            for t in by_hash[m.member_hash]:
+                governed[t.id] = None if canon_id == t.id else canon_id
+    return governed
+
+
+def apply_manual_overrides(session: Session) -> int:
+    """Apply stored manual dedup choices onto Track.canon_id.
+
+    A stored group governs its tracks entirely (see `stored_canons`): each
+    member's canon_id is set to the stored choice (or cleared), overriding any
+    auto canon. Caller is responsible for committing.
+    """
+    governed = stored_canons(session)
+    changed = 0
+    for tid, new_canon in governed.items():
+        t = session.get_one(Track, tid)
+        if t.canon_id != new_canon:
+            t.canon_id = new_canon
+            changed += 1
+        # The stored choice governs the link even where auto agreed, so the method is
+        # MANUAL either way; a member left without a canon carries no link to describe.
+        linked = new_canon is not None
+        t.canon_method = BindMethod.MANUAL if linked else None
+        t.canon_confidence = 1.0 if linked else None
+        session.add(t)
     session.flush()
     return changed
+
+
+def stored_cannot_links(session: Session) -> set[frozenset[int]]:
+    """Track-id pairs a stored group keeps apart: members whose resolved canons differ.
+
+    A member resolves to its stored canon, or to itself when it has none, so an all-NULL
+    ("not duplicates") group vetoes every pair. Unlike `apply_manual_overrides`, a group need not
+    be wholly present: the veto is a hard constraint on whichever of its members remain.
+    """
+    groups = list(session.scalars(select(DedupGroup)))
+    if not groups:
+        return set()
+
+    by_hash: dict[str, list[int]] = {}
+    for t in session.scalars(select(Track)):
+        by_hash.setdefault(t.duplicate_hash, []).append(t.id)
+
+    pairs: set[frozenset[int]] = set()
+    for group in groups:
+        resolved = {m.member_hash: m.canon_hash or m.member_hash for m in group.members}
+        for h1, h2 in combinations(resolved, 2):
+            if resolved[h1] == resolved[h2]:
+                continue
+            pairs.update(
+                frozenset({a, b}) for a in by_hash.get(h1, ()) for b in by_hash.get(h2, ()) if a != b
+            )
+    return pairs
 
 
 def flatten_canon_chains(session: Session) -> int:
