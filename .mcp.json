@@ -20,7 +20,7 @@
         "--access-mode=restricted"
       ],
       "env": {
-        "DATABASE_URI": "postgresql://postgres:postgres@localhost:5437/postgres"
+        "DATABASE_URI": "postgresql://postgres:postgres@localhost:5437/airdrome"
       }
     }
   }
