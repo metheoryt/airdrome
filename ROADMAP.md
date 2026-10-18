@@ -19,9 +19,16 @@ Status legend: 💡 idea (unscoped) · 🧭 designed (settled, not built) · �
 
 The immediate, next-up work.
 
-- 💡 **`wanted`** — next in the *Identity & acquisition* programme below, now that the identity
-  ladder has landed (2026-10-17, [docs/design/identity-ladder.md](docs/design/identity-ladder.md);
-  current state in CLAUDE.md *Identity ladder*). Wants its own design discussion first.
+- 🧭 **Airdrome MCP server v1, with `wanted` built in** (agreed 2026-10-18). A FastMCP server
+  (`airdrome mcp`, HTTP on localhost, secret token link) so an AI can show the library and make
+  point edits: `wanted` (part 1 = file-less tracks from his library — iTunes XML, later Spotify
+  liked + own playlists; part 2 = file-less tracks and unmatched scrobbles ranked by plays), a
+  track card, unmatched aliases, status; edits = *wanted/skip* verdict, *same/different* track,
+  bind/reject a scrobble alias. No library-wide actions. Design:
+  [docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md](docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md).
+  Then the **Spotify library importer** (*Ingest sources*).
+- 💡 **Public access to the MCP server** via latitude / cyphy.kz — the same secret token link
+  (owner: no OAuth, single user), so claude.ai and the phone can reach it.
 
 - 🧭 **Playlist editing tools (`merge` + `dedup-members`).** A new `playlists` command
   group: `merge <base> <other>...` folds human-specified near-duplicate playlists into one
