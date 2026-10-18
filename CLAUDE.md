@@ -373,8 +373,10 @@ round-trip correctness matters.
 
 ## Roadmap
 
-[ROADMAP.md](ROADMAP.md) tracks forward-looking work (playlist management, a Telegram management
-bot, the filesystem ⇄ Airdrome reconcile pipeline). Read it at the start of any non-trivial task.
+[ROADMAP.md](ROADMAP.md) tracks forward-looking work (the MCP server with `wanted` and point edits —
+designed 2026-10-18, see `docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md` — playlist
+management, a Telegram management bot, the filesystem ⇄ Airdrome reconcile pipeline). Read it at the
+start of any non-trivial task.
 
 **When a new idea surfaces** in a dialog — a feature, a "we should eventually…", or a design
 we settle on but won't build now — **ask the user whether to add it to ROADMAP.md**, and
