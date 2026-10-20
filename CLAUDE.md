@@ -47,7 +47,7 @@ airdrome --help
 
 End-to-end flow: `import <path>...` → `land` → `organize` → `dedup` → `sync all` →
 `navi push`. Every write command is idempotent and takes `--dry-run`/`-n` (rolls back
-instead of committing). Global `-v/--verbose` shows per-item detail (file picks, misses);
+instead of committing) — except `navi push`, which has none. Global `-v/--verbose` shows per-item detail (file picks, misses);
 `-q/--quiet` suppresses non-essential output (both on the root callback, set via
 `console.set_verbosity`). Run any command with `--help` for flags.
 
@@ -453,8 +453,7 @@ round-trip correctness matters.
 
 ## Roadmap
 
-[ROADMAP.md](ROADMAP.md) tracks forward-looking work (the MCP server with `wanted` and point edits —
-designed 2026-10-18, see `docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md` — playlist
+[ROADMAP.md](ROADMAP.md) tracks forward-looking work (the MCP server's next tool sets, playlist
 management, a Telegram management bot, the filesystem ⇄ Airdrome reconcile pipeline). Read it at the
 start of any non-trivial task.
 

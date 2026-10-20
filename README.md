@@ -151,8 +151,8 @@ Use `--as <name>` to force one when detection is ambiguous or fails.
 ## Migration pipeline
 
 A full migration runs roughly in this order. Every command is idempotent — re-running is
-safe and only fills gaps. Add `--dry-run`/`-n` to any write command to roll back instead of
-committing.
+safe and only fills gaps. Add `--dry-run`/`-n` to any write command (except `navi push`) to roll
+back instead of committing.
 
 ```bash
 # 1. Import every source you have (one invocation, any mix of exports / folders)
