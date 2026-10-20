@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from airdrome.conf import settings
 from airdrome.enums import Verdict
-from airdrome.library import card, edits
+from airdrome.library import card, edits, search
 from airdrome.normalize.dedup.mirror import restore_if_empty
 from airdrome.normalize.dedup.store import resolve_library
 from airdrome.terminal.status import pipeline_counts
@@ -29,9 +29,10 @@ from .session import tool_session
 
 INSTRUCTIONS = """Airdrome is the owner's music library hub (it migrates a library and listening history
 into Navidrome). Use these tools to help the owner decide which missing tracks to acquire and to fix
-track identity by hand. Every list is paged: pass the previous `next_cursor` back as `cursor`; it is
-None at the end. Ids are Airdrome track ids and alias ids. Every edit commits at once and survives later
-`land` and `dedup` runs."""
+track identity by hand; `search_music` answers "do I have this anywhere?". Every list except
+`search_music` is paged: pass the previous `next_cursor` back as `cursor`; it is None at the end.
+Ids are Airdrome track ids and alias ids. Every edit commits at once and survives later `land` and
+`dedup` runs."""
 
 # Writes run one at a time. Sync tools run in a threadpool, so two overlapping edits could commit in
 # one order and write their dedup-mirror snapshots in the other, leaving the file behind the DB.
@@ -133,6 +134,21 @@ def build_server(engine: Engine) -> FastMCP:
         choices among the members). Use it before any edit to check identity.
         """
         return run(lambda s: card.track_card(s, track_id))
+
+    @mcp.tool
+    def search_music(query: str, limit: int = 20) -> dict:
+        """Find music by words, in the library and in the music folders on disk.
+
+        Words match whole, in any order, ignoring case, accents and punctuation; the last word may be
+        cut short. `tracks` lists canon groups with a matching member (title, artist, album, album artist),
+        most played first, each with its files (`has_file`), plays, `in_library` and verdict; pass its
+        `track_id` to `track_card`. `disk` walks the configured music folders: a `folder` row is a folder
+        whose path matches, with its audio count, how many of those are imported, and its subfolders with
+        no audio at all (often only cover art left: a file that was there once); a `file` row is an audio
+        file whose path matches, `track_id` null when it was never imported. Each section returns at most
+        `limit` rows (default 20, max 200) and its `total`; narrow the query rather than paging.
+        """
+        return run(lambda s: search.search(s, query, limit))
 
     @mcp.tool
     def unmatched_aliases(cursor: str | None = None, limit: int = 50, query: str | None = None) -> dict:

@@ -173,7 +173,11 @@ Off the pipeline, for the owner's AI client:
   groups with no file; file-less played groups + unmatched scrobbled aliases).
 - **`library/edits.py`, `library/card.py`** — manual point edits (`mark_same`/`mark_different` stored
   as pair decisions, `bind_aliases`/`reject_aliases`) and the track card / unmatched-alias candidates.
-- **`mcpserver/`** — `build_server(engine)` wraps those as 11 FastMCP tools; each call runs in its own
+- **`library/search.py`** — `search_music`: whole-word match (last word a prefix, never substrings —
+  `a-ha` normalizes to `aha`, inside `baha`) over track norms and over paths *relative to* each search
+  root; a matching folder folds its subtree and names its subfolders with no audio (cover art left
+  behind). Walked on every call, no cache but the word splitter's.
+- **`mcpserver/`** — `build_server(engine)` wraps those as 12 FastMCP tools; each call runs in its own
   `tool_session`. A tool's docstring is what the AI reads, so semantics belong there.
 
 ### Import / source design
@@ -381,6 +385,7 @@ singleton is imported wherever config is needed.
 | `DB_ECHO` | `False` | SQLAlchemy query logging |
 | `LIBRARY_DIR` | — | Root for organized files (required; empty on first run) |
 | `DUPLICATES_FILEPATH` | `LIBRARY_DIR/.airdrome/duplicates.json` | Override for the dedup decision mirror (`settings.duplicates_file` resolves it) |
+| `SEARCH_DIRS` | `[]` | Music folders `search_music` walks besides `LIBRARY_DIR` (JSON list; `settings.search_roots`) |
 | `NAVIDROME_DB_DSN` | `None` | Path to Navidrome's SQLite DB |
 | `NAVIDROME_USER` | `None` | Navidrome user that owns synced play counts/ratings |
 | `NAVIDROME_PORT` | `4533` | Port the `navidrome` commands probe to confirm the server is stopped |

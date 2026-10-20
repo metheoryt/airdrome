@@ -47,6 +47,7 @@ TOOLS = {
     "track_card",
     "unmatched_aliases",
     "library_status",
+    "search_music",
     "set_verdict",
     "clear_verdict",
     "mark_same_track",
@@ -94,6 +95,16 @@ def test_tools_listed(committed):
             return {t.name for t in await c.list_tools()}
 
     assert asyncio.run(go()) == TOOLS
+
+
+def test_search_music_finds_a_track(committed, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "search_dirs", [])
+    monkeypatch.setattr(settings, "library_dir", tmp_path)
+    tid = _library_track(committed, "Take On Me")
+    res = _call(committed, "search_music", query="take on me")
+    assert [r["track_id"] for r in res["tracks"]["rows"]] == [tid]
+    with pytest.raises(ToolError, match="no words"):
+        _call(committed, "search_music", query="!!")
 
 
 def test_set_verdict_roundtrip(committed):

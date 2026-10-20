@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # see `duplicates_file`.
     duplicates_filepath: Path | None = None
 
+    # Music folders the MCP `search` tool walks (JSON list in .env); unset means the library only.
+    search_dirs: list[Path] = Field(default_factory=list)
+
     # navidrome
     navidrome_db_dsn: str | None = None
     navidrome_user: str | None = None
@@ -30,6 +33,11 @@ class Settings(BaseSettings):
     # MCP server: the token is the secret path segment (`/mcp/<token>`) — never print or log it.
     airdrome_mcp_token: SecretStr | None = None
     airdrome_mcp_port: int = 8765
+
+    @property
+    def search_roots(self) -> list[Path]:
+        """Where `search` looks on disk: the configured music folders plus the library."""
+        return [*self.search_dirs, self.library_dir]
 
     @property
     def duplicates_file(self) -> Path:

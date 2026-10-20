@@ -132,6 +132,7 @@ All settings load from a `.env` file at the project root (`airdrome/conf.py`).
 | `ACOUSTID_CLIENT_KEY` |       | `None`  | AcoustID application key for fingerprint lookups (unset disables the lookup)                        |
 | `AIRDROME_MCP_TOKEN` |        | `None`  | Secret token in the MCP server's URL (required for `airdrome mcp`; see *MCP server*)                |
 | `AIRDROME_MCP_PORT` |         | `8765`  | Localhost port of the MCP server                                                                    |
+| `SEARCH_DIRS`      |          | `[]`    | Music folders the MCP `search_music` tool walks, as a JSON list (`["/home/me/Music"]`); the library is always searched |
 
 ## Supported sources
 
@@ -340,7 +341,8 @@ written into the files.
 
 `airdrome mcp` lets an AI client (Claude Code) read your library and make point edits: the two
 *wanted* lists (part 1 = tracks in your library with no file yet; part 2 = what you listened to but
-have no file for, most played first), a track card, unmatched scrobbles with bind candidates and the
+have no file for, most played first), a word search over the library and your music folders on disk
+(`SEARCH_DIRS`: what you have, where, and which files were never imported), a track card, unmatched scrobbles with bind candidates and the
 pipeline counts; edits are a *wanted*/*skip* verdict, *same*/*different* track, and binding or
 rejecting scrobble aliases. Every edit commits at once and survives later `land` and `dedup` runs.
 There are no library-wide actions.
