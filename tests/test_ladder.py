@@ -3,13 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from airdrome.enums import BindMethod
+from airdrome.enums import BindMethod, DecisionKind
 from airdrome.library import fingerprint
 from airdrome.library.ladder import LadderContext, _link_twin, recording_of_track, resolve_file
 from airdrome.library.unify import do_unify
 from airdrome.models import Track, TrackFile
-from airdrome.normalize.dedup.persistence import stored_cannot_links, stored_canons
-from tests.factories import make_dedup_group, make_track
+from airdrome.normalize.dedup.auto import auto_deduplicate
+from tests.factories import add_pair, make_track
 
 
 MBID = "11111111-1111-1111-1111-111111111111"
@@ -486,26 +486,33 @@ def test_tags_hit_on_conflicted_track_falls_to_rule_3(session, add_file, album_t
 # ── backfill never moves a hash (I-1) ────────────────────────────────────────────
 
 
-def test_tags_hit_on_stored_group_member_keeps_its_hash(session, add_file) -> None:
-    """A file landing on a stored group's member fills no hashed field, so the group still governs."""
+def test_backfill_fills_hashed_fields_of_decided_track(session, add_file) -> None:
+    """Decisions name tracks by natural key, so a file filling year/duration moves no decision.
+
+    Regression guard: it may already have passed before the group tables went away.
+    """
     member = make_track(session, title="Feed", artist="Rise", album="Original", album_artist="Rise")
-    twin = make_track(session, title="Feed", artist="Rise", album="OST", album_artist="Rise")
-    apart = make_track(session, title="Feed", artist="Rise", album="Live", album_artist="Rise")
-    make_dedup_group(session, [(member, None), (twin, member), (apart, None)])
-    canons, vetoes = stored_canons(session), stored_cannot_links(session)
-    assert canons and vetoes  # the test means something only if both are populated
-
+    other = make_track(session, title="Feed", artist="Rise", album="OST", album_artist="Rise")
+    add_pair(session, member, other, DecisionKind.SAME)
     tf = add_file(
-        title="Feed", artist="Rise", album="Original", album_artist="Rise", date="1999", duration=200.0
+        title="Feed",
+        artist="Rise",
+        album="Original",
+        album_artist="Rise",
+        date="1999",
+        duration=200.0,
+        bitrate=128_000,
     )
+
     assert _resolve(session, tf) is member
+    assert (member.year, member.duration) == (1999, 200)
 
-    assert (member.year, member.duration) == (None, None)
-    assert (stored_canons(session), stored_cannot_links(session)) == (canons, vetoes)
+    auto_deduplicate(session)
+    assert sorted(t.canon_id is None for t in (member, other)) == [False, True]
 
 
-def test_tags_hit_outside_stored_groups_is_backfilled(session, add_file) -> None:
-    """A track no stored group names still takes year and duration from its new file (fresh-DB land)."""
+def test_tags_hit_without_decision_is_backfilled(session, add_file) -> None:
+    """A track no decision names takes year and duration from its new file (fresh-DB land)."""
     t = make_track(session, title="Feed", artist="Rise", album="Original", album_artist="Rise")
     tf = add_file(
         title="Feed", artist="Rise", album="Original", album_artist="Rise", date="1999", duration=200.0

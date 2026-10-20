@@ -19,16 +19,43 @@ Status legend: 💡 idea (unscoped) · 🧭 designed (settled, not built) · �
 
 The immediate, next-up work.
 
-- 🧭 **Airdrome MCP server v1, with `wanted` built in** (agreed 2026-10-18). A FastMCP server
-  (`airdrome mcp`, HTTP on localhost, secret token link) so an AI can show the library and make
-  point edits: `wanted` (part 1 = file-less tracks from his library — iTunes XML, later Spotify
-  liked + own playlists; part 2 = file-less tracks and unmatched scrobbles ranked by plays), a
-  track card, unmatched aliases, status; edits = *wanted/skip* verdict, *same/different* track,
-  bind/reject a scrobble alias. No library-wide actions. Design:
-  [docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md](docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md).
-  Then the **Spotify library importer** (*Ingest sources*).
+- **Next: the Spotify library importer** (💡 under *Ingest sources*; unblocked — the real export
+  arrived 2026-09-16, field mapping in the MCP spec's *Spotify library importer*). The MCP server
+  v1 with `wanted` shipped 2026-10-18 (`airdrome mcp`; current state in CLAUDE.md, design in
+  [docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md](docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md));
+  the importer makes part 1 of `wanted` cover Spotify liked songs + own playlists.
 - 💡 **Public access to the MCP server** via latitude / cyphy.kz — the same secret token link
   (owner: no OAuth, single user), so claude.ai and the phone can reach it.
+- **Order agreed (owner, 2026-10-18):** pair-decision storage (shipped) → Spotify
+  library importer → MCP playlist tools → MCP duplicate review (both below, under *MCP server —
+  next on the server*). The importer first because `wanted` part 1 is incomplete without it;
+  playlists before duplicates because they need no storage change.
+
+### MCP server — follow-ups from the v1 review (2026-10-18)
+
+A read of the shipped server with fresh eyes. These wait for the owner's verdict after trying it
+(he judges by use, not by imagining).
+
+- 💡 **Part 2 is assembled in Python per call.** `wanted_scrobbled` builds all ~51k rows (track
+  groups + collapsed unmatched aliases), filters, sorts and slices in Python: 2 s per page, 3.1 s
+  at `limit=200`. Fine on localhost, will drag over the network / on the phone. Push the verdict
+  filter, the sort and the page into SQL (a UNION of the two row kinds), or materialize the list.
+- 💡 **Point edits replan the whole library (owner-accepted, 2026-10-18).** `edits._decide` runs
+  `plan_dedup` over every track so an edit equals the next `dedup`; measured ~0.19 s at 1,600 tracks +
+  300 pairs, extrapolated ~2 s at ~16k tracks. Measure on the live-size DB at rollout and scope the
+  replan if it is slow.
+- 💡 **`reject_aliases` vs. verdict `skip` read alike** ("not this track" vs. "don't want it"). The
+  docstrings disambiguate; a rename to `unbind_aliases` would make the tool list self-explanatory.
+- 💡 **Rank part 2 by listening days, not raw plays (owner, 2026-10-18).** A track left on repeat
+  inflates its count: "Crickets in the Rain" (an Apple sleep-sounds EP) has 263 plays from four
+  nights, 45–80 a night, and tops the list over tracks played for years. Sort by distinct days with
+  a play (keep `plays` and `months` in the row); a repeat loop then counts as the nights it ran.
+- 💡 **Blank-artist unmatched rows never get `similar_with_file`** (e.g. "Crickets in the Rain",
+  263 plays): the score is half title, half artist, and a blank artist scores 0, so the 0.6 bar
+  is unreachable. Either score on title alone when the artist is blank, or say so in the row.
+- Note, not a task: `claude mcp list` / `claude mcp get airdrome` print the registered URL, token
+  included, to the terminal. Known and accepted for a localhost single-user link; rotate the
+  token if a transcript leaks.
 
 - 🧭 **Playlist editing tools (`merge` + `dedup-members`).** A new `playlists` command
   group: `merge <base> <other>...` folds human-specified near-duplicate playlists into one
@@ -55,6 +82,31 @@ The immediate, next-up work.
   Unprofiled — measure before assuming. (Step 1's ~40-minute `ILIKE` storm is gone: the identity
   ladder's in-memory path index binds the live library's files in ~2 min.)
 
+### MCP server — next on the server (owner, 2026-10-18)
+
+Both stay point edits on one playlist or one group; `sync`, `land` and `dedup` remain CLI-only
+(the v1 spec's rule).
+
+- 💡 **Playlist tools.** The model is ready for them: Airdrome is the hub, `sync` carries hub
+  edits to Navidrome, and `land` never re-unions an existing playlist, so an MCP edit survives
+  every later run. "Which playlists hold this track" is already on the track card.
+  - *Reads:* list playlists (name, size, sources), a playlist's members, find by name, **compare
+    two playlists** (shared / only in A / only in B).
+  - *Edits:* add / remove a track, create, rename, delete a playlist.
+  - *From the 🧭 design above:* `merge <base> <other>...` and `dedup-members` as tools — judgment
+    work where an AI proposing and the owner confirming beats a CLI flag. **Carries the same
+    migration debt:** the by-name merges already in the DB are recorded nowhere, and the first
+    `land` without `--merge-playlists` takes them apart; the `playlist_merge` tombstone backfill
+    lands in the same change.
+  - Size: about two days.
+- 💡 **Duplicate review.** v1 has *same* / *different*; missing is what the removed `dedup -r` TUI did:
+  - *A review queue:* automatic groups ranked by confidence, groups whose members carry two
+    recording ids, fingerprint matches rejected only by the duration gap, decisions naming a
+    track no longer in the library (dead).
+  - *Edits:* confirm an automatic group, choose the canon, reset a group, resolve a dead-member
+    group.
+  - Builds on the pair-decision storage (`CanonChoice` already exists; its MCP writer lands here).
+
 ---
 
 ## Identity & acquisition (architecture review, 2026-10-16)
@@ -77,6 +129,20 @@ twice and never added), but it also hides unmatched duplicates of tracks that *w
 to, and the odd gem that never reached the library — so it is classified, never cut by play
 count alone.
 
+- 💡 **Release identity: one release, one spelling (owner, 2026-10-19).** Track dedup does not unify
+  releases. There is no Album entity, and an album is a string on each track, so Navidrome builds a
+  release from each main file's tags. One release then splits across spellings. Example:
+  "Points of Authority / 99 Problems / One Step Closer" exists as *Collision Course* (2004,
+  "Jay-Z and Linkin Park"), *Collision Course - EP* ("JAY-Z & LINKIN PARK", today's streaming form)
+  and an "Explicit Version" (Jay-Z). Needs:
+  - a release grouping: MusicBrainz release-group id, else album + album artist normalized for case
+    and look-alike letters (Jay-Z's current spelling swaps a Latin letter for a homoglyph);
+  - one spelling chosen per release, not per track;
+  - `organize` writing that spelling into the tags.
+  - **a decision re-key step.** Changing the spelling of title, artist, album or album artist changes
+    a track's natural key, so the stored decisions (`PairDecision`, `CanonChoice`) that name the old key
+    must be re-keyed with it, or they go dead (`status` → Dedup → Dead).
+  **Default spelling: the one at release time, not today's streaming form (owner: "так честнее").**
 - 💡 **`wanted` — the file-less tracks as a first-class list, classified.** Signals, not a play
   threshold: plays spread over months vs. one session, membership in any playlist, loved /
   rated, present in a *library* source (Apple XML / Spotify saved) vs. streaming-history only,
@@ -258,11 +324,15 @@ Full design — 12 settled decisions and the three-layer build order — lives i
   so they cannot expand. Followed playlists are out — they change under you and edits cannot go
   back.
 
-  **Blocked on reading a real export** (requested 2026-09-09, Spotify takes days). The field
-  mapping *is* the design, so the `alias_map` is not worth guessing; what we already have on
-  disk is `Streaming_History_Audio_*.json` — the *extended history*, a different file with a
-  different shape (`master_metadata_track_name` / `_album_album_name` / `_album_artist_name`,
-  `spotify_track_uri`, `ts`, `ms_played`; no track duration).
+  **Unblocked, and next up.** The account-data export (requested 2026-09-09) arrived 2026-09-16
+  as `~/Загрузки/my_spotify_data.zip`: `YourLibrary.json` (763 saved tracks; track = `artist`,
+  `album`, `track`, `uri`) and `Playlist1.json` (62 playlists, 3,364 items; item = `trackName`,
+  `artistName`, `albumName`, `trackUri`, `addedDate`) — no duration, no album artist. The field
+  mapping is written down in
+  [docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md](docs/superpowers/specs/2026-10-18-airdrome-mcp-design.md)
+  (*Spotify library importer*). The `Streaming_History_Audio_*.json` already on disk is the
+  *extended history*, a different file with a different shape (`master_metadata_track_name` /
+  `_album_album_name` / `_album_artist_name`, `spotify_track_uri`, `ts`, `ms_played`).
 
   Three findings from scoping it, so they need not be re-derived:
   - **Identity is not a problem.** `unify` keys a `SourceTrack` onto a canonical `Track` by

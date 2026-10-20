@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "alembic>=1.13",
+    "fastmcp>=4.1.1",
     "mutagen>=1.47.0",
     "psycopg[binary,pool]>=3.3.3",
     "pydantic>=2.12.5",

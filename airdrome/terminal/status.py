@@ -10,15 +10,17 @@ import re
 import socket
 
 from rich.table import Table
-from sqlalchemy import ColumnElement, distinct, func, select
+from sqlalchemy import ColumnElement, distinct, func, inspect, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session
 
 from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.conf import settings
 from airdrome.console import console
+from airdrome.enums import Verdict
 from airdrome.models import (
-    DedupGroup,
+    CanonChoice,
+    PairDecision,
     Playlist,
     PlaylistLink,
     Track,
@@ -26,8 +28,10 @@ from airdrome.models import (
     TrackAliasScrobble,
     TrackFile,
     TrackPlay,
+    WantedVerdict,
     engine,
 )
+from airdrome.normalize.dedup.store import decision_counts
 
 
 def _section(title: str) -> Table:
@@ -92,51 +96,107 @@ def _library_state() -> str:
     return f"{d} [dim]({state})[/dim]"
 
 
-def _print_pipeline(session: Session) -> None:
-    """Print the per-stage counts. Raises SQLAlchemyError if the schema isn't initialized."""
-    imported = _section("Imported")
-    by_provider = session.execute(
-        select(SourceTrack.provider, func.count()).group_by(SourceTrack.provider)
-    ).all()
-    imported.add_row("Source tracks", _with_breakdown(_count(session, SourceTrack), by_provider))
-    imported.add_row("Source playlists", f"{_count(session, SourcePlaylist, ~SourcePlaylist.folder):,}")
-    by_platform = session.execute(
+def _breakdown(counts: dict[str, int], prefix: str) -> list[tuple[str, int]]:
+    """The `<prefix>.<name>` entries of a counts section as (name, n) pairs."""
+    return [(k.removeprefix(f"{prefix}."), n) for k, n in counts.items() if k.startswith(f"{prefix}.")]
+
+
+def _decision_section(s: Session) -> dict[str, int]:
+    """Decision counts, all 0 while the decision tables don't exist (a DB older than the schema)."""
+    inspector = inspect(s.get_bind())
+    if not (
+        inspector.has_table(PairDecision.__tablename__) and inspector.has_table(CanonChoice.__tablename__)
+    ):
+        return dict.fromkeys(("same", "different", "canons", "superseded", "dead"), 0)
+    return decision_counts(s)
+
+
+def pipeline_counts(s: Session) -> dict[str, dict[str, int]]:
+    """Per-stage counts as data; `wanted` is omitted while the `wantedverdict` table doesn't exist yet."""
+    by_provider = s.execute(select(SourceTrack.provider, func.count()).group_by(SourceTrack.provider)).all()
+    by_platform = s.execute(
         select(TrackAliasScrobble.platform, func.count()).group_by(TrackAliasScrobble.platform)
     ).all()
-    imported.add_row("Scrobbles", _with_breakdown(_count(session, TrackAliasScrobble), by_platform))
+    counts: dict[str, dict[str, int]] = {
+        "imported": {
+            "source_tracks": _count(s, SourceTrack),
+            **{f"source_tracks.{prov}": n for prov, n in by_provider},
+            "source_playlists": _count(s, SourcePlaylist, ~SourcePlaylist.folder),
+            "scrobbles": _count(s, TrackAliasScrobble),
+            **{f"scrobbles.{plat}": n for plat, n in by_platform},
+        },
+        "canonical": {
+            "tracks": _count(s, Track),
+            "aliases": _count(s, TrackAlias),
+            "aliases_matched": _count(s, TrackAlias, TrackAlias.track_id.is_not(None)),
+            "plays": _count(s, TrackPlay),
+            "playlists": _count(s, Playlist),
+        },
+        "files": {
+            "files": _count(s, TrackFile),
+            "bound": _count(s, TrackFile, TrackFile.track_id.is_not(None)),
+            "organized": _count(s, TrackFile, TrackFile.library_path.is_not(None)),
+        },
+        "dedup": {
+            "twins": _count(s, Track, Track.canon_id.is_not(None)),
+            "groups": s.scalar(select(func.count(distinct(Track.canon_id)))) or 0,
+            **_decision_section(s),
+        },
+        "synced": {"playlist_links": _count(s, PlaylistLink)},
+    }
+    # The live DB predates the verdict table (it is recreated later); don't crash `status` there.
+    if inspect(s.get_bind()).has_table(WantedVerdict.__tablename__):
+        counts["wanted"] = {
+            "verdict_wanted": _count(s, WantedVerdict, WantedVerdict.verdict == Verdict.WANTED),
+            "verdict_skip": _count(s, WantedVerdict, WantedVerdict.verdict == Verdict.SKIP),
+        }
+    return counts
+
+
+def _print_pipeline(session: Session) -> None:
+    """Print the per-stage counts. Raises SQLAlchemyError if the schema isn't initialized."""
+    c = pipeline_counts(session)
+
+    imported = _section("Imported")
+    i = c["imported"]
+    imported.add_row("Source tracks", _with_breakdown(i["source_tracks"], _breakdown(i, "source_tracks")))
+    imported.add_row("Source playlists", f"{i['source_playlists']:,}")
+    imported.add_row("Scrobbles", _with_breakdown(i["scrobbles"], _breakdown(i, "scrobbles")))
     console.print(imported)
 
     landed = _section("Canonical (land)")
-    landed.add_row("Tracks", f"{_count(session, Track):,}")
-    landed.add_row(
-        "Aliases matched",
-        _ratio(_count(session, TrackAlias, TrackAlias.track_id.is_not(None)), _count(session, TrackAlias)),
-    )
-    landed.add_row("Plays", f"{_count(session, TrackPlay):,}")
-    landed.add_row("Playlists", f"{_count(session, Playlist):,}")
+    k = c["canonical"]
+    landed.add_row("Tracks", f"{k['tracks']:,}")
+    landed.add_row("Aliases matched", _ratio(k["aliases_matched"], k["aliases"]))
+    landed.add_row("Plays", f"{k['plays']:,}")
+    landed.add_row("Playlists", f"{k['playlists']:,}")
     console.print(landed)
 
     files = _section("Files")
-    files.add_row(
-        "Bound to tracks",
-        _ratio(_count(session, TrackFile, TrackFile.track_id.is_not(None)), _count(session, TrackFile)),
-    )
-    files.add_row(
-        "Organized on disk",
-        f"{_count(session, TrackFile, TrackFile.library_path.is_not(None)):,}",
-    )
+    f = c["files"]
+    files.add_row("Bound to tracks", _ratio(f["bound"], f["files"]))
+    files.add_row("Organized on disk", f"{f['organized']:,}")
     console.print(files)
 
     dedup = _section("Dedup")
-    twins = _count(session, Track, Track.canon_id.is_not(None))
-    groups = session.scalar(select(func.count(distinct(Track.canon_id)))) or 0
-    dedup.add_row("Twins", f"{twins:,} [dim]in {groups:,} group(s)[/dim]")
-    dedup.add_row("Confirmed groups", f"{_count(session, DedupGroup):,}")
+    d = c["dedup"]
+    dedup.add_row("Twins", f"{d['twins']:,} [dim]in {d['groups']:,} group(s)[/dim]")
+    dedup.add_row("Decisions same", f"{d['same']:,}")
+    dedup.add_row("Decisions different", f"{d['different']:,}")
+    dedup.add_row("Canon choices", f"{d['canons']:,}")
+    dedup.add_row("Superseded", f"{d['superseded']:,}")
+    dedup.add_row("Dead", f"{d['dead']:,}")
     console.print(dedup)
 
     synced = _section("Synced to backends")
-    synced.add_row("Playlist links", f"{_count(session, PlaylistLink):,}")
+    synced.add_row("Playlist links", f"{c['synced']['playlist_links']:,}")
     console.print(synced)
+
+    if "wanted" in c:
+        wanted = _section("Wanted")
+        wanted.add_row("Wanted", f"{c['wanted']['verdict_wanted']:,}")
+        wanted.add_row("Skipped", f"{c['wanted']['verdict_skip']:,}")
+        console.print(wanted)
 
 
 def status() -> None:

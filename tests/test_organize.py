@@ -322,3 +322,57 @@ def test_failed_cross_extension_swap_removes_the_partial_upgrade(
     assert not target.exists()
     assert main.library_path == freed and (dst_dir / freed).read_bytes() == b"old main"
     assert new.library_path is None and new.source_path.read_bytes() == b"better"
+
+
+def test_organize_does_not_swap_in_folded_upgrade(session, tmp_path, placed_main) -> None:
+    """A better file on a manually folded twin never takes Library/ from the core's main."""
+    track, main, dst_dir = placed_main
+    folded = Track(title="Other", artist="Band", album="Album", canon_id=track.id, canon_folded=True)
+    session.add(folded)
+    session.flush()
+    new = _add_upgrade(session, tmp_path, folded)
+    old_rel = main.library_path
+    session.refresh(track)  # load the new twin
+
+    FileOrganizer(dst_dir=dst_dir).transfer_track(track)
+
+    assert main.library_path == old_rel and main.is_main
+    assert not new.is_main
+    assert new.library_path is not None and new.library_path.parts[0] == COPIES_SUBDIR
+    assert (dst_dir / new.library_path).read_bytes() == b"better"
+    assert (dst_dir / old_rel).read_bytes() == b"old main"
+
+
+def test_organize_leaves_unplaced_core_copy_alone(session, tmp_path, placed_main) -> None:
+    """A non-folded group with a placed main keeps the old behaviour: a lower unplaced copy stays unplaced."""
+    track, _main, dst_dir = placed_main
+    src = tmp_path / "loose" / "low.mp3"
+    src.parent.mkdir()
+    src.write_bytes(b"low")
+    low = TrackFile(source_path=src, bitrate=64_000)
+    low.track = track
+    session.add(low)
+    session.flush()
+    before = sorted(p.relative_to(dst_dir) for p in dst_dir.rglob("*"))
+
+    assert FileOrganizer(dst_dir=dst_dir).transfer_track(track) is None
+
+    assert low.library_path is None and src.exists()
+    assert sorted(p.relative_to(dst_dir) for p in dst_dir.rglob("*")) == before
+
+
+def test_dry_run_folded_copy_plans_without_touching_disk(session, tmp_path, placed_main) -> None:
+    """Dry run of the folded branch reports the planned Copies/ path and writes nothing."""
+    track, _main, dst_dir = placed_main
+    folded = Track(title="Other", artist="Band", album="Album", canon_id=track.id, canon_folded=True)
+    session.add(folded)
+    session.flush()
+    new = _add_upgrade(session, tmp_path, folded)
+    session.refresh(track)
+    before = sorted(p.relative_to(dst_dir) for p in dst_dir.rglob("*"))
+
+    FileOrganizer(dst_dir=dst_dir, dry_run=True).transfer_track(track)
+
+    assert new.library_path is not None and new.library_path.parts[0] == COPIES_SUBDIR
+    assert not (dst_dir / new.library_path).exists() and new.source_path.exists()
+    assert sorted(p.relative_to(dst_dir) for p in dst_dir.rglob("*")) == before

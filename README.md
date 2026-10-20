@@ -39,8 +39,12 @@ Bound to tracks    12,431 / 12,908
 Organized on disk  12,431
 
 Dedup
-Twins             1,204 in 517 group(s)
-Confirmed groups  488
+Twins                1,204 in 517 group(s)
+Decisions same       312
+Decisions different  176
+Canon choices        12
+Superseded           4
+Dead                 0
 
 Synced to backends
 Playlist links  296
@@ -67,8 +71,8 @@ connect it to a FLAC on your disk.
   instead of two.
 - **Deduplication you can correct.** The same album ripped twice, plus a stream copy, plus
   the remaster — grouped by configurable flag-sets (artist/album/year) and collapsed onto a
-  canon. Automatic where it's confident, an interactive review pass where it isn't, and
-  your manual decisions persist as overrides that survive a full database rebuild.
+  canon. Automatic where it's confident; where it isn't, you decide through the MCP server, and
+  your manual same/different decisions (the newest wins) survive a full database rebuild.
 - **Playlist reconcile, not playlist push.** Each remote gets a per-playlist base snapshot,
   so a diff is computed against *what that remote last saw* rather than against the current
   hub. Downstream deletes stick, a re-import doesn't resurrect a track you removed, and a
@@ -121,11 +125,13 @@ All settings load from a `.env` file at the project root (`airdrome/conf.py`).
 | `DB_DSN`           | ✅        | —       | PostgreSQL connection string, e.g. `postgresql+psycopg://postgres:postgres@localhost:5437/postgres` |
 | `DB_ECHO`          |          | `False` | Log every SQL statement (debugging)                                                                 |
 | `LIBRARY_DIR`      | ✅        | —       | Destination root for organized files. Must be empty on a fresh install.                             |
-| `DUPLICATES_FILEPATH` |       | `LIBRARY_DIR/.airdrome/duplicates.json` | Where confirmed duplicate groups are mirrored (see below)          |
+| `DUPLICATES_FILEPATH` |       | `LIBRARY_DIR/.airdrome/duplicates.json` | Where manual dedup decisions are mirrored (see below)          |
 | `NAVIDROME_DB_DSN` |          | `None`  | Path to Navidrome's SQLite database (required for the `navidrome` commands)                         |
 | `NAVIDROME_USER`   |          | `None`  | Navidrome username that play counts / ratings are written for                                       |
 | `NAVIDROME_PORT`   |          | `4533`  | Port Airdrome probes to refuse syncing while Navidrome is running                                   |
 | `ACOUSTID_CLIENT_KEY` |       | `None`  | AcoustID application key for fingerprint lookups (unset disables the lookup)                        |
+| `AIRDROME_MCP_TOKEN` |        | `None`  | Secret token in the MCP server's URL (required for `airdrome mcp`; see *MCP server*)                |
+| `AIRDROME_MCP_PORT` |         | `8765`  | Localhost port of the MCP server                                                                    |
 
 ## Supported sources
 
@@ -164,9 +170,7 @@ airdrome land                      # --threshold tunes fuzzy matching; --merge-p
 airdrome organize                  # add --move to move instead of copy
 
 # 4. Deduplicate canonical tracks (fuzzy trigram matching)
-airdrome dedup                                 # automatic, flag-set driven
-airdrome dedup --review                        # batch, then open the TUI to adjust canons
-                                               # your confirmed groups are mirrored to disk automatically
+airdrome dedup                                 # automatic, flag-set driven, plus your manual decisions
 
 # 5. Reconcile playlists across sources and Navidrome (stop Navidrome — it writes the backend)
 airdrome sync all                   # sources -> canonical -> Navidrome; interactive on conflicts
@@ -241,43 +245,47 @@ sees the old file removed and a new one added. Once Navidrome has scanned the ch
 
 ### `airdrome dedup`
 
-Rebuild `canon_id` from recording identity + flag-sets + stored manual overrides. Tracks sharing a
+Rebuild `canon_id` from recording identity + flag-sets + your manual decisions. Tracks sharing a
 recording id, or whose fingerprints match with durations within 2 s, are grouped first; a wider
-duration gap is only offered in `--review`. A group you marked "not duplicates" is never joined
-automatically. Inside a group the original album is canon, unless you own ≥ 2 tracks of the
+duration gap is not joined. Two tracks you marked "different" are never joined automatically, and
+two you marked "same" are always joined, even across recording ids (the newest decision wins when
+they contradict). There is no interactive review: decisions are made through the MCP tools. In a
+group joined only by a manual "same", the main file always comes from the canon's own version. Inside a group the original album is canon, unless you own ≥ 2 tracks of the
 compilation/OST it is also on.
 
 - `--set`/`-s` `"artist,album,year"` — comparison flag-set (repeatable; multiple sets union-merge
   their groups). With no `--set`, the recommended sets are used.
 - `--canon`/`-c` — which group member becomes canon: `added` (earliest added, default) or `year`
   (oldest release)
-- `--review`/`-r` — after the batch pass, open the interactive TUI to adjust canons; `--match
-  <substring>` filters the groups shown. Choices persist as manual overrides feeding the next run.
 
 ### Your duplicate decisions survive a database rebuild
 
 Deciding which of five copies of a song is the real one is work you do by hand, and the Postgres
-database is disposable — it gets recreated whenever the schema changes. So every confirmed group
-is mirrored to `LIBRARY_DIR/.airdrome/duplicates.json` the moment it is saved, and `dedup`
-restores that file automatically when it finds no groups in the database. Nothing to remember,
-no command to run.
+database is disposable — it gets recreated whenever the schema changes. So every manual decision
+(same / different pairs, canon choices) is mirrored to `LIBRARY_DIR/.airdrome/duplicates.json` the
+moment it is saved, and `dedup` restores that file automatically when it finds no decisions in the
+database. Nothing to remember, no command to run. The file is a version 2 document: decisions name
+tracks by title / artist / album / album artist, each with a timestamp.
 
 The file lives with the library rather than with Airdrome, so it backs up and travels with the
 music it describes, and two libraries can't overwrite each other's decisions.
 `DUPLICATES_FILEPATH` overrides the location.
 
-**Upgrading an existing install — one time.** The old default was `data/duplicates.json`, which
-nothing reads any more. If you have one, load it once and it becomes the new mirror:
-
-```bash
-airdrome dedup-import data/duplicates.json
-```
+**Upgrading an existing install — one time.** Older installs stored hand-made groups, and the mirror
+was a version-less file of groups, which `dedup` refuses to restore. Follow *Recreating the database*
+below: its step 0 converts the live groups from the old database with
+`scripts/migrate_dedup_groups.py` (read-only; review the printed report of overlapping groups and what
+the newest-wins rule made of them) before anything is dropped. Do not run `dedup-import` on the
+old-format mirror itself — it refuses: its groups come from the old database, through the script.
 
 ### `airdrome dedup-import [path]`
 
-Load groups from *another* file — seeding a second library from the first, or reviving an old
-backup. Idempotent, matched by member set. What you import becomes this library's mirror.
-(`dedup-export` is gone: the mirror is always current, so there was nothing left to export.)
+Load decisions from *another* file — seeding a second library from the first, or reviving an old
+backup. Idempotent; newest wins row by row. Accepts both formats: a version 2 file keeps its
+timestamps, and an old version-less group file is converted with the same conversion rules as the migration script,
+each group decided now in file order. What you import becomes this library's mirror; an import
+that changes nothing leaves the mirror as it is. The library's own mirror in the old format is refused
+(convert it with the script above, from the old database).
 
 ### `airdrome sync <remote>` / `airdrome sync all`
 
@@ -328,6 +336,39 @@ written into the files.
 - `--limit N` — look up at most N files
 - `--dry-run`/`-n` — the lookups still happen; nothing is saved
 
+## MCP server
+
+`airdrome mcp` lets an AI client (Claude Code) read your library and make point edits: the two
+*wanted* lists (part 1 = tracks in your library with no file yet; part 2 = what you listened to but
+have no file for, most played first), a track card, unmatched scrobbles with bind candidates and the
+pipeline counts; edits are a *wanted*/*skip* verdict, *same*/*different* track, and binding or
+rejecting scrobble aliases. Every edit commits at once and survives later `land` and `dedup` runs.
+There are no library-wide actions.
+
+The server listens on `127.0.0.1` only, and the secret token in its URL is the only access control:
+
+```bash
+# 1. Generate a token and put it in .env
+python -c "import secrets;print(secrets.token_urlsafe(32))"   # → AIRDROME_MCP_TOKEN=<token> in .env
+
+# 2. Run the server
+uv run airdrome mcp
+
+# 3. Register it with Claude Code, in your local (untracked) scope
+claude mcp add --transport http --scope local airdrome http://127.0.0.1:8765/mcp/<token>
+```
+
+`airdrome mcp` never migrates. It refuses to start unless the database is at the current schema:
+when it is merely behind, run `uv run alembic upgrade head`; when it carries a revision the scripts
+no longer know (a database from before the migrations were squashed), recreate it — see
+*Recreating the database* below. On start, and again before every edit, it restores your hand-made
+manual dedup decisions from the mirror into empty tables (as `dedup` does), so no edit after a rebuild —
+even one made while the server keeps running — can overwrite the mirror.
+
+The server never prints or logs the token (its startup line shows `/mcp/<redacted>`, and the HTTP
+access log is off). **Never put the URL in `.mcp.json`** — that file is tracked, and the token
+would land in git.
+
 ## Development
 
 ```bash
@@ -340,3 +381,41 @@ uv run alembic revision --autogenerate -m "<message>"
 uv run alembic upgrade head
 uv run alembic downgrade -1
 ```
+
+### Recreating the database
+
+There is no production database, so a schema change (or a database carrying a revision the scripts
+no longer know) means recreating it rather than migrating. Everything in it is rebuilt from your
+exports; the one hand-made part, your dedup decisions, comes back from the mirror.
+
+```bash
+# 0. Only if the mirror has no "version" (an install from before pair decisions): convert the
+#    hand-made groups from the OLD database now — once it is dropped, nothing can read them.
+uv run python scripts/migrate_dedup_groups.py ~/duplicates.v2.json   # read-only; review its report
+
+# 1. Back up the decision mirror (the durable copy of your hand-made decisions)
+cp "$LIBRARY_DIR/.airdrome/duplicates.json" ~/duplicates.json.bak   # or your DUPLICATES_FILEPATH
+
+# 2. Dump the old database (so a conversion can be re-run if the rebuilt library leaves decisions
+#    dead), then drop and recreate it (compose service `db`, the DB named in DB_DSN)
+docker compose exec -T db pg_dump -U postgres -Fc airdrome > ~/airdrome-old.dump
+docker compose exec db dropdb -U postgres airdrome
+docker compose exec db createdb -U postgres airdrome
+
+# 3. After step 0 only: put the converted file at the mirror path
+mv ~/duplicates.v2.json "$LIBRARY_DIR/.airdrome/duplicates.json"
+
+# 4. Rebuild it — the first command applies the schema
+uv run airdrome import <path>...
+uv run airdrome land
+uv run airdrome dedup          # finds no decisions, restores them from the mirror, re-applies them
+uv run airdrome status         # Dedup → Dead should be ~0
+```
+
+A non-zero *Dead* count means decisions name tracks the rebuilt library spells differently. Restore
+the dump into a scratch database (`pg_restore`) and re-run the script against it (`--dsn`) to check.
+
+If the server is running (or anything else holds a connection, such as the postgres MCP server in
+`.mcp.json`), stop it first or `dropdb` refuses; `dropdb --force` closes those connections.
+`airdrome mcp` also seeds the dedup decisions from the mirror into empty tables, on start and before
+every edit, so running it before `dedup` cannot wipe the mirror.

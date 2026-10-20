@@ -6,9 +6,11 @@ keep `app.py` focused on session lifecycle and the import/land stages.
 """
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 
 from airdrome.conf import settings
 from airdrome.console import console, done
@@ -17,16 +19,17 @@ from airdrome.normalize.dedup import (
     FIELDS,
     RECOMMENDED_SETS,
     CanonStrategy,
-    Deduplicator,
-    DeduplicatorUI,
     auto_deduplicate,
     flag_set,
-    import_dedup_groups,
+    import_decisions,
+    import_legacy,
     restore_if_empty,
 )
+from airdrome.normalize.dedup.decisions import is_legacy, load_v2
 
 from .options import DRY_RUN
 from .state import AppState
+from .tables import dedup_table
 
 
 def _parse_set(spec: str) -> dict[str, bool]:
@@ -78,48 +81,46 @@ def dedup(
         '("artist,duration" + "artist,year" + "album_artist,duration").',
     ),
     canon: CanonStrategy = typer.Option(CanonStrategy.ADDED, "--canon", "-c", help=_CANON_HELP),
-    review: bool = typer.Option(
-        False, "--review", "-r", help="After the batch pass, open the TUI to review and adjust canons."
-    ),
-    match: str = typer.Option("", "--match", help="With --review, filter groups by a substring."),
 ) -> None:
-    """Rebuild Track.canon_id from recording identity + N flag-sets + stored manual overrides.
+    """Rebuild Track.canon_id from the manual decisions + recording identity + N flag-sets.
 
-    The batch pass is a clean slate: all canon_ids are reset, recording identity (shared
-    recording id, close fingerprint match) groups tracks ahead of the flag-sets, each --set
-    produces its own bucket-grouping, overlapping groups are merged (never across a stored
-    "not duplicates" choice), then stored manual choices layer on top and any canon chain is
-    flattened. With no --set the recommended sets are used.
+    The batch pass is a clean slate: all canon_ids are reset, the manual "same" decisions form
+    groups first, recording identity (shared recording id, close fingerprint match) and each --set
+    add their own, and overlapping groups are merged — never across a manual "different" decision.
+    A manual canon choice picks a group's canon; otherwise --canon does. With no --set the
+    recommended sets are used.
 
-    With --review, the interactive deduplicator opens afterward so you can adjust the proposed
-    canons; your choices persist as manual overrides and feed the next batch run.
+    Manual decisions are made through the MCP tools, not here.
     """
     state: AppState = ctx.obj
-    # A rebuilt DB has no groups; seed them from the mirror before the batch pass
-    # reads stored overrides, or a schema rebuild would silently drop every canon.
-    restore_if_empty(state.session, settings.duplicates_file)
+    # A rebuilt DB has no decisions; seed them from the mirror before the batch pass
+    # reads them, or a schema rebuild would silently drop every manual decision.
+    try:
+        restore_if_empty(state.session, settings.duplicates_file)
+    except ValueError as exc:  # an old-format or unreadable mirror: nothing was restored or written
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
     flag_sets = [_parse_set(s) for s in sets] if sets else RECOMMENDED_SETS
     result = auto_deduplicate(state.session, flag_sets=flag_sets, strategy=canon)
 
-    # Skip the per-group tables when reviewing — the TUI renders the same groups interactively,
-    # so printing them first would just be noise scrolled off by the TUI.
-    if not review:
-        for group in result.groups:
-            canons = [None] + [group[0].id] * (len(group) - 1)
-            console.print(DeduplicatorUI.compose_table("auto-dedup", group, canons))
+    for group in result.groups:
+        canons = [None] + [group[0].id] * (len(group) - 1)
+        console.print(dedup_table("auto-dedup", group, canons))
 
     conflicted = (
         f"; {result.conflicted} track(s) with conflicting recording ids left out (-v lists them)"
         if result.conflicted
         else ""
     )
-    done(
-        f"{result.auto_twins} twin(s) across {len(result.groups)} group(s)"
-        f" + {result.manual_changes} manual override(s) from stored choices{conflicted}"
-    )
-
-    if review:
-        Deduplicator(state.session, flag_sets=flag_sets, strategy=canon, partial_match=match).run()
+    parts = [
+        f"{result.auto_twins} automatic + {result.manual_links} manual twin(s)"
+        f" across {len(result.groups)} group(s)"
+    ]
+    if result.superseded:
+        parts.append(f"{result.superseded} superseded decision(s)")
+    if result.dead:
+        parts.append(f"{result.dead} dead decision(s) (naming a track no longer in the library)")
+    done("; ".join(parts) + conflicted)
 
 
 def dedup_import(
@@ -127,22 +128,47 @@ def dedup_import(
     path: Path = typer.Argument(None, help="Input JSON file (default: the library's mirror)."),
     dry_run: bool = DRY_RUN,
 ) -> None:
-    """Load confirmed dedup groups from a JSON file into the DB (idempotent).
+    """Load manual dedup decisions from a JSON file into the DB (idempotent; newest wins row by row).
 
-    The library's own mirror is restored automatically by `dedup`, so this is the
-    manual entrance: seeding one library from another's file, or reviving an old
-    backup. Importing overwrites this library's mirror on commit, by design — what
-    you import becomes the durable copy.
+    The library's own mirror is restored automatically by `dedup`, so this is the manual entrance:
+    seeding one library from another's file, or reviving an old backup. A version 2 file keeps its
+    timestamps, so a decision newer in the DB is kept. An old version-less group file is converted
+    with the migration's conversion rules, each group decided now, in file order — except the live
+    mirror itself, which is refused (convert it from the old DB with scripts/migrate_dedup_groups.py).
+    An import that created or replaced a decision overwrites this library's mirror on commit, by
+    design — what you import becomes the durable copy.
     """
     state: AppState = ctx.obj
     state.dry_run = dry_run
     src = path or settings.duplicates_file
     if not src.exists():
-        console.print(f"[red]No such file: {src}[/red]")
+        console.print(f"[red]No such file: {escape(str(src))}[/red]")
         raise typer.Exit(1)
-    data = json.loads(src.read_text(encoding="utf-8"))
-    created, updated = import_dedup_groups(state.session, data)
-    done(f"Imported {created} new + {updated} updated group(s) from {src}")
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+        if is_legacy(data) and src.resolve() == settings.duplicates_file.resolve():
+            # Importing the live old-format mirror onto itself loses decisions: before `land` every member
+            # is dropped and the file is replaced by an empty document; after it, the file's label order
+            # (not the old DB's group order) decides conflicts. Its source of truth is the old DB.
+            raise ValueError(
+                f"{src} is this library's mirror in the old version-less format; it is not imported over "
+                "itself. Convert it from the old database (before recreating it) with "
+                "`uv run python scripts/migrate_dedup_groups.py OUT`, then move OUT to the mirror path"
+            )
+        dropped = ""
+        if is_legacy(data):
+            counts, converted = import_legacy(state.session, data, datetime.now(UTC))
+            dropped = f"; {converted.dropped} member(s) dropped (no live track)"
+        else:
+            counts = import_decisions(state.session, *load_v2(data))
+    except ValueError as exc:  # unparsable JSON, a malformed document, a pair listed twice, the live mirror
+        state.session.rollback()  # the close hook still commits: make sure nothing half-imported lands
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+    done(
+        f"Imported {counts.created} new + {counts.replaced} replaced"
+        f" ({counts.kept} kept (equal or newer in DB)) decision(s) from {escape(str(src))}{dropped}"
+    )
 
 
 def register(app: typer.Typer) -> None:

@@ -15,7 +15,7 @@ class CanonStrategy(StrEnum):
 
 
 # The optional bucket-key fields (title is always implicit). Single source of
-# truth for both the CLI flag parsing and the manual deduplicator's defaults.
+# truth for the CLI flag parsing and the flag-set builder below.
 FIELDS = ("artist", "album_artist", "album", "year", "track_n", "disc_n", "duration")
 
 
@@ -91,8 +91,8 @@ def merge_overlapping_groups(
     Surfacing the full component together lets the user resolve all canon
     picks for those tracks in one place — and structurally prevents
     cross-page picks from creating canon chains (e.g. T3->T2 chosen on
-    one page and T2->T1 on another). Multi-group components are re-queried
-    so members come back in canon-priority order.
+    one page and T2->T1 on another). Multi-group components come back in
+    canon-priority order (one ordered id scan of the library, shared by all of them).
 
     `cannot_link` holds track-id pairs that must never share a component (a stored "not
     duplicates" choice). The union runs per track, not per group, so the veto is transitive: a
@@ -150,6 +150,9 @@ def merge_overlapping_groups(
         for root in dict.fromkeys(find(tid) for tid in ids):
             sources.setdefault(root, []).append(i)
 
+    # Every component member came in through some group, so its loaded Track is at hand.
+    by_id = {t.id: t for _, tracks in groups for t in tracks if t.id is not None}
+    rank: dict[int, int] | None = None  # canon-order position of every track, read once when needed
     merged: list[tuple[str, list[Track]]] = []
     emitted: set[int] = set()
     for i, ids in enumerate(group_ids):
@@ -164,11 +167,13 @@ def merge_overlapping_groups(
                 continue
             if len(members[root]) < 2:
                 continue
-            tracks = list(
-                session.scalars(
-                    select(Track).where(Track.id.in_(members[root])).order_by(*canon_order(strategy))
-                )
-            )
-            merged.append((key, tracks))
+            if rank is None:  # one ordered id scan for every component, instead of a query each
+                rank = {
+                    tid: i
+                    for i, tid in enumerate(
+                        session.scalars(select(Track.id).order_by(*canon_order(strategy)))
+                    )
+                }
+            merged.append((key, sorted((by_id[tid] for tid in members[root]), key=lambda t: rank[t.id])))
 
     return merged

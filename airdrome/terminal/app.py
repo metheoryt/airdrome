@@ -17,6 +17,7 @@ from airdrome.scrobbles.match_aliases import match_aliases
 
 from . import pipeline
 from .maint import maint_app
+from .mcp import mcp
 from .navi import navi_app
 from .options import DRY_RUN
 from .state import AppState
@@ -40,6 +41,7 @@ Every write command is idempotent and takes --dry-run/-n. Run any command with -
 
 app = typer.Typer(help=_HELP, pretty_exceptions_show_locals=False)
 app.command("status")(status)
+app.command("mcp")(mcp)
 pipeline.register(app)
 app.add_typer(sync_app, name="sync")
 app.add_typer(navi_app, name="navi")
@@ -59,17 +61,17 @@ def main(
         return
     # `status` is a read-only diagnostic that opens its own (defensive) session, so it can
     # report an unreachable DB or un-applied migrations instead of crashing in the setup below.
-    if ctx.invoked_subcommand == "status":
+    # `mcp` opens one session per tool call and must never migrate (it refuses unless at head).
+    if ctx.invoked_subcommand in ("status", "mcp"):
         return
     upgrade_to_head()
-    # expire_on_commit=False keeps ORM objects populated after a commit. The
-    # interactive deduplicator commits repeatedly within one session; without
-    # this, the second commit re-loads every track one-by-one to recompute
-    # duplicate_hash (an N+1 storm that looks like a freeze on a large library).
+    # expire_on_commit=False keeps ORM objects populated after a commit; without it, reading a
+    # track after `auto_deduplicate` commits would re-load it one row at a time (an N+1 storm that
+    # looks like a freeze on a large library).
     session = ctx.with_resource(Session(engine, expire_on_commit=False))
     ctx.obj = AppState(session=session, dry_run=False)
     # Wired for every command, not just `dedup`: the mirror follows commits, and the
-    # listener is inert unless one of them actually touched a dedup group.
+    # listener is inert unless one of them actually touched a dedup decision.
     install_mirror(session, settings.duplicates_file)
 
     def _finalize() -> None:

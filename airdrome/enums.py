@@ -47,3 +47,25 @@ class BindMethod(StrEnum):
     APPLE_PATH = "apple_path"
     DEDUP_FLAGS = "dedup_flags"
     MANUAL = "manual"
+
+
+class Verdict(StrEnum):
+    """The owner's call on a track or alias that is not in the library: want it, or never ask again."""
+
+    WANTED = "wanted"
+    SKIP = "skip"
+
+
+class DecisionKind(StrEnum):
+    """What a manual pair decision says about two tracks: one recording, or two."""
+
+    SAME = "same"
+    DIFFERENT = "different"
+
+
+class DecisionOrigin(StrEnum):
+    """Where a decision came from (informational): the MCP server, a file import, or the migration."""
+
+    MCP = "mcp"
+    IMPORT = "import"
+    MIGRATED = "migrated"

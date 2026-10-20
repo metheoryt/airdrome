@@ -30,12 +30,15 @@ class FileOrganizer:
         """Select the most suitable file for a track (highest bitrate, then container)."""
         return TrackGroup.select_main_file(files)
 
-    def split_main_copies(self, files: list[TrackFile]) -> tuple[TrackFile | None, list[TrackFile]]:
+    def split_main_copies(
+        self, files: list[TrackFile], candidates: list[TrackFile] | None = None
+    ) -> tuple[TrackFile | None, list[TrackFile]]:
+        """Split `files` into the main and the copies; the main is picked among `candidates` (default all)."""
         if not len(files):
             return None, []
 
         if len(files) > 1:
-            main_tf = self.select_main(files)
+            main_tf = self.select_main(files if candidates is None else candidates)
             copies = [tf for tf in files if tf.id != main_tf.id]
             # Per-file detail is verbose-only: on a large library this fires for many tracks and
             # would bury the progress bar. The chosen main is recorded on disk regardless.
@@ -116,8 +119,9 @@ class FileOrganizer:
         The main track file is transferred to the library directory.
         Other files that also represent the track are transferred to the library copies directory.
 
-        :return: The relative path of the transferred main track file.
-        :return: None, if no transfer happened.
+        :return: The relative path of the transferred main track file. When the main was already placed
+            and only manually folded files (outside the main candidates) were placed into Copies/, the
+            main's existing path. None, if no transfer happened.
         """
         if t.canon:
             # Do not handle twins, they will be handled together with their canon track
@@ -132,9 +136,11 @@ class FileOrganizer:
         if not len(files):
             return None
 
+        # The main comes from the canon's core, so a manually folded file never displaces it.
+        candidates = TrackGroup.of(t).main_candidates()
         placed = self._placed_main(files)
         if placed is not None:
-            best = self.select_main(files)
+            best = self.select_main(candidates)
             if best is not placed and best.library_path is None:
                 # An upgrade arrived for a group already in Library/: swap it in rather than collide.
                 self.swap_upgrade(placed, best, t)
@@ -144,13 +150,21 @@ class FileOrganizer:
                         self.transfer_file(copy_tf, dst_rel=self._free_copy_rel(t, ext, files))
                 return best.library_path
 
-        main_tf, copies = self.split_main_copies(files)
+        main_tf, copies = self.split_main_copies(files, candidates)
 
         # main file
         dst_rel = t.generate_relative_path(ext=main_tf.source_path.suffix[1:])
         new_path = self.transfer_file(main_tf, dst_rel=Path(MAIN_SUBDIR) / MUSIC_SUBDIR / dst_rel)
         if not new_path:
-            return None
+            # The main already sits on disk. Only files folded in manually (outside the main
+            # candidates) that have no place yet go to Copies/; any other unplaced file is left alone.
+            pending = [
+                tf for tf in copies if tf.library_path is None and not any(tf is c for c in candidates)
+            ]
+            for copy_tf in pending:
+                ext = copy_tf.source_path.suffix[1:]
+                self.transfer_file(copy_tf, dst_rel=self._free_copy_rel(t, ext, files))
+            return main_tf.library_path if pending else None
 
         # copies
         for i, copy_tf in enumerate(copies):

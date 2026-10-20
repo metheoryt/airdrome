@@ -304,15 +304,16 @@ def _kbps(tf: TrackFile) -> int:
 
 
 def _verdict(canon: Track | None, best: TrackFile) -> Verdict:
-    """`new` with no group; else `upgrade` when `best` beats the group's best file, `have` otherwise.
+    """`new` with no group; else `upgrade` when `best` beats the group's best candidate, `have` otherwise.
 
     The group's *best* file, not its `is_main` one: an upgrade imported but not yet organized is not
     main, and comparing against main would call it an upgrade again on every run. A group with no file
-    at all (a cloud-only track) gets one: that is an upgrade over nothing.
+    at all (a cloud-only track) gets one: that is an upgrade over nothing. Candidates are the canon's
+    core files (`main_candidates`): a better file on a manually folded twin is not the bar to beat.
     """
     if canon is None:
         return Verdict.NEW
-    files = [f for m in TrackGroup.of(canon).members for f in m.files]
+    files = TrackGroup.of(canon).main_candidates()
     if not files:
         return Verdict.UPGRADE
     return Verdict.UPGRADE if _kbps(best) > max(_kbps(f) for f in files) else Verdict.HAVE

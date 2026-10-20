@@ -98,8 +98,31 @@ def find_best_match(
     candidates tied on the top score, so it can never pull in a track the text did not already
     rank first, and the threshold is decided on the score alone.
     """
+    found = find_matches(
+        session, title_norm, artist_norm, album_norm, threshold, title_threshold, log, prefer_mbid, limit=1
+    )
+    return found[0] if found else None
+
+
+def find_matches(
+    session: Session,
+    title_norm: str | None,
+    artist_norm: str | None,
+    album_norm: str | None,
+    threshold: float = 0.4,
+    title_threshold: float = 0.45,
+    log: Callable[[str], None] | None = None,
+    prefer_mbid: str | None = None,
+    limit: int = 5,
+) -> list[tuple[Track, float]]:
+    """The top ``limit`` candidate tracks for an alias with their scores, best first.
+
+    Same gates as ``find_best_match`` (which is ``find_matches(..., limit=1)``): only candidates at or
+    above ``threshold`` are returned, and ``prefer_mbid`` only reorders the candidates tied on the top
+    score. The no-artist path has no threshold, as before.
+    """
     if not title_norm:
-        return None
+        return []
 
     if not artist_norm:
         # No artist to corroborate a relaxed title: `build_match_score` would treat the
@@ -115,10 +138,9 @@ def find_best_match(
                 Track.artist_norm,
                 Track.album_norm,
             )
-            .limit(1)
+            .limit(limit)
         )
-        row = session.execute(stmt).one_or_none()
-        return (row[0], float(row[1])) if row else None
+        return [(row[0], float(row[1])) for row in session.execute(stmt).all()]
 
     # With an artist signal we can loosen the title side: trigram-filter candidates
     # (GIN-indexed via `%`), keep those whose title is exact / similar / containment-related,
@@ -131,19 +153,25 @@ def find_best_match(
         .where(Track.title_norm.op("%")(title_norm))
         .where(_title_candidate_clause(title_norm, title_threshold))
         .order_by(score.desc(), title_sim.desc())
-        .limit(TIE_CANDIDATES if prefer_mbid else 1)
+        .limit(max(limit, TIE_CANDIDATES) if prefer_mbid else limit)
     )
-    rows = session.execute(stmt).all()
+    rows = [(t, float(sc)) for t, sc in session.execute(stmt).all()]
     if not rows:
-        return None
-    track, score_val = rows[0]
+        return []
+    top_score = rows[0][1]
     if prefer_mbid:
-        # Rows are ordered best-first, so the tied ones are a prefix; take the first that carries the hint.
-        tied = [t for t, sc in rows if sc == score_val]
-        track = next((t for t in tied if recording_of_track(t) == prefer_mbid), track)
+        # Rows are ordered best-first, so the tied ones are a prefix; move the first that carries the
+        # hint to the front.
+        pick = next(
+            (i for i, (t, sc) in enumerate(rows) if sc == top_score and recording_of_track(t) == prefer_mbid),
+            0,
+        )
+        rows.insert(0, rows.pop(pick))
+    rows = [(t, sc) for t, sc in rows if sc >= threshold][:limit]
+    if not rows:
+        return []
 
-    if score_val < threshold:
-        return None
+    track, score_val = rows[0]
     if score_val < threshold + 0.1 and log:
         alias_l = f"{title_norm[:25]:<25} | {(album_norm or '')[:40]:<40} | {(artist_norm or '')[:25]:<25}"
         track_l = (
@@ -156,4 +184,4 @@ def find_best_match(
         log(f"[dim]  alias: {alias_l}[/dim]")
         log(f"[dim]  track: {track_l}[/dim]")
 
-    return track, float(score_val)
+    return rows

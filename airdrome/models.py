@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 
 import sqlalchemy as sa
-from sqlalchemy import ForeignKey, Index, UniqueConstraint, create_engine, select, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint, create_engine, select, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, validates
@@ -12,7 +12,7 @@ from sqlalchemy.types import TypeDecorator
 
 from .cloud.apple.utils import generate_path
 from .conf import settings
-from .enums import BindMethod, Source
+from .enums import BindMethod, DecisionKind, DecisionOrigin, Source, Verdict
 from .library import MAIN_SUBDIR
 from .library.tags import file_md5, read_tags
 from .normalize.norm import normalize_name
@@ -92,7 +92,9 @@ class Track(Base):
 
     __tablename__ = "track"
     __table_args__ = (
-        UniqueConstraint("title", "artist", "album", "album_artist"),
+        # NULLS NOT DISTINCT: a key with NULL fields is still one key, so get_or_create and the
+        # decision tables (which name tracks by this key) see exactly one row per key.
+        UniqueConstraint("title", "artist", "album", "album_artist", postgresql_nulls_not_distinct=True),
         # trigram indexes for matching
         Index(
             "ix_track_title_norm_trgm",
@@ -157,6 +159,8 @@ class Track(Base):
     # How the twin->canon link was made; meaningful only while canon_id is set.
     canon_method: Mapped[BindMethod | None] = mapped_column(sa.Enum(BindMethod, native_enum=False))
     canon_confidence: Mapped[float | None]
+    # True for a twin outside its canon's core (written by the dedup apply step, read by sync).
+    canon_folded: Mapped[bool] = mapped_column(default=False, server_default=sa.false())
     canon: Mapped[Track | None] = relationship(
         "Track",
         foreign_keys=[canon_id],
@@ -193,36 +197,6 @@ class Track(Base):
     @property
     def table_row(self) -> tuple[str, str | None, str | None, str | None]:
         return self.title, self.artist, self.album_artist, self.album
-
-    @property
-    def duplicate_hash(self) -> str:
-        """
-        Generates a hash string for identifying potential duplicate tracks.
-
-        Creates a composite hash by combining key metadata fields including title,
-        artist, album artist, album, track number, disc number, year, and a bucketed
-        duration value. The duration is rounded to the nearest 5-second interval to
-        allow for minor variations. Fields are joined with semicolons, with None
-        values represented as empty strings.
-
-        Returns
-        -------
-        str
-            A semicolon-delimited string containing the track's metadata fields,
-            suitable for duplicate detection by comparing hash values between tracks.
-        """
-        duration_bucket = round(self.duration / 5) * 5 if self.duration is not None else None
-        hash_fields = (
-            self.title,
-            self.artist,
-            self.album_artist,
-            self.album,
-            self.track_n,
-            self.disc_n,
-            self.year,
-            duration_bucket,
-        )
-        return ";".join(str(v) if v is not None else "" for v in hash_fields)
 
     @property
     def main_file(self) -> TrackFile | None:
@@ -418,19 +392,31 @@ class TrackGroup:
             reverse=True,
         )[0]
 
-    def recompute_main(self) -> TrackFile | None:
-        """Re-mark the single best file across the whole group as `is_main`.
+    @property
+    def core_members(self) -> list[Track]:
+        """The canon plus the twins automatic grouping alone would have joined (`canon_folded` False)."""
+        return [m for m in self.members if m is self.canon or not m.canon_folded]
 
-        Gathers every file of the canon and its twins, picks the best via
-        `select_main_file`, flags exactly that file and clears the rest. Returns
-        the chosen file, or None when the group owns no files. Run after the
-        canon graph changes so a merged or re-rooted group never keeps a stale
-        or duplicate main.
+    def main_candidates(self) -> list[TrackFile]:
+        """The files the group's main may come from: the core's, or all of them when the core has none.
+
+        A manual fold must not hand the group a different recording's file (owner: the main file is
+        always the canon's own version); the fallback keeps a group with files from playing nothing.
+        """
+        core = [f for m in self.core_members for f in m.files]
+        return core or [f for m in self.members for f in m.files]
+
+    def recompute_main(self) -> TrackFile | None:
+        """Re-mark the single best candidate file as `is_main`, clearing every other file of the group.
+
+        Picks via `select_main_file` among `main_candidates` (the canon's core, else the whole group).
+        Returns the chosen file, or None when the group owns no files. Run after the canon graph
+        changes so a merged or re-rooted group never keeps a stale or duplicate main.
         """
         files = [f for m in self.members for f in m.files]
         if not files:
             return None
-        best = self.select_main_file(files)
+        best = self.select_main_file(self.main_candidates())
         for f in files:
             f.is_main = f is best  # identity, not id: files may be unflushed
         return best
@@ -630,39 +616,53 @@ class PlaylistLink(Base):
     synced_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
 
-class DedupGroup(Base):
-    """A user-confirmed duplicate group from the manual deduplicator.
+class PairDecision(Base):
+    """A manual same/different decision about two tracks, named by their natural-key text (`key_a < key_b`).
 
-    The group's identity is the multiset of its members' `duplicate_hash`
-    values, not `label` (which is an engine-specific display string kept only
-    for readability). A persisted group means the user reviewed it; a group
-    whose members all have `canon_hash = NULL` records "reviewed, these are
-    not duplicates" and must not be re-prompted.
+    No DB check on the ordering: Postgres collation is not Python's, so `decisions.pair()` orders the ends.
     """
 
-    __tablename__ = "dedupgroup"
+    __tablename__ = "pairdecision"
+    __table_args__ = (UniqueConstraint("key_a", "key_b"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    label: Mapped[str | None]
-    members: Mapped[list[DedupGroupMember]] = relationship(
-        back_populates="group", cascade="all, delete-orphan"
+    key_a: Mapped[str]
+    key_b: Mapped[str]
+    kind: Mapped[DecisionKind] = mapped_column(sa.Enum(DecisionKind, native_enum=False))
+    decided_at: Mapped[AwareDatetime]
+    origin: Mapped[DecisionOrigin] = mapped_column(sa.Enum(DecisionOrigin, native_enum=False))
+
+
+class CanonChoice(Base):
+    """A manual pick of one track (natural-key text) as the main version of its group."""
+
+    __tablename__ = "canonchoice"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(unique=True)
+    decided_at: Mapped[AwareDatetime]
+    origin: Mapped[DecisionOrigin] = mapped_column(sa.Enum(DecisionOrigin, native_enum=False))
+
+
+class WantedVerdict(Base):
+    """The owner's verdict on one canonical track or one unbound alias (exactly one target).
+
+    A rejected alias is not a verdict row: it is ``track_id IS NULL`` with ``match_method = MANUAL``.
+    """
+
+    __tablename__ = "wantedverdict"
+    __table_args__ = (
+        CheckConstraint(
+            "(track_id IS NOT NULL) <> (alias_id IS NOT NULL)", name="ck_wantedverdict_one_target"
+        ),
     )
 
-
-class DedupGroupMember(Base):
-    """One track within a `DedupGroup`, identified by its `duplicate_hash`.
-
-    `canon_hash` is the `duplicate_hash` of the chosen canon within the same
-    group, or NULL when the track is itself a canon / unassigned.
-    """
-
-    __tablename__ = "dedupgroupmember"
-
     id: Mapped[int] = mapped_column(primary_key=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("dedupgroup.id", ondelete="CASCADE"), index=True)
-    group: Mapped[DedupGroup] = relationship(back_populates="members")
-    member_hash: Mapped[str] = mapped_column(index=True)
-    canon_hash: Mapped[str | None]
+    track_id: Mapped[int | None] = mapped_column(ForeignKey("track.id", ondelete="CASCADE"), unique=True)
+    alias_id: Mapped[int | None] = mapped_column(ForeignKey("trackalias.id", ondelete="CASCADE"), unique=True)
+    verdict: Mapped[Verdict] = mapped_column(sa.Enum(Verdict, native_enum=False))
+    note: Mapped[str | None]
+    decided_at: Mapped[AwareDatetimeDefNow]
 
 
 class ScanCache(Base):

@@ -1,17 +1,16 @@
-from .auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
-from .grouping import FIELDS, RECOMMENDED_SETS, CanonStrategy, canon_order, flag_set
-from .manual import Deduplicator
-from .mirror import install_mirror, restore_if_empty, write_mirror
-from .persistence import (
-    apply_manual_overrides,
-    export_dedup_groups,
-    flatten_canon_chains,
-    import_dedup_groups,
-    recompute_main_files,
-    stored_cannot_links,
+from .auto import (
+    AutoDedupResult,
+    DedupPlan,
+    apply_plan,
+    auto_deduplicate,
+    compute_auto_dedup_groups,
+    plan_dedup,
 )
+from .grouping import FIELDS, RECOMMENDED_SETS, CanonStrategy, canon_order, flag_set
+from .mirror import install_mirror, restore_if_empty, write_mirror
+from .persistence import flatten_canon_chains, recompute_main_files
 from .recording import compute_recording_groups
-from .tui import DeduplicatorUI
+from .store import ImportCounts, import_decisions, import_legacy
 
 
 __all__ = [
@@ -19,20 +18,20 @@ __all__ = [
     "RECOMMENDED_SETS",
     "AutoDedupResult",
     "CanonStrategy",
-    "Deduplicator",
-    "DeduplicatorUI",
-    "apply_manual_overrides",
+    "DedupPlan",
+    "ImportCounts",
+    "apply_plan",
     "auto_deduplicate",
     "canon_order",
     "compute_auto_dedup_groups",
     "compute_recording_groups",
-    "export_dedup_groups",
     "flag_set",
     "flatten_canon_chains",
-    "import_dedup_groups",
+    "import_decisions",
+    "import_legacy",
     "install_mirror",
+    "plan_dedup",
     "recompute_main_files",
     "restore_if_empty",
-    "stored_cannot_links",
     "write_mirror",
 ]

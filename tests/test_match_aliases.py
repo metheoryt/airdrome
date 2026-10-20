@@ -308,3 +308,14 @@ def test_disagreeing_listens_no_id(session):
     _scrobble(session, other, 2, submitted=MBID)
     _scrobble(session, other, 3)
     assert alias_ids(session, other) == (MBID, None)
+
+
+def test_rejected_alias_is_not_rematched(session):
+    """A manual reject (MANUAL method, no track) is skipped and not even counted."""
+    _make_track(session, "Bohemian Rhapsody", "Queen", "A Night at the Opera")
+    alias = _make_alias(session, "Bohemian Rhapsody", "Queen", "A Night at the Opera")
+    alias.match_method = BindMethod.MANUAL
+    session.flush()
+
+    assert do_match_aliases(session) == (0, 0)
+    assert alias.track_id is None

@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         description="Airdrome-organized library path. Must be empty for a fresh install."
     )
 
-    # Manual dedup choices live in the DB (DedupGroup), which is disposable; this
+    # Manual dedup choices live in the DB (the pair-decision tables), which is disposable; this
     # overrides where their durable mirror is kept. Unset means under the library —
     # see `duplicates_file`.
     duplicates_filepath: Path | None = None
@@ -26,6 +26,10 @@ class Settings(BaseSettings):
 
     # AcoustID application key for fingerprint lookups; unset disables the lookup rung.
     acoustid_client_key: SecretStr | None = None
+
+    # MCP server: the token is the secret path segment (`/mcp/<token>`) — never print or log it.
+    airdrome_mcp_token: SecretStr | None = None
+    airdrome_mcp_port: int = 8765
 
     @property
     def duplicates_file(self) -> Path:

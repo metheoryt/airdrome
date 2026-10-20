@@ -7,10 +7,11 @@ evidence on the files (docs/design/identity-ladder.md, *Recording-identity group
 - **Recording id.** Tracks whose files agree on one `recording_mbid` (`recording_of_track`) group.
   A track whose files carry *different* ids is *conflicted*: it joins no recording group (one
   mis-bound file must not chain two groups together) and is reported instead.
-- **Fingerprint.** Each track contributes one representative file (its main file when that has a
-  fingerprint, else its lowest-id fingerprinted file), looked up through `FingerprintIndex`, so no
-  pass compares every pair. A match at or above `FP_MATCH` links automatically when the durations
-  differ by at most `FP_MAX_DURATION_GAP`; with a larger gap it is only a review candidate.
+- **Fingerprint.** Each track contributes one representative file (its highest-bitrate fingerprinted
+  file, then the lowest id; never the main flag, which moves with the group), looked up through
+  `FingerprintIndex`, so no pass compares every pair. A match at or above `FP_MATCH` links
+  automatically when the durations differ by at most `FP_MAX_DURATION_GAP`; with a larger gap it is
+  only a review candidate.
 
 Two different agreed recording ids never end in one group: a fingerprint edge between them is
 dropped, and a component never collects a second id (an id-less track matching an X track and a
@@ -81,9 +82,13 @@ class _Components:
 
 
 def _representative(t: Track) -> TrackFile | None:
-    """The one file whose fingerprint stands for `t`: the main file if fingerprinted, else the lowest id."""
-    usable = sorted((f for f in t.files if f.fingerprint and f.fp_duration is not None), key=lambda f: f.id)
-    return next((f for f in usable if f.is_main), usable[0] if usable else None)
+    """The file whose fingerprint stands for `t`: its highest-bitrate fingerprinted file, then the lowest id.
+
+    Never `is_main`: the main file moves with the group a track ends in, so reading it would make the next
+    run's grouping depend on the last one (and an edit's plan differ from the `dedup` after it).
+    """
+    usable = [f for f in t.files if f.fingerprint and f.fp_duration is not None]
+    return min(usable, key=lambda f: (-(f.bitrate or 0), f.id)) if usable else None
 
 
 def _id_method(t: Track, rid: str) -> BindMethod:

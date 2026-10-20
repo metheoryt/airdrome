@@ -1,12 +1,14 @@
 """Tests for group-wide main-file selection and recompute on canon changes."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
+from airdrome.enums import DecisionKind
 from airdrome.models import TrackFile, TrackGroup
 from airdrome.normalize.dedup.auto import auto_deduplicate
 from airdrome.normalize.dedup.persistence import recompute_main_files
 
-from factories import make_track
+from factories import add_pair, make_track
 
 
 def _add_file(s, track, name: str, bitrate: int, ext: str = "mp3", is_main: bool = False) -> TrackFile:
@@ -118,7 +120,7 @@ def test_auto_deduplicate_recomputes_group_mains(session):
     # Two identical-key tracks become one group; the best file (on whichever
     # track ends up a twin) must own the single is_main flag afterwards.
     a = make_track(session, "Song", "Artist")
-    b = make_track(session, "Song", "Artist")
+    b = make_track(session, "song", "artist")
     fa = _add_file(session, a, "a", 128000)
     fb = _add_file(session, b, "b", 320000)
     session.flush()
@@ -127,3 +129,62 @@ def test_auto_deduplicate_recomputes_group_mains(session):
 
     mains = [f for f in (fa, fb) if f.is_main]
     assert mains == [fb]  # exactly one main, the higher-bitrate copy
+
+
+# --- the main file of a manually folded group comes from the canon's core ---
+
+
+def test_main_stays_with_core_when_folded_file_is_better(session):
+    """The canon, its auto twin and a manually folded track: the folded 320 kbps file never leads."""
+    c = make_track(session, "Song", "Artist", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    auto = make_track(session, "song", "artist", date_added=datetime(2021, 1, 1, tzinfo=UTC))
+    f = make_track(session, "Other", "Band", date_added=datetime(2022, 1, 1, tzinfo=UTC))
+    fc = _add_file(session, c, "c", 128000)
+    fa = _add_file(session, auto, "a", 96000)
+    ff = _add_file(session, f, "f", 320000)
+    fc.recording_mbid = "11111111-1111-1111-1111-111111111111"
+    ff.recording_mbid = "22222222-2222-2222-2222-222222222222"
+    add_pair(session, c, f, DecisionKind.SAME)
+
+    auto_deduplicate(session)
+
+    assert f.canon_id == c.id and f.canon_folded is True
+    assert auto.canon_id == c.id and auto.canon_folded is False
+    assert [x for x in (fc, fa, ff) if x.is_main] == [fc]
+
+
+def test_main_falls_back_when_core_has_no_file(session):
+    """A canon with no file: the folded twin's file is the group's main, so the group still plays."""
+    c = make_track(session, "Song", "Artist")
+    f = make_track(session, "Other", "Band", canon_id=c.id, canon_folded=True)
+    ff = _add_file(session, f, "f", 320000)
+
+    recompute_main_files(session)
+
+    assert ff.is_main is True
+
+
+def test_group_without_fold_picks_best_anywhere(session):
+    """No `canon_folded` anywhere: the core is the whole group, so the best file wins as before."""
+    c = make_track(session, "Song", "Artist")
+    t = make_track(session, "Song2", "Artist", canon_id=c.id)
+    lo = _add_file(session, c, "lo", 128000)
+    hi = _add_file(session, t, "hi", 320000)
+
+    recompute_main_files(session)
+
+    assert (lo.is_main, hi.is_main) == (False, True)
+
+
+def test_main_candidates_are_core_files_or_everything(session):
+    """`main_candidates` is the core's files, or every member's when the core owns none."""
+    c = make_track(session, "Song", "Artist")
+    f = make_track(session, "Other", "Band", canon_id=c.id, canon_folded=True)
+    ff = _add_file(session, f, "f", 320000)
+    session.refresh(c)
+    group = TrackGroup.of(c)
+    assert group.core_members == [c]
+    assert group.main_candidates() == [ff]
+    fc = _add_file(session, c, "c", 128000)
+    session.refresh(c)
+    assert TrackGroup.of(c).main_candidates() == [fc]

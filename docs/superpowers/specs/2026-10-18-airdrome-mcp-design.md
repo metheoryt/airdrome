@@ -58,15 +58,15 @@ v1 should be small enough to try quickly and change.
   close; a server that runs for hours cannot live under it. `airdrome mcp` bypasses the callback the
   way `status` does (early return on the command name) and opens a session per tool call: commit on
   success, roll back on error. Business logic keeps the house rule — takes `s: Session`, flushes,
-  never commits. Sessions that can touch `DedupGroup` get `install_mirror`, so `duplicates.json`
+  never commits. Sessions that can touch a dedup decision get `install_mirror`, so `duplicates.json`
   stays current while the mirror exists.
 - **No migration on start (call).** `airdrome mcp` checks the schema is at head and refuses to start
   otherwise, rather than migrating the live DB as a side effect of launching a server.
 - **Every list is bounded.** `wanted` part 1 is "all of them" (thousands of rows): every list tool
   takes a page size and a cursor, returns compact rows, and the full card is a separate call.
 - **Invariants edits must keep:** `canon_id` is terminal (no chains); exactly one `is_main` file per
-  group (`recompute_main_files` after any canon change); a stored "not duplicates" is a hard,
-  transitive cannot-link; one recording id per group.
+  group (`recompute_main_files` after any canon change); a manual `different` is a hard,
+  transitive cannot-link unless a newer `same` joined the pair; one recording id per group.
 - Python 3.14, the repo's conventions (one-line docstrings, ANN, `ty`), tests against the compose
   Postgres.
 
@@ -94,8 +94,7 @@ the whole group, as `navi push` does.
     cache it per process, or compute it only for the page being returned (builder's call).
   - Filters worth having: by part, by verdict, text search on title/artist.
 - **Track card** — the group's members, files (path, bitrate, `is_main`, `bind_method`/confidence),
-  source rows, aliases with `match_method`/confidence and play counts, playlists, dedup group and
-  its stored review if any, verdict.
+  source rows, aliases with `match_method`/confidence and play counts, playlists, the manual pair decisions touching the members (accepted / superseded / dead) and canon choices, verdict.
 - **Unmatched aliases** — paged, sorted by scrobble count, each with the top few candidate tracks
   and scores (the alias ladder's fuzzy step, read-only). Feeds edit 3.
 - **Library status** — the same numbers `airdrome status` prints (reuse its logic, don't fork it).
@@ -113,13 +112,11 @@ idempotent. Each must survive a re-run of `land` and `dedup`.
    owner accepts that a DB recreation drops them. A verdict on a twin is stored on its canon. A later
    file arriving for the group does not delete the verdict — `wanted` simply stops listing the
    group. *Wanted* is what the Soulseek loop will consume.
-2. **Same track / different tracks** on two (or more) tracks. Built on the existing manual dedup
-   storage (`dedupgroup` / `dedupgroupmember`, member-hash identity): *same* stores a confirmed
-   group with a chosen canon (default: the existing `canon_order` pick) and applies it to
-   `canon_id` now; *different* stores the all-NULL "not duplicates" group, which `dedup` already
-   treats as a hard cannot-link, and unlinks them now. Both run `recompute_main_files`. Merging with
-   an already stored group that shares a member is the builder's to get right (the TUI has the
-   precedent).
+2. **Same track / different tracks** on two (or more) tracks. Stored as one pair decision each
+   (`PairDecision`, newest wins; see [pair-decisions-design](2026-10-18-pair-decisions-design.md), which
+   replaced the original group storage): *same* joins the two tracks' groups, *different* separates
+   them, and the result is applied to `canon_id` now exactly as the next `dedup` would, then
+   `recompute_main_files` runs on the touched groups. A manual *same* crosses recording ids.
 3. **Bind an alias to a track / reject a bind.** Bind sets `track_id`, `match_method = MANUAL`,
    `match_confidence = 1.0`. `match_aliases` only touches aliases with `track_id IS NULL`, so a
    manual bind already survives `land`. **Reject needs a negative the ladder skips:** e.g.
@@ -164,9 +161,9 @@ the facts need not be re-derived, and the `land --merge-playlists` question is a
 
 - **Schema rollout (call):** follow the repo habit — edit models, regenerate the single migration,
   recreate the DB and re-run the pipeline. The owner accepts that recreation drops manual state.
-- **Edits act on groups (call):** *same(A, B)* merges A's whole group with B's whole group (one
-  canon, `canon_order` default); *different(A, B)* separates A's group from B's group and leaves each
-  group's other links alone. Stored to `dedupgroup` so `dedup` reproduces exactly that.
+- **Edits are pair decisions (call, superseded by the pair-decisions design):** *same(A, B)* /
+  *different(A, B)* store one decision about the pair; the resolution (newest wins) decides the groups,
+  so the outcome is what `dedup` reproduces.
 - **CLI and server may both run (call):** no guard in v1. Every tool call reads fresh state (no
   cross-call caches that a `dedup` could stale); the mirror is a whole-table snapshot at commit, so
   the last commit writes the current table. Revisit if it bites.

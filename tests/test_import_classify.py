@@ -22,9 +22,8 @@ from airdrome.library.organize import FileOrganizer
 from airdrome.library.scan import Verdict, classify
 from airdrome.library.tags import file_md5, read_tags
 from airdrome.models import ScanCache, Track, TrackFile
-from airdrome.normalize.dedup.persistence import stored_cannot_links, stored_canons
 from tests.conftest import write_wav
-from tests.factories import make_dedup_group, make_track
+from tests.factories import make_track
 
 
 SECONDS = 12
@@ -195,6 +194,26 @@ def test_better_copy_is_upgrade_and_swaps(
     assert file_md5(lib_dir / old.library_path) == file_md5(bank["one_lo"])
 
 
+def test_classify_upgrade_compares_core_files(session, seed_library, loose, loose_root) -> None:
+    """Only the core sets the bar: beating it is `upgrade`; beating just a folded file is `have`."""
+    track, core_file = seed_library("one_hi")
+    folded = make_track(session, "Other", "Band", canon_id=track.id, canon_folded=True)
+    fold_file = TrackFile(source_path=Path("/old/fold.wav"), track=folded, bitrate=900_000)
+    session.add(fold_file)
+    loose("one_lo", "cd1/01.wav")  # 352 kbps
+    core_file.bitrate = 100_000
+    session.flush()
+
+    (cand,) = classify(session, [loose_root])
+    assert cand.verdict is Verdict.UPGRADE  # beats the core (100), though not the folded 900
+
+    core_file.bitrate = 500_000
+    fold_file.bitrate = 100_000
+    session.flush()
+    (cand,) = classify(session, [loose_root])
+    assert cand.verdict is Verdict.HAVE  # beats only the folded file
+
+
 def test_unknown_is_new(session, seed_library, loose, loose_root) -> None:
     """Unmatched audio is `new`; importing creates its TrackFile and the ladder gives it a Track."""
     seed_library("one_hi")
@@ -328,20 +347,22 @@ def test_report_names_untagged_copies_after_the_library_track(
     assert "0 new, 0 upgrade, 1 have — 0 file(s) to import" in out
 
 
-def test_import_onto_stored_group_member_keeps_the_group(session, seed_library, loose, loose_root) -> None:
-    """I-1: a file whose tags hit a hand-made group's member does not backfill its hashed fields."""
-    seeded, _ = seed_library("one_hi")
+def test_import_onto_cloud_only_track_binds_and_backfills(session, seed_library, loose, loose_root) -> None:
+    """I-1: a file whose tags hit a cloud-only track binds to it and fills its empty fields.
+
+    The backfill never touches the natural key (title, artist, album, album artist), so the pair
+    decisions naming the track stay live.
+    """
+    seed_library("one_hi")
     member = make_track(session, title="Other", artist="X")  # cloud-only: no file, no duration
-    make_dedup_group(session, [(seeded, None), (member, None)])  # "not duplicates"
-    canons, vetoes = stored_canons(session), stored_cannot_links(session)
-    assert canons and vetoes
+    key = (member.title, member.artist, member.album, member.album_artist)
     tagged = loose("two_hi", "a/other.wav", title="Other", artist="X")
 
     MusicFolderImporter(loose_root).import_tracks(session)
 
     assert session.scalars(select(TrackFile).where(TrackFile.source_path == tagged)).one().track is member
-    assert member.duration is None
-    assert (stored_canons(session), stored_cannot_links(session)) == (canons, vetoes)
+    assert member.duration == SECONDS
+    assert (member.title, member.artist, member.album, member.album_artist) == key
 
 
 def test_untagged_new_files_are_reported_unbound(session, seed_library, loose, loose_root) -> None:

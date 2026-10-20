@@ -1,7 +1,8 @@
 from collections.abc import Callable
+from typing import Any
 
 from rich.progress import TextColumn
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from airdrome.console import done, is_verbose, make_progress
@@ -54,6 +55,15 @@ def _exact_track(s: Session, alias: TrackAlias, prefer_mbid: str | None) -> Trac
     return track.canon or track
 
 
+def _unbound_aliases(stmt: Select[Any]) -> Select[Any]:
+    """Restrict ``stmt`` to aliases awaiting a match: unbound and not manually rejected."""
+    return stmt.where(
+        TrackAlias.track_id.is_(None),
+        # track_id NULL + MANUAL is the owner's reject; the ladder must never re-bind it.
+        or_(TrackAlias.match_method.is_(None), TrackAlias.match_method != BindMethod.MANUAL),
+    )
+
+
 def _bind_alias(alias: TrackAlias, track: Track, method: BindMethod, confidence: float) -> None:
     """Record the binding of ``alias`` to ``track`` with its method and confidence."""
     alias.track = track
@@ -78,7 +88,7 @@ def do_match_aliases(
     on_progress(matched, unmatched) is called after each alias is processed.
     Testable directly — no session creation, no progress output.
     """
-    aliases = s.scalars(select(TrackAlias).where(TrackAlias.track_id.is_(None))).all()
+    aliases = s.scalars(_unbound_aliases(select(TrackAlias))).all()
     by_mbid = build_mbid_index(s)  # only the id map; the fingerprint index is not needed here
     matched = unmatched = 0
 
@@ -124,7 +134,7 @@ def match_aliases(s: Session, threshold: float = 0.4) -> None:
         TextColumn("[red]✗ {task.fields[mismatch]}[/red]"),
     )
 
-    total = s.scalars(select(func.count(TrackAlias.id)).where(TrackAlias.track_id.is_(None))).one()
+    total = s.scalars(_unbound_aliases(select(func.count(TrackAlias.id)))).one()
 
     with progress:
         task = progress.add_task("Matching aliases", total=total, match=0, mismatch=0)

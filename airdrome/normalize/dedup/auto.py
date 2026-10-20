@@ -1,4 +1,12 @@
-from dataclasses import dataclass
+"""Automatic dedup over the library, layered with the manual pair decisions.
+
+`plan_dedup` computes the whole outcome without writing: final groups (canon first), each twin's link
+and which twins are folded in (outside the canon's core). `apply_plan` writes it for all tracks or for
+a scope, which is how an MCP point edit reproduces exactly what a full `dedup` run would.
+"""
+
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -7,15 +15,11 @@ from airdrome.console import detail
 from airdrome.enums import BindMethod
 from airdrome.models import Track
 
+from .decisions import Outcome, Resolution
 from .grouping import CanonStrategy, canon_order, merge_overlapping_groups
-from .persistence import (
-    apply_manual_overrides,
-    flatten_canon_chains,
-    recompute_main_files,
-    stored_cannot_links,
-    stored_canons,
-)
+from .persistence import flatten_canon_chains, recompute_main_files
 from .recording import scan_recordings
+from .store import resolve_library
 
 
 def compute_auto_dedup_groups(
@@ -73,42 +77,169 @@ def compute_auto_dedup_groups(
     return [g for g in bucketed.values() if len(g) >= 2]
 
 
-def _anchor_on_stored_canon(
-    group: list[Track], governed: dict[int, int | None], rec_ids: set[int]
-) -> list[Track]:
-    """Put the stored canon first when recording identity brought a hand-made group's member here.
+@dataclass
+class DedupPlan:
+    """The outcome of one dedup pass, before anything is written."""
 
-    The overrides run last and re-point every governed member to its stored canon; were the
-    automatic canon a newcomer, that would strand it alone. Anchoring the group on the stored
-    canon makes the newcomer join under it (spec, *manual veto*). Two limits:
+    groups: list[list[Track]]  # final groups, canon first
+    links: dict[int, tuple[int, BindMethod, float | None]]  # twin id -> (canon id, method, confidence)
+    folded: frozenset[int]  # twins outside their canon's core (joined only through a manual decision)
+    raw: list[tuple[str, list[Track]]]  # every input group: manual components, recording, flag-sets
+    resolution: Resolution
+    conflicted: list[Track] = field(default_factory=list)  # tracks whose files disagree on the id
 
-    - Only a governed member that is itself in a recording group picks the root: the spec scopes
-      the rule to newcomers that recording identity adds. A stored canon that only the flag sets
-      reached (a member of an unrelated hand-made group) never re-canons a group, so a group
-      without such a member keeps the plain canon order.
-    - Only a stored canon already in `group`. It got there through the union-find (the
-      stored-root edges in `auto_deduplicate`), so the cannot-link veto has already ruled on it;
-      a root the veto kept out is never pulled in here.
 
-    Should two stored groups meet in one merged group, the first governed member in canon order
-    decides, and the overrides re-point the other group's members afterwards.
+def _flag_set_groups(
+    s: Session, flag_sets: list[dict[str, bool]], strategy: CanonStrategy
+) -> list[tuple[str, list[Track]]]:
+    """Every flag-set's bucket groups, labelled by set index and the fields it leaves out."""
+    out: list[tuple[str, list[Track]]] = []
+    for i, flags in enumerate(flag_sets):
+        excluded = sorted(k.removeprefix("with_") for k, v in flags.items() if v is False)
+        key_suffix = "-" + "-".join(excluded) if excluded else "all"
+        for j, group in enumerate(compute_auto_dedup_groups(s, strategy=strategy, **flags)):
+            out.append((f"set{i}[{key_suffix}]#{j}", group))
+    return out
+
+
+def plan_dedup(s: Session, flag_sets: list[dict[str, bool]], strategy: CanonStrategy) -> DedupPlan:
+    """Compute the final groups from decisions, recording identity and flag-sets; no writes.
+
+    Manual must-link components go into the union-find first, so manual wins both ways: an automatic
+    join to a track a manual `different` separates is vetoed, and a manual `same` is never vetoed (and
+    may cross recording ids). The canon is the member with the newest canon choice, else the first in
+    `canon_order`. Its core is what automatic grouping alone joins to it; the rest of the group is folded.
+    Reads no `canon_id`, so it needs no reset first.
     """
-    ids = {t.id for t in group}
-    root_id = next(
-        (r for t in group if t.id in rec_ids and t.id in governed and (r := governed[t.id] or t.id) in ids),
-        None,
-    )
-    if root_id is None or group[0].id == root_id:
-        return group
-    root = next(t for t in group if t.id == root_id)
-    return [root, *(t for t in group if t is not root)]
+    res = resolve_library(s)
+    rec = scan_recordings(s, strategy)
+
+    # Each component in canon order (an intact single group passes through the merge as-is), all of them
+    # from one query: the query's canon order, partitioned by component, keeps each component's order.
+    manual_of = {tid: i for i, comp in enumerate(res.components) for tid in comp}
+    members: list[list[Track]] = [[] for _ in res.components]
+    in_components = select(Track).where(Track.id.in_(list(manual_of))).order_by(*canon_order(strategy))
+    for t in s.scalars(in_components) if manual_of else ():
+        members[manual_of[t.id]].append(t)
+    manual = [(f"manual#{i}", tracks) for i, tracks in enumerate(members)]
+    auto_raw = [*rec.auto, *_flag_set_groups(s, flag_sets, strategy)]
+    raw = [*manual, *auto_raw]
+    merged = merge_overlapping_groups(s, raw, strategy, cannot_link=res.cannot_link)
+
+    # The automatic part alone, under the same veto: each track's core candidates.
+    auto_comp: dict[int, frozenset[int]] = {}
+    for _, group in merge_overlapping_groups(s, auto_raw, strategy, cannot_link=res.cannot_link):
+        ids = frozenset(t.id for t in group)
+        for tid in ids:
+            auto_comp[tid] = ids
+    rec_group_of = {t.id: j for j, (_, group) in enumerate(rec.auto) for t in group}
+    rec_members = [{t.id for t in group} for _, group in rec.auto]
+
+    groups: list[list[Track]] = []
+    links: dict[int, tuple[int, BindMethod, float | None]] = {}
+    folded: set[int] = set()
+    for _, group in merged:
+        # Newest canon choice wins; at an equal time the one earlier in canon order (a fixed tie-break).
+        chosen = [(i, t) for i, t in enumerate(group) if t.id in res.canons]
+        if chosen:
+            _, canon = max(chosen, key=lambda it: (res.canons[it[1].id], -it[0]))
+        else:
+            canon = group[0]
+        group = [canon, *(t for t in group if t is not canon)]
+        groups.append(group)
+        ids = {t.id for t in group}
+        core = ids & auto_comp.get(canon.id, frozenset((canon.id,)))
+        for twin in group[1:]:
+            in_manual = twin.id in manual_of and manual_of[twin.id] == manual_of.get(canon.id)
+            if twin.id not in core:
+                folded.add(twin.id)
+            if twin.id not in core or in_manual:
+                links[twin.id] = (canon.id, BindMethod.MANUAL, 1.0)
+                continue
+            # Recording evidence names the link when the twin's recording group reaches into this
+            # group through another member; otherwise only the flag-sets joined it.
+            rec_j = rec_group_of.get(twin.id)
+            if rec_j is not None and len(rec_members[rec_j] & ids) > 1:
+                method, confidence = rec.evidence[twin.id]
+                links[twin.id] = (canon.id, method, confidence)
+            else:
+                links[twin.id] = (canon.id, BindMethod.DEDUP_FLAGS, None)
+
+    return DedupPlan(groups, links, frozenset(folded), raw, res, list(rec.conflicted))
+
+
+def apply_plan(s: Session, plan: DedupPlan, scope: AbstractSet[int] | None = None) -> set[int]:
+    """Write the plan's links onto the tracks in `scope` (all when None); returns old and new root ids.
+
+    Writes `canon` (through the relationship, so loaded `twins` collections follow), `canon_method`,
+    `canon_confidence` and `canon_folded`, roots included (a root carries no link). Flushes.
+    """
+    query = select(Track)
+    if scope is not None:
+        query = query.where(Track.id.in_(list(scope)))
+    tracks = {t.id: t for t in s.scalars(query)}
+    touched: set[int] = set()
+    for tid, t in tracks.items():
+        touched.add(t.canon_id if t.canon_id is not None else tid)
+        link = plan.links.get(tid)
+        target = link[0] if link else None
+        if t.canon_id != target:
+            t.canon = (tracks.get(target) or s.get_one(Track, target)) if target is not None else None
+        t.canon_method, t.canon_confidence = (link[1], link[2]) if link else (None, None)
+        t.canon_folded = tid in plan.folded
+        touched.add(target if target is not None else tid)
+    s.flush()
+    # A many-to-one write whose old value was never loaded leaves that old root's loaded `twins` stale,
+    # and `recompute_main_files` reads `twins`; reload them.
+    for root_id in touched:
+        root = s.get(Track, root_id)
+        if root is not None:
+            s.expire(root, ["twins"])
+    return touched
+
+
+def _current_groups(s: Session) -> dict[int, set[int]]:
+    """Root id -> ids of its current group (root and twins), from `canon_id`."""
+    groups: dict[int, set[int]] = {}
+    for tid, cid in s.execute(select(Track.id, Track.canon_id)):
+        groups.setdefault(cid if cid is not None else tid, set()).add(tid)
+    return groups
+
+
+def edit_scope(s: Session, plan: DedupPlan, seeds: AbstractSet[int]) -> set[int]:
+    """Close `seeds` to a fixpoint over the plan's raw groups and the current canon groups.
+
+    The result is a union of whole final groups (every final group is a union of raw groups) and of
+    whole current groups, so applying the plan to it reproduces a full run on those tracks and leaves
+    every other track's group as it is.
+    """
+    by_track: dict[int, list[set[int]]] = {}
+    for _, group in plan.raw:
+        ids = {t.id for t in group}
+        for tid in ids:
+            by_track.setdefault(tid, []).append(ids)
+    for members in _current_groups(s).values():
+        for tid in members:
+            by_track.setdefault(tid, []).append(members)
+
+    scope = set(seeds)
+    todo = list(scope)
+    while todo:
+        tid = todo.pop()
+        for ids in by_track.get(tid, ()):
+            for other in ids - scope:
+                scope.add(other)
+                todo.append(other)
+    return scope
 
 
 @dataclass
 class AutoDedupResult:
     groups: list[list[Track]]
-    auto_twins: int
-    manual_changes: int
+    auto_twins: int  # twins linked by automatic evidence (recording identity or flag-sets)
+    manual_links: int  # twins linked MANUAL (folded in, or sharing a manual component with the canon)
+    superseded: int = 0  # pair decisions a newer decision overrides
+    dead: int = 0  # pair decisions and canon choices naming a track no longer in the library
     conflicted: int = 0  # tracks left out of recording grouping: their files disagree on the id
 
 
@@ -117,83 +248,38 @@ def auto_deduplicate(
     flag_sets: list[dict[str, bool]] | None = None,
     strategy: CanonStrategy = CanonStrategy.ADDED,
 ) -> AutoDedupResult:
-    """Rebuild Track.canon_id from recording identity, flag-sets and stored manual overrides.
+    """Rebuild Track.canon_id from the manual decisions, recording identity and flag-sets.
 
-    Every run starts clean: all canon_ids (and their method/confidence) are
-    reset. Recording identity (shared recording id, close fingerprint match —
-    see `recording.py`) produces groups ahead of the flag-sets, each flag-set
-    produces its own bucket-grouping, and all of them merge via union-find so
-    a track ends up with one canon — except that a stored "not duplicates"
-    choice is a hard, transitive veto on that union. Stored manual choices
-    then layer on top (overriding any auto canon they touch), and a final pass
-    flattens any canon chain the overlay may have introduced. `strategy` picks
-    which member of each group becomes canon. Caller is responsible for
-    committing.
+    Every run starts clean: all canon links (method, confidence, folded flag) are reset, then
+    `plan_dedup` decides every group and `apply_plan` writes it; a final pass flattens any canon chain
+    and re-picks each group's main file. `strategy` picks which member of each group becomes canon
+    when no canon choice does. Caller is responsible for committing.
     """
     if not flag_sets:
         flag_sets = [{}]
 
-    # Reset before computing groups so the in-memory Track objects this
-    # function returns reflect DB state (no stale canon_id values). The method
-    # goes too: links `land` made are reproduced below, with the method of this run.
-    session.execute(update(Track).values(canon_id=None, canon_method=None, canon_confidence=None))
+    session.execute(
+        update(Track).values(canon_id=None, canon_method=None, canon_confidence=None, canon_folded=False)
+    )
     session.flush()
+    session.expire_all()  # the bulk update leaves loaded `canon` / `twins` relationships stale
 
-    rec = scan_recordings(session, strategy)
-    for t in rec.conflicted:
+    plan = plan_dedup(session, flag_sets, strategy)
+    for t in plan.conflicted:
         ids = ", ".join(sorted({f.recording_mbid for f in t.files if f.recording_mbid}))
         detail(f"  [yellow]conflicting recording ids[/yellow] {t.artist} — {t.title} ({t.album}): {ids}")
-    rec_group_of = {t.id: j for j, (_, group) in enumerate(rec.auto) for t in group}
-
-    raw: list[tuple[str, list[Track]]] = list(rec.auto)
-    # A recording group's governed member pulls its stored canon in as an edge, so the canon is
-    # joined through the same union-find, and so under the same cannot-link veto, as everything else.
-    governed = stored_canons(session)
-    for _, group in rec.auto:
-        for t in group:
-            root_id = governed.get(t.id)
-            if root_id is not None:
-                raw.append(("stored-canon", [t, session.get_one(Track, root_id)]))
-    for i, flags in enumerate(flag_sets):
-        groups = compute_auto_dedup_groups(session, strategy=strategy, **flags)
-        excluded = sorted(k.removeprefix("with_") for k, v in flags.items() if v is False)
-        key_suffix = "-" + "-".join(excluded) if excluded else "all"
-        for j, group in enumerate(groups):
-            raw.append((f"set{i}[{key_suffix}]#{j}", group))
-
-    merged = merge_overlapping_groups(session, raw, strategy, cannot_link=stored_cannot_links(session))
-
-    # Recording groups by member, so a twin's own recording evidence can name its link.
-    rec_members = [{t.id for t in group} for _, group in rec.auto]
-
-    auto_twins = 0
-    out_groups: list[list[Track]] = []
-    for _, group in merged:
-        group = _anchor_on_stored_canon(group, governed, set(rec_group_of))
-        out_groups.append(group)
-        canon = group[0]
-        ids = {t.id for t in group}
-        for twin in group[1:]:
-            twin.canon_id = canon.id
-            # Recording evidence names the link when the twin's recording group reaches into this
-            # group through another member; otherwise only the flag-sets joined it.
-            rec_j = rec_group_of.get(twin.id)
-            if rec_j is not None and len(rec_members[rec_j] & ids) > 1:
-                twin.canon_method, twin.canon_confidence = rec.evidence[twin.id]
-            else:
-                twin.canon_method, twin.canon_confidence = BindMethod.DEDUP_FLAGS, None
-            session.add(twin)
-            auto_twins += 1
-    session.flush()
-
-    manual_changes = apply_manual_overrides(session)
+    apply_plan(session, plan)
     flatten_canon_chains(session)
     # The graph was fully rebuilt; re-pick each group's main across canon + twins.
     recompute_main_files(session)
 
+    manual = sum(1 for _, method, _ in plan.links.values() if method is BindMethod.MANUAL)
+    outcomes = plan.resolution.outcomes.values()
     return AutoDedupResult(
-        groups=out_groups,
-        auto_twins=auto_twins,
-        manual_changes=manual_changes,
-        conflicted=len(rec.conflicted),
+        groups=plan.groups,
+        auto_twins=len(plan.links) - manual,
+        manual_links=manual,
+        superseded=sum(o is Outcome.SUPERSEDED for o in outcomes),
+        dead=sum(o is Outcome.DEAD for o in outcomes) + plan.resolution.dead_canons,
+        conflicted=len(plan.conflicted),
     )

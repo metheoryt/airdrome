@@ -35,7 +35,8 @@ from sqlalchemy.orm import Session
 
 import airdrome.cloud.sources  # noqa: F401  (registers SourceTrack etc., which Track's relationships name)
 from airdrome.library.fingerprint import FP_MATCH, FingerprintIndex, similarity
-from airdrome.models import DedupGroupMember, Track
+from airdrome.normalize.dedup.decisions import Outcome
+from airdrome.normalize.dedup.store import resolve_library
 
 
 # A dedup group is every file whose track resolves to the same root (canon_id is terminal: one hop).
@@ -171,24 +172,12 @@ def calibrate(args: argparse.Namespace) -> None:
         print(f"same-id mean {statistics.fmean(same_s):.3f}")
 
 
-def _partial_stored_groups(engine: Engine) -> tuple[int, int, int]:
-    """(complete, partial, absent) stored dedup groups, by member hashes present among tracks."""
+def _decision_liveness(engine: Engine) -> tuple[int, int]:
+    """(live, dead) pair decisions: a pair is dead when either end names a track not in the library."""
     with Session(engine) as s:
-        # duplicate_hash is a Python property, so it is computed from the loaded tracks.
-        present = {t.duplicate_hash for t in s.query(Track)}
-        members: dict[int, list[str]] = defaultdict(list)
-        for m in s.query(DedupGroupMember):
-            members[m.group_id].append(m.member_hash)
-    complete = partial = absent = 0
-    for hashes in members.values():
-        hits = sum(h in present for h in hashes)
-        if hits == len(hashes):
-            complete += 1
-        elif hits:
-            partial += 1
-        else:
-            absent += 1
-    return complete, partial, absent
+        res = resolve_library(s)
+        dead = sum(o is Outcome.DEAD for o in res.outcomes.values())
+        return len(res.outcomes) - dead, dead
 
 
 def _distribution(conn: Connection, column: str, table: str, where: str = "TRUE") -> str:
@@ -266,8 +255,8 @@ def compare(args: argparse.Namespace) -> None:
     print("method distribution:")
     for kind, d in dist.items():
         print(f"  {kind}: {d}")
-    complete, partial, absent = _partial_stored_groups(engine)
-    print(f"stored dedup groups: {complete} complete, {partial} partial, {absent} absent")
+    live, dead = _decision_liveness(engine)
+    print(f"pair decisions: {live} live, {dead} dead")
     print(f"verdict: unbound {len(unbound)}, missing {len(missing)}, extra {len(extra)}, lost {len(lost)}")
     # The file sets must match exactly: a file alone in its snapshot group loses nothing when it is
     # absent, so `lost` alone would let a dropped file pass.

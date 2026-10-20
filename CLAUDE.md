@@ -51,7 +51,7 @@ instead of committing). Global `-v/--verbose` shows per-item detail (file picks,
 `-q/--quiet` suppresses non-essential output (both on the root callback, set via
 `console.set_verbosity`). Run any command with `--help` for flags.
 
-The top level is the pipeline plus `status`; three groups hold the rest — `sync` (playlist
+The top level is the pipeline plus `status` and `mcp`; three groups hold the rest — `sync` (playlist
 reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping).
 
 - **`status`** — read-only "where am I?" snapshot: config sanity (DB connectivity, `LIBRARY_DIR`
@@ -92,18 +92,21 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
   extension is removed. Any other re-bind still relocates nothing (fs-reconcile #12). A swap that
   changes the extension reads to Navidrome as a remove + add — `navi push` after its rescan.
 - **`dedup`** — batch rebuild of `Track.canon_id` from recording-identity groups
-  (`normalize/dedup/recording.py`) + N flag-sets + stored manual overrides.
+  (`normalize/dedup/recording.py`) + N flag-sets, layered with the manual pair decisions (see
+  *Dedup decision mirror*; they win over automatic grouping both ways). Prints each group, then a summary
+  with superseded / dead decision counts.
   `-s/--set` (repeatable, comma-separated fields; title always implicit), `-c/--canon`
   (`added`/`year`; the compilation rank leads `canon_order` for every group, so `-c` only breaks
   ties after it). With no `--set` the CLI uses `RECOMMENDED_SETS` (see *Dedup tuning notes*);
-  the `auto_deduplicate` library function still falls back to a single all-fields set. With
-  `--review`/`-r` the interactive TUI opens *after* the batch pass so you can adjust the
-  proposed canons (`--match` filters the TUI by substring); choices persist as manual
-  overrides feeding the next run.
-- **`dedup-import`** — manual entrance for a *foreign* or archived group file (idempotent upsert
-  keyed on the member set). The library's own groups need no command: they are mirrored to disk
-  after every commit that touched one, and restored by `dedup` into an empty table. See *Dedup
-  group mirror* below. (`dedup-export` was retired — the mirror is always current.)
+  the `auto_deduplicate` library function still falls back to a single all-fields set. There is
+  no interactive review: manual decisions go through the MCP tools.
+- **`dedup-import`** — manual entrance for a *foreign* or archived decision file (idempotent; newest
+  wins row by row). Reads a v2 file as is and the old version-less group file by converting each group
+  with the migration's conversion rules, decided at import time in file order — except the live mirror
+  itself, which is refused in that format (it is converted from the old DB by the migration script). An
+  import that changes no row does not rewrite the mirror. The library's own decisions need
+  no command: they are mirrored to disk after every commit that touched one, and restored by `dedup`
+  (and by the MCP server) into empty tables. See *Dedup decision mirror* below.
 - **`sync <remote>` / `sync all`** — reconcile playlists across remotes (cloud sources +
   backends). One subcommand per remote (`apple_xml`, `apple_ms`, `navidrome`); `sync all`
   runs sources first, then backends. Fully non-interactive — hard conflicts auto-resolve to
@@ -120,6 +123,26 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
 - **`maint acoustid`** — fills `recording_mbid` (method `acoustid`) for fingerprinted files without
   one, only when the top AcoustID result scores ≥ 0.9 and names one recording. `--limit N`. Needs
   `ACOUSTID_CLIENT_KEY`; an invalid key aborts, any other failure is counted.
+- **`mcp`** — serves the MCP tools (`mcpserver/`) over streamable HTTP on `127.0.0.1:AIRDROME_MCP_PORT`
+  at `/mcp/<AIRDROME_MCP_TOKEN>`. Like `status` it bypasses the root callback (same early return) and
+  **never migrates**: it exits 1 without a token, or off head (`migrations.schema_state()`: `behind` →
+  "run `uv run alembic upgrade head`"; `unknown` revision, e.g. pre-squash → "recreate the DB", README
+  *Recreating the database*, converting a version-less mirror with the migration script first). A
+  mirror `seed_decisions` refuses is one red line, exit 1. Every edit snapshots the *whole* decision
+  tables into the mirror, so an edit on rebuilt, empty tables would wipe the hand-made decisions from `duplicates.json`: each write tool
+  (`write` in `server.py`) runs `restore_if_empty` first, in its own session under the write lock —
+  which covers a DB rebuilt while the server runs — and startup runs it once too (`seed_decisions`,
+  a data seed, not a migration) so reads see the decisions at once. Edit and verdict tools hold one
+  module-level write lock (sync tools run in a threadpool; overlapping commits could write mirror
+  snapshots out of order), and the server sets `mask_error_details=True`, so only `ToolError` messages
+  reach the client. Same/different edits (`library/edits.py`) store one pair decision (`origin=mcp`), then replan
+  the whole library (`plan_dedup` with the CLI's recommended sets) and apply the plan to the tracks the
+  edit can reach (`edit_scope`), so the result equals the following `dedup` run; `is_main` is re-picked
+  only for the touched roots (`recompute_main_files(s, root_ids)`). Only `EditError` refusals are an
+  unknown id and `a == b`; a manual `same` crosses recording ids. It runs uvicorn
+  on `server.http_app(path=...)` with `access_log=False` instead of `FastMCP.run`, because both the
+  access log and FastMCP's own "Starting MCP server … on http://…/<path>" line print the path, and
+  the path is the token. `test_server_logs_never_contain_token` guards this end to end.
 
 ## Architecture
 
@@ -137,10 +160,21 @@ reconcile across remotes), `navi` (stats destinations) and `maint` (housekeeping
 3. **Organize** (`library/organize.py`) — move/copy bound files into a structured directory.
 4. **Deduplicate** (`normalize/dedup/`) — group duplicates by recording identity (shared
    recording id, close fingerprint) ahead of the flag-set buckets; twins link to a canon via
-   `Track.canon_id`. Confirmed groups live in `dedupgroup`/`dedupgroupmember`
-   (import identity = the member-hash multiset, not the label).
+   `Track.canon_id`. Manual decisions (`PairDecision`, `CanonChoice`, keyed by track natural key) are
+   resolved newest-first by `normalize/dedup/decisions.py` and layered over the automatic groups by
+   `auto.plan_dedup`; see *Dedup decision mirror*. Rationale: [docs/design/dedup-decisions.md](docs/design/dedup-decisions.md).
 5. **Sync** — push play counts + ratings into Navidrome's SQLite DB (`navidrome/`), and
    reconcile playlists across remotes (`playlists/`, see *Playlist reconcile*).
+
+Off the pipeline, for the owner's AI client:
+
+- **`wanted/`** — `verdicts.py` stores the owner's `wanted`/`skip` call (`WantedVerdict`, on a group's
+  canon or per alias; `skip` beats `wanted`); `lists.py` builds the two paged wanted lists (library
+  groups with no file; file-less played groups + unmatched scrobbled aliases).
+- **`library/edits.py`, `library/card.py`** — manual point edits (`mark_same`/`mark_different` stored
+  as pair decisions, `bind_aliases`/`reject_aliases`) and the track card / unmatched-alias candidates.
+- **`mcpserver/`** — `build_server(engine)` wraps those as 11 FastMCP tools; each call runs in its own
+  `tool_session`. A tool's docstring is what the AI reads, so semantics belong there.
 
 ### Import / source design
 
@@ -167,28 +201,36 @@ Sessions are created centrally in the root `app` callback (`terminal/app.py`) an
 `AppState(session, dry_run)` on `ctx.obj`; a close hook commits, or rolls back under
 `--dry-run`. `upgrade_to_head()` runs inside the callback (not at import), so a bare `airdrome`
 / `airdrome --help` and `status` skip it — but `airdrome <sub> --help` passes through the callback
-and connects to `DB_DSN` and migrates (an `alembic` crash against the live DB, 2026-10-17). <!-- src: metheoryt/airdrome sleep 2026-10-17 g15 --> `expire_on_commit=False` keeps ORM objects live across the
-interactive deduplicator's repeated commits.
+and connects to `DB_DSN` and migrates (an `alembic` crash against the live DB, 2026-10-17). <!-- src: metheoryt/airdrome sleep 2026-10-17 g15 --> `expire_on_commit=False` keeps ORM objects populated after a commit, so
+code (and MCP tools building their answer) can read them without a reload.
 
 **When adding a CLI command:** take `ctx: typer.Context` first, read `state: AppState =
 ctx.obj`, set `state.dry_run = dry_run` if exposed, pass `state.session` to business logic.
 Business logic takes `s: Session` and uses `s.flush()` for intermediate persistence — it
-must **not** call `s.commit()`. Intentional exceptions: the interactive `Deduplicator`
-commits on the user's keypress; `auto_deduplicate` commits (with a behavioral `dry_run`);
-Navidrome sync manages its own SQLite session and ignores `--dry-run`.
+must **not** call `s.commit()`. Intentional exceptions: `auto_deduplicate` commits (with a behavioral `dry_run`);
+Navidrome sync manages its own SQLite session and ignores `--dry-run`. The MCP server is the
+second session owner outside the callback: `mcpserver.session.tool_session` opens one session per
+tool call (with the dedup mirror installed), commits on success, rolls back on any exception — so a
+tool call is one transaction, and the domain functions it wraps still only flush.
 
 **A rollback only undoes the DB.** A command that also writes outside the session — files,
 an external backend — must take `dry_run` as a *behavioral* argument and skip the side effect
 itself; `state.dry_run` alone is not enough (see `organize`, and `auto_deduplicate`).
 The other way to satisfy the rule is to hang the side effect off the commit itself, so a
-rollback never reaches it — what the dedup group mirror does.
+rollback never reaches it — what the dedup decision mirror does.
 
 ### Key models (`models.py`)
 
 - **`Track`** — canonical track; normalized `_norm` title/artist/album fields; unique on
-  (title, artist, album, album_artist). Self-referential `canon_id` links a twin to its
+  (title, artist, album, album_artist) with `NULLS NOT DISTINCT`, so that raw tuple names at most one
+  track (it is what a decision's key is). Self-referential `canon_id` links a twin to its
   canon — and is *terminal* (a canon is never itself a twin; no chains), so readers resolve
-  with a single hop.
+  with a single hop. `canon_folded` marks a twin outside its canon's *core* (joined only through a
+  manual decision); `TrackGroup.core_members` / `main_candidates` read it (see *Navidrome integration*).
+- **`PairDecision`** — a manual `same` / `different` about two tracks, each named by its natural-key
+  JSON text (`key_a < key_b`, unique per unordered pair), with `decided_at` and `origin`
+  (`mcp` | `import` | `migrated`). **`CanonChoice`** — a manual pick of a track as its group's main
+  version (unique per track). No FKs to `Track`: a decision outlives the track row and a rebuilt DB.
 - **`TrackFile`** — audio file on disk with Mutagen-extracted metadata; `is_main` flags the
   best-bitrate copy; `library_path` is the organized destination; `enrich()` reads tags, ids and
   md5 from `absolute_path` into the row (no fingerprint — `fingerprint_files` adds it).
@@ -213,44 +255,65 @@ Rationale, calibration and acceptance numbers:
   only breaks ties, never binds or groups. Every binding records `BindMethod` + confidence
   (`TrackFile.bind_*`, `TrackAlias.match_*`, `Track.canon_*`).
 - **`Track` rows are never re-keyed or merged.** Recording identity groups tracks as twins, which
-  keeps `duplicate_hash` and the hand-made groups valid.
+  keeps the natural keys (title, artist, album, album artist) and the pair decisions that name them valid.
 - **One recording id per group.** A track's id is the one its files agree on (`recording_of_track`);
   disagreeing files leave it with none (`dedup` reports it as conflicted). Nothing binds or links
-  across two ids. A stored "not duplicates" review is a hard, transitive cannot-link in `dedup`.
+  across two ids. A manual `different` is a hard, transitive cannot-link in `dedup` — unless a newer `same` joined the
+  two (newest wins). A manual `same` is the one thing that crosses recording ids.
+- **The fingerprint representative** of a track is its highest-bitrate fingerprinted file, never
+  `is_main` (which `dedup` itself rewrites), so `dedup` is idempotent.
 - **Fingerprints:** stored as signed int32 (mask `0xFFFFFFFF` before comparing). `FP_MATCH = 0.89`;
   a match links only when durations differ by ≤ 2 s (`FP_MAX_DURATION_GAP`), else it is a review
   candidate.
-- **`ACOUSTID_CLIENT_KEY` is a `SecretStr`** and every Typer app sets
-  `pretty_exceptions_show_locals=False`; never print the key.
+- **A rejected alias is `track_id NULL` + `match_method = MANUAL`** (`reject_aliases`): unbound for
+  good, its `TrackPlay` rows deleted, and matching skips it. An unbound alias with any other
+  `match_method` is merely unmatched. Never encode a reject as `alias.track = None` —
+  `Track.aliases` is delete-orphan, so that deletes the alias.
+- **`ACOUSTID_CLIENT_KEY` and `AIRDROME_MCP_TOKEN` are `SecretStr`s** and every Typer app sets
+  `pretty_exceptions_show_locals=False`; never print either.
 
-### Dedup group mirror (`normalize/dedup/mirror.py`)
+### Dedup decision mirror (`normalize/dedup/decisions.py`, `store.py`, `mirror.py`)
 
-Confirmed dedup groups are hand-made, but the Postgres DB is disposable (recreated on schema
-change). So the DB is the working copy and `LIBRARY_DIR/.airdrome/duplicates.json` is the
-durable mirror — one-directional, DB → file. Colocating it with the library makes it
-per-library by construction and makes it travel with the library it describes;
+Why pairs, and the rejected alternatives: [docs/design/dedup-decisions.md](docs/design/dedup-decisions.md).
+
+Manual decisions are hand-made, but the Postgres DB is disposable (recreated on schema change). So
+the DB is the working copy and `LIBRARY_DIR/.airdrome/duplicates.json` is the durable mirror —
+one-directional, DB → file. Colocating it with the library makes it per-library by construction;
 `DUPLICATES_FILEPATH` overrides the path.
 
-- **Snapshot and write are split on purpose.** `stash_mirror_snapshot` (in `persistence.py`)
-  exports the whole table inside the writing transaction, where pending inserts and deletes are
-  visible, and parks it in `session.info`. The `after_commit` listener that `install_mirror`
-  attaches (wired once, in the root callback) only serializes that dict. Exporting *in* the
-  listener would emit SQL with no transaction open; writing *before* the commit would let a
-  rollback leave the file ahead of the DB. An `after_soft_rollback` listener drops an unlanded
-  snapshot so the next unrelated commit can't write it.
-- **Always the whole table, never a delta** — `save_confirmed_groups` touches only the pages
-  materialized in its run, so nothing but the table is authoritative. Consequence: a group whose
-  hashes match no materialized page is preserved indefinitely, exactly as the DB does today.
-- **An empty export writes `{}`, it is not skipped.** This is load-bearing: a stale file left
-  behind by a deliberate full clear would re-seed the next empty table — the same resurrection
-  class of bug the playlist reconcile base kills.
-- **`restore_if_empty` seeds only an empty table**, so it never fights the DB: a group reset in
-  the TUI stays gone because that reset emptied the mirror too. It runs from `terminal/pipeline.py`
-  (not inside `auto_deduplicate`) so `settings` stays out of the domain layer, as with `organize`.
-  A mirror that fails to parse raises rather than being treated as absent.
-- **The old `data/duplicates.json` default is not migrated automatically** — nothing reads that
-  path any more. An existing install runs `airdrome dedup-import data/duplicates.json` once,
-  which seeds the table and writes the new mirror in the same commit (README says so too).
+- **Resolution** (`decisions.resolve`, pure): pairs apply newest first; at an equal `decided_at` every
+  `same` before any `different`, then by key order, so the result never depends on row order. A
+  `same` joins two components unless an accepted (newer) `different` separates them; a `different`
+  separates unless a newer `same` already joined them; the loser is *superseded*. An end naming no live
+  track makes the decision *dead*: ignored, kept, counted (`status`, `auto_deduplicate`). A group's
+  canon is the newest `CanonChoice` among its members, else `canon_order`.
+- **Format v2:** `{"version": 2, "pairs": [{a, b, kind, decided_at, origin}], "canons": [{track,
+  decided_at, origin}]}`, keys as `[title, artist, album, album_artist]` lists, deterministic order.
+- **Upsert rule, everywhere:** a row replaces an existing one on the same pair / track only if strictly
+  newer; so a v2 import keeps the file's timestamps and newest wins row by row. `import_decisions`
+  rejects a pair or canon listed twice and clamps a future `decided_at` to now. An MCP edit that lands
+  at or before the stored row's time is placed 1 µs after it (the edit is the newest by definition).
+- **Snapshot and write are split on purpose.** `stash_mirror_snapshot` (in `store.py`) exports the
+  whole tables inside the writing transaction, where pending changes are visible, and parks it in
+  `session.info`. The `after_commit` listener that `install_mirror` attaches (wired once, in the root
+  callback and the MCP `tool_session`) only serializes that dict. Exporting *in* the listener would
+  emit SQL with no transaction open; writing *before* the commit would let a rollback leave the file
+  ahead of the DB. An `after_soft_rollback` listener drops an unlanded snapshot.
+- **Always the whole tables, never a delta** — nothing but the tables is authoritative.
+- **An empty export writes an empty v2 document, it is not skipped.** Load-bearing: a stale file left
+  behind by a deliberate full clear would re-seed the next empty DB.
+- **`restore_if_empty` seeds only empty tables**, so it never fights the DB. It runs from
+  `terminal/pipeline.py` (and the MCP server), not inside `auto_deduplicate`, so `settings` stays out of
+  the domain layer. A file that fails to parse raises, and so does an old version-less group file: it
+  is not restored (importing nothing would let the next commit overwrite it with an empty v2 document).
+- **Migrating an existing install** (once): `uv run python scripts/migrate_dedup_groups.py OUT` reads
+  the live `dedupgroup` tables (before the schema change; `normalize/dedup/legacy.py` holds the
+  conversion) and writes a v2 file plus a report of the overlapping clusters. Review it, `pg_dump` the
+  old DB (always, not a plain drop: the conversion can then be re-run), recreate the DB, move the v2 file to
+  the mirror path, `import` → `land`; `dedup` then restores it and `status` should show ~0 dead
+  decisions. README *Recreating the database* says so too. The `restore_if_empty` refusal points
+  there; `dedup-import` refuses the live mirror in the old format, since importing it onto itself
+  drops (before `land`) or reorders (after it) the decisions.
 
 ### Navidrome integration (`navidrome/`)
 
@@ -260,7 +323,14 @@ dedup-group-aware: exactly one `is_main` file exists per group (owned by whichev
 has the best copy — often a twin, not the canon), but plays are **summed** and rating/loved
 **aggregated** across the whole group, so plays on other members aren't dropped. Both writers
 keep the one-main invariant — `organize` picks it across canon+twins, and
-`recompute_main_files` re-picks it whenever the canon graph changes. Selection only flips the
+`recompute_main_files` re-picks it whenever the canon graph changes (library-wide after `dedup`; scoped
+to the touched roots after a point edit). **Core rule:** in a manually folded group the main comes from
+the canon's *core* (the canon plus the twins automatic grouping alone joins to it; `canon_folded` False
+on them), so a folded-in higher-bitrate file never becomes main; the whole group is the fallback only
+when the core has no file (`TrackGroup.main_candidates`). `organize`'s upgrade swap and import
+`classify`'s "upgrade" bar use the same candidates; when the main is already placed, `organize` puts
+only manually folded files into `Copies/` (unless an upgrade swap runs, where every unplaced file goes
+there). Selection only flips the
 flag; the next `organize` relocates only for the upgrade swap (a better copy displacing the
 placed main), and any other relocation is the reconcile roadmap.
 
@@ -310,11 +380,13 @@ singleton is imported wherever config is needed.
 | `DB_DSN` | — | PostgreSQL DSN (required) |
 | `DB_ECHO` | `False` | SQLAlchemy query logging |
 | `LIBRARY_DIR` | — | Root for organized files (required; empty on first run) |
-| `DUPLICATES_FILEPATH` | `LIBRARY_DIR/.airdrome/duplicates.json` | Override for the dedup group mirror (`settings.duplicates_file` resolves it) |
+| `DUPLICATES_FILEPATH` | `LIBRARY_DIR/.airdrome/duplicates.json` | Override for the dedup decision mirror (`settings.duplicates_file` resolves it) |
 | `NAVIDROME_DB_DSN` | `None` | Path to Navidrome's SQLite DB |
 | `NAVIDROME_USER` | `None` | Navidrome user that owns synced play counts/ratings |
 | `NAVIDROME_PORT` | `4533` | Port the `navidrome` commands probe to confirm the server is stopped |
 | `ACOUSTID_CLIENT_KEY` | `None` | AcoustID *application* key for `maint acoustid` (never print it) |
+| `AIRDROME_MCP_TOKEN` | `None` | Secret path segment of the MCP server URL; `airdrome mcp` refuses without it (never print or log it) |
+| `AIRDROME_MCP_PORT` | `8765` | Localhost port `airdrome mcp` listens on |
 
 `/data/`, `/navi/`, `/dist/`, `.env` are gitignored. Treat `data/` as local runtime state the
 user backs up separately — don't optimize its serialization for "cleaner git diffs"; only

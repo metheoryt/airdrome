@@ -1,19 +1,37 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from airdrome.enums import BindMethod
+from sqlalchemy import delete, func, select
+
+from airdrome.enums import BindMethod, DecisionKind
+from airdrome.models import PairDecision, Track, TrackFile
 from airdrome.normalize.dedup.auto import AutoDedupResult, auto_deduplicate, compute_auto_dedup_groups
 from airdrome.normalize.dedup.grouping import CanonStrategy, flag_set
 
-from factories import make_dedup_group, make_track
+from factories import add_canon, add_pair, make_track
+
+
+SAME, DIFF = DecisionKind.SAME, DecisionKind.DIFFERENT
+T0 = datetime(2021, 1, 1, tzinfo=UTC)
+
+
+def _t(n: int) -> datetime:
+    """The n-th decision time after T0, so a test names its newest-first order explicitly."""
+    return T0 + timedelta(hours=n)
+
+
+def _root(t: Track) -> int:
+    """The id of the root of `t`'s group (one hop: canon_id is terminal)."""
+    return t.canon_id or t.id
 
 
 # --- compute_auto_dedup_groups ---
 
 
 def test_compute_groups_default_flags_groups_exact_matches(session):
-    # album / album_artist NULL ⇒ unique-constraint allows two identical rows
+    # The key is NULLS NOT DISTINCT, so the raw keys differ in case; the _norm keys are equal.
     make_track(session, "Song", "Artist")
-    make_track(session, "Song", "Artist")
+    make_track(session, "song", "artist")
 
     groups = compute_auto_dedup_groups(session)
 
@@ -66,8 +84,8 @@ def test_compute_groups_skips_blank_active_key_field(session):
 
 
 def test_compute_groups_skips_empty_title(session):
-    make_track(session, "", "X")
-    make_track(session, "", "X")
+    make_track(session, "", "X")  # raw keys differ ("" vs " "); both normalize to ""
+    make_track(session, " ", "X")
 
     assert compute_auto_dedup_groups(session) == []
 
@@ -75,7 +93,7 @@ def test_compute_groups_skips_empty_title(session):
 def test_compute_groups_duration_bucketed_to_5s(session):
     # 248 and 251 both round to bucket 250 → group
     make_track(session, "S", "A", duration=248)
-    make_track(session, "S", "A", duration=251)
+    make_track(session, "s", "a", duration=251)
 
     groups = compute_auto_dedup_groups(session)
     assert len(groups) == 1
@@ -84,7 +102,7 @@ def test_compute_groups_duration_bucketed_to_5s(session):
 def test_compute_groups_duration_buckets_separate_when_far_apart(session):
     # 247 rounds to 245, 253 rounds to 255 → different buckets, no group
     make_track(session, "S", "A", duration=247)
-    make_track(session, "S", "A", duration=253)
+    make_track(session, "s", "a", duration=253)
 
     assert compute_auto_dedup_groups(session) == []
 
@@ -99,8 +117,8 @@ def test_compute_groups_sort_order_canon_first(session):
     )
     late = make_track(
         session,
-        "S",
-        "A",
+        "s",
+        "a",
         date_added=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
@@ -112,7 +130,7 @@ def test_compute_groups_sort_order_canon_first(session):
 def test_canon_strategy_year_prefers_oldest_release(session):
     # A was added earlier but released later; B was added later but released earlier.
     a = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC), year=2010)
-    b = make_track(session, "S", "A", date_added=datetime(2024, 1, 1, tzinfo=UTC), year=2000)
+    b = make_track(session, "s", "a", date_added=datetime(2024, 1, 1, tzinfo=UTC), year=2000)
 
     # Exclude year from the bucket key so the differing years still group.
     no_year = {"with_year": False}
@@ -136,7 +154,7 @@ def test_canon_strategy_year_prefers_oldest_release(session):
 
 def test_auto_deduplicate_writes_canon_to_twins_keeps_canon_null(session):
     t1 = make_track(session, "Song", "Artist", date_added=datetime(2020, 1, 1, tzinfo=UTC))
-    t2 = make_track(session, "Song", "Artist", date_added=datetime(2024, 1, 1, tzinfo=UTC))
+    t2 = make_track(session, "song", "artist", date_added=datetime(2024, 1, 1, tzinfo=UTC))
 
     result = auto_deduplicate(session)
     session.refresh(t1)
@@ -165,14 +183,14 @@ def test_auto_deduplicate_resets_prior_canon_ids(session):
 
 def test_auto_deduplicate_returns_result_counts(session):
     make_track(session, "S", "A")
-    make_track(session, "S", "A")
+    make_track(session, "s", "a")
     make_track(session, "Solo", "B")
 
     result = auto_deduplicate(session)
 
     assert result.auto_twins == 1  # one twin (one pair)
     assert len(result.groups) == 1
-    assert result.manual_changes == 0
+    assert result.manual_links == 0
 
 
 def test_auto_deduplicate_multiple_flag_sets_union_find_merges(session):
@@ -217,39 +235,162 @@ def test_auto_deduplicate_multiple_flag_sets_union_find_merges(session):
     assert t3.canon_id == t1.id
 
 
-def test_auto_deduplicate_flattens_chains_after_manual_overrides(session):
-    # Three identical tracks; auto will pick T1 as canon, T2 and T3 as twins
+def test_auto_deduplicate_flattens_chains_after_canon_choice(session):
+    # Three identical tracks; canon order would pick T1, the canon choice picks T2.
     t1 = make_track(session, "S", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
     t2 = make_track(session, "S", "A", date_added=datetime(2021, 1, 1, tzinfo=UTC), album="B")
     t3 = make_track(session, "S", "A", date_added=datetime(2022, 1, 1, tzinfo=UTC), album="C")
-
-    # Manual override flips T1↔T2: T2 is the user-preferred canon, T1 is a twin.
-    # This creates a chain post-overrides: T3 → T1 → T2.
-    # Loosen album so all three group; the override only mentions T1 and T2.
-    make_dedup_group(session, [(t1, t2), (t2, None)], label="flip")
+    add_canon(session, t2)
 
     auto_deduplicate(session, flag_sets=[{"with_album": False}])
-    for t in (t1, t2, t3):
-        session.refresh(t)
 
-    # Post-flatten: every canon_id must terminate (no canon points at a twin)
+    # Every canon_id terminates on the chosen canon (no canon points at a twin).
     assert t2.canon_id is None
     assert t1.canon_id == t2.id
-    assert t3.canon_id == t2.id  # was T1, flattened to T2
+    assert t3.canon_id == t2.id
 
 
-def test_auto_deduplicate_applies_stored_manual_overrides(session):
-    # Two duplicates; auto would pick T1 as canon (earlier date_added).
-    # Stored override flips: T2 is canon, T1 is twin.
+def test_auto_deduplicate_applies_same_and_canon_choice(session):
+    # Two duplicates; canon order would pick T1 (earlier date_added). The owner's choice: T2 is canon.
     t1 = make_track(session, "Song", "Artist", "Album A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
     t2 = make_track(session, "Song", "Artist", "Album B", date_added=datetime(2024, 1, 1, tzinfo=UTC))
-    make_dedup_group(session, [(t1, t2), (t2, None)], label="manual-flip")
+    add_pair(session, t1, t2, SAME)
+    add_canon(session, t2)
 
     result = auto_deduplicate(session, flag_sets=[{"with_album": False}])
-    session.refresh(t1)
-    session.refresh(t2)
 
-    assert result.manual_changes == 2  # the flip: t2 loses its auto canon, t1 gains t2
-    assert t2.canon_id is None  # user's pick
+    assert result.manual_links == 1
+    assert result.auto_twins == 0
+    assert t2.canon_id is None
     assert t1.canon_id == t2.id
-    assert t1.canon_method == BindMethod.MANUAL
+    assert (t1.canon_method, t1.canon_confidence) == (BindMethod.MANUAL, 1.0)
+    assert not t1.canon_folded  # the flag-set alone joins them too: inside the core
+
+
+# --- pair decisions ---
+
+
+def test_repro_both_insert_orders_same_canons(session):
+    """Decisions w→v and x→w (the old overlapping-groups repro) give one result in either row order."""
+    v = make_track(session, "V", "Band", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    w = make_track(session, "W", "Other", date_added=datetime(2021, 1, 1, tzinfo=UTC))
+    x = make_track(session, "X", "Third", date_added=datetime(2022, 1, 1, tzinfo=UTC))
+    decisions = [(w, v, _t(1)), (x, w, _t(2))]
+
+    snapshots = []
+    for order in (decisions, decisions[::-1]):
+        session.execute(delete(PairDecision))
+        for t1, t2, at in order:
+            add_pair(session, t1, t2, SAME, at=at)
+        auto_deduplicate(session)
+        snapshots.append({t.id: t.canon_id for t in session.scalars(select(Track))})
+
+    assert snapshots[0] == snapshots[1]
+    assert snapshots[0] == {v.id: None, w.id: v.id, x.id: v.id}
+
+
+def test_newest_wins_across_transitive_chain(session):
+    """same(a,b) oldest, same(b,c), then different(a,c) newest: the oldest link breaks."""
+    a = make_track(session, "A", "Band", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    b = make_track(session, "B", "Other", date_added=datetime(2021, 1, 1, tzinfo=UTC))
+    c = make_track(session, "C", "Third", date_added=datetime(2022, 1, 1, tzinfo=UTC))
+    add_pair(session, a, b, SAME, at=_t(1))
+    add_pair(session, b, c, SAME, at=_t(2))
+    add_pair(session, a, c, DIFF, at=_t(3))
+
+    result = auto_deduplicate(session)
+
+    assert _root(b) == _root(c)
+    assert _root(a) == a.id != _root(b)
+    assert [t.id for t in group_of_root(session, a)] == [a.id]
+    assert result.superseded == 1
+
+
+def group_of_root(s, t: Track) -> list[Track]:
+    """Every track whose root is `t`'s root."""
+    root = _root(t)
+    return [x for x in s.scalars(select(Track).order_by(Track.id)) if _root(x) == root]
+
+
+def _file(s, t: Track, recording: str) -> TrackFile:
+    """Attach a file carrying `recording` as its recording id."""
+    f = TrackFile(
+        source_path=Path(f"/src/{t.id}.mp3"), track_id=t.id, bitrate=320_000, recording_mbid=recording
+    )
+    s.add(f)
+    s.flush()
+    return f
+
+
+def test_manual_same_links_across_recording_ids(session):
+    a = make_track(session, "A", "Band", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    b = make_track(session, "B", "Other", date_added=datetime(2021, 1, 1, tzinfo=UTC))
+    _file(session, a, "11111111-1111-1111-1111-111111111111")
+    _file(session, b, "22222222-2222-2222-2222-222222222222")
+    add_pair(session, a, b, SAME)
+
+    result = auto_deduplicate(session)
+
+    assert [[t.id for t in g] for g in result.groups] == [[a.id, b.id]]
+    assert b.canon_id == a.id
+    assert (b.canon_method, b.canon_confidence) == (BindMethod.MANUAL, 1.0)
+    assert b.canon_folded  # only the manual decision joins it: outside a's core
+
+
+def test_manual_same_beats_auto_join_to_separated_track(session):
+    """same(A,B) + different(B,X), where the flag sets alone would join A and X: X stays apart."""
+    a = make_track(session, "Song", "Band", "One", duration=200, date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    x = make_track(session, "Song", "Band", "Two", duration=200, date_added=datetime(2021, 1, 1, tzinfo=UTC))
+    b = make_track(session, "Other", "Elsewhere", duration=50, date_added=datetime(2022, 1, 1, tzinfo=UTC))
+    sets = [flag_set("artist", "duration")]
+    auto_deduplicate(session, sets)
+    assert x.canon_id == a.id  # control: the flag set joins A and X
+
+    add_pair(session, a, b, SAME, at=_t(1))
+    add_pair(session, b, x, DIFF, at=_t(2))
+    auto_deduplicate(session, sets)
+
+    assert b.canon_id == a.id
+    assert b.canon_method == BindMethod.MANUAL
+    assert x.canon_id is None
+    assert _root(x) != _root(a)
+
+
+def test_dead_decision_ignored_counted_and_kept(session):
+    a = make_track(session, "A", "Band")
+    gone = make_track(session, "Gone", "Band")
+    add_pair(session, a, gone, SAME)
+    session.delete(gone)
+    session.flush()
+
+    result = auto_deduplicate(session)
+
+    assert result.dead == 1
+    assert a.canon_id is None
+    assert session.scalar(select(func.count()).select_from(PairDecision)) == 1
+
+
+def test_canon_choice_wins_over_canon_order(session):
+    t1 = make_track(session, "Song", "Band", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    t2 = make_track(session, "Song", "Band", "B", date_added=datetime(2024, 1, 1, tzinfo=UTC))
+    add_canon(session, t2)
+
+    result = auto_deduplicate(session, flag_sets=[{"with_album": False}])
+
+    assert [t.id for t in result.groups[0]] == [t2.id, t1.id]
+    assert t2.canon_id is None
+    assert t1.canon_id == t2.id
+    assert t1.canon_method == BindMethod.DEDUP_FLAGS  # a canon choice is not a manual link
+
+
+def test_newest_canon_choice_wins_in_merged_group(session):
+    t1 = make_track(session, "Song", "Band", "A", date_added=datetime(2020, 1, 1, tzinfo=UTC))
+    t2 = make_track(session, "Song", "Band", "B", date_added=datetime(2021, 1, 1, tzinfo=UTC))
+    t3 = make_track(session, "Song", "Band", "C", date_added=datetime(2022, 1, 1, tzinfo=UTC))
+    add_canon(session, t3, at=_t(2))
+    add_canon(session, t2, at=_t(1))
+
+    auto_deduplicate(session, flag_sets=[{"with_album": False}])
+
+    assert t3.canon_id is None
+    assert (t1.canon_id, t2.canon_id) == (t3.id, t3.id)

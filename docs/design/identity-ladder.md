@@ -57,8 +57,8 @@ scattered and repeated across folders in varying combinations. `import` takes fo
   in the same dedup group after the change, except merges the new rungs add on purpose, which are
   reported.
 - **Breaking the 881 hand-made dedup groups or the mirror.** They are keyed on
-  `Track.duplicate_hash` (title, artist, album_artist, album, track_n, disc_n, year, duration
-  bucket). Anything that merges or re-keys `Track` rows orphans them.
+  the `Track` natural key (title, artist, album, album_artist) as pair decisions. Anything that merges
+  or re-keys `Track` rows orphans them.
 - **Requiring Picard-tagged input.** Half the library is untagged, the loose-mp3 folders entirely.
 - **A silent wrong merge that is hard to find.** Every automatic merge must be listable by method.
 
@@ -70,7 +70,7 @@ A `Track` stays "a track on a specific release": the unique key (title, artist, 
 album_artist) does not change and rows are never merged. **Recording identity groups tracks; it
 does not re-key them.** The same recording on the original album and on a compilation/OST is two
 `Track` rows that become twins in one dedup group (one play count, one main file). This is what
-keeps `duplicate_hash`, the 881 groups and the mirror valid.
+keeps the hand-made decisions (keyed on the natural key) and the mirror valid.
 
 Different recordings stay apart by construction: the album and *NFS Most Wanted* versions of
 *Feed the Addiction* have different recording ids and different audio, and no rung joins them.
@@ -78,8 +78,8 @@ Different recordings stay apart by construction: the album and *NFS Most Wanted*
 ### Canon choice inside a group
 
 Owner's rule: **prefer the original album; a compilation/OST wins when the owner has ≥2 tracks
-from that compilation** (NFS series, Shaun White Snowboarding, Daredevil). A manual choice in
-`dedup --review` overrides both, as today. This becomes a leading key in `canon_order`, ahead of
+from that compilation** (NFS series, Shaun White Snowboarding, Daredevil). A manual canon choice
+(`CanonChoice`, see [dedup-decisions.md](dedup-decisions.md)) overrides both, as before. This becomes a leading key in `canon_order`, ahead of
 the existing date/year keys.
 
 ### The ladder — file → track
@@ -148,8 +148,8 @@ tracks. `wanted`'s ghost grouping inherits the same rule.
 
 A fingerprint match **links silently when the durations differ by ≤ 2 s**. A match with a larger
 duration gap (radio edit vs album version, remaster, long shared intro) is **not linked**; it is
-offered as a candidate group in `dedup --review`. Every automatic link is listable by method and
-undoable through the existing review path.
+left for review through the MCP tools (the planned duplicate-review queue lists such candidates). Every
+automatic link is listable by method, and a manual `different` decision undoes it.
 
 Recording ids by provenance (*designer's call*):
 
@@ -341,12 +341,12 @@ anniversary edition score 0.89–0.91).
 - `import` still imports a new file that has no title and matches nothing, unbound, and says so on
   its own summary line (tag it, then `maint enrich` + `land`).
 - Neither the ladder nor unify's source-track stage backfills a hashed field (track/disc number,
-  year, duration) on a track a stored dedup group names: a changed `duplicate_hash` would silently
-  drop the hand-made group's choice.
+  year, duration) on a track a manual decision names. Decisions key on the natural key (title, artist,
+  album, album artist), which backfill never touches, so there is no such guard any more.
 
 **Known limit.** The ladder's fingerprint rung matches a file against *every* bound file, while
-`dedup`'s recording pass compares one representative file per track (its main, else its
-lowest-id fingerprinted file). A twin link `land` made through a non-representative file can
+`dedup`'s recording pass compares one representative file per track (its highest-bitrate
+fingerprinted file, then the lowest id; never the `is_main` flag, so `dedup` is idempotent). A twin link `land` made through a non-representative file can
 therefore fail to reappear at the next `dedup`, which rebuilds every link from scratch. Expected
 to be rare (it needs two files of one track with materially different audio); such a pair falls
-back to the flag-sets or `dedup --review`.
+back to the flag-sets or a manual `same` decision.

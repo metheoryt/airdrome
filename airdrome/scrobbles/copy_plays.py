@@ -7,6 +7,28 @@ from airdrome.console import done, make_progress
 from airdrome.models import TrackAlias, TrackPlay
 
 
+def copy_alias_plays(s: Session, alias: TrackAlias) -> int:
+    """Upsert one `TrackPlay` per scrobble of `alias` onto its track, keyed by scrobble; returns the count."""
+    count = 0
+    for scrobble in alias.scrobbles:
+        existing = s.scalars(
+            select(TrackPlay).where(TrackPlay.source_scrobble_id == scrobble.id)
+        ).one_or_none()
+        if existing:
+            existing.track_id = alias.track_id
+        else:
+            s.add(
+                TrackPlay(
+                    track_id=alias.track_id,
+                    played_at=scrobble.date,
+                    platform=scrobble.platform,
+                    source_scrobble_id=scrobble.id,
+                )
+            )
+        count += 1
+    return count
+
+
 def do_copy_plays(
     s: Session,
     on_progress: Callable[[int], None] | None = None,
@@ -21,22 +43,7 @@ def do_copy_plays(
     total = 0
 
     for i, alias in enumerate(aliases):
-        for scrobble in alias.scrobbles:
-            existing = s.scalars(
-                select(TrackPlay).where(TrackPlay.source_scrobble_id == scrobble.id)
-            ).one_or_none()
-            if existing:
-                existing.track_id = alias.track_id
-            else:
-                s.add(
-                    TrackPlay(
-                        track_id=alias.track_id,
-                        played_at=scrobble.date,
-                        platform=scrobble.platform,
-                        source_scrobble_id=scrobble.id,
-                    )
-                )
-            total += 1
+        total += copy_alias_plays(s, alias)
 
         if (i + 1) % 100 == 0:
             s.flush()

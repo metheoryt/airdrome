@@ -1,244 +1,11 @@
 from __future__ import annotations
 
-from itertools import combinations
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased
 
-from airdrome.console import console
-from airdrome.enums import BindMethod
-from airdrome.models import DedupGroup, DedupGroupMember, Track, TrackGroup
-
-
-if TYPE_CHECKING:
-    from .manual import Page
-
-
-def _load_stored_index(session: Session) -> dict[tuple[str, ...], DedupGroup]:
-    """Map each stored group to the sorted multiset of its member hashes."""
-    index: dict[tuple[str, ...], DedupGroup] = {}
-    for group in session.scalars(select(DedupGroup)):
-        hashes = tuple(sorted(m.member_hash for m in group.members))
-        index[hashes] = group
-    return index
-
-
-def export_dedup_groups(session: Session) -> dict[str, dict]:
-    """Serialize all stored dedup groups to the portable duplicates.json shape.
-
-    Keyed by group label (decorative only); each value holds the members'
-    `duplicate_hash` values and their parallel `canon_hash` picks. Members are
-    sorted so output is deterministic. Re-import identity is the member-hash
-    multiset, not the label, so a rare duplicate label is disambiguated here
-    purely to avoid dropping a group from the dict.
-    """
-    out: dict[str, dict] = {}
-    for group in session.scalars(select(DedupGroup).order_by(DedupGroup.id)):
-        members = sorted(group.members, key=lambda m: m.member_hash)
-        label = group.label or f"group-{group.id}"
-        key, n = label, 2
-        while key in out:
-            key = f"{label}#{n}"
-            n += 1
-        out[key] = {
-            "members": [m.member_hash for m in members],
-            "canon_hashes": [m.canon_hash for m in members],
-        }
-    return out
-
-
-# --- durable-mirror hand-off -----------------------------------------------
-# The snapshot is taken here, inside the writing transaction; `mirror.py` writes
-# it to disk after the commit. Its module docstring explains why the halves are
-# split. The key lives here so `persistence` needs no import of `mirror`.
-MIRROR_SNAPSHOT_KEY = "dedup_mirror"
-
-
-def stash_mirror_snapshot(session: Session) -> None:
-    """Record the post-flush group table for the after-commit mirror write."""
-    session.info[MIRROR_SNAPSHOT_KEY] = export_dedup_groups(session)
-
-
-def import_dedup_groups(session: Session, data: dict[str, dict]) -> tuple[int, int]:
-    """Upsert dedup groups from the portable shape; identity = member-hash multiset.
-
-    An entry whose member-hash multiset already matches a stored group replaces
-    that group's members/canon picks; otherwise a new group is created. Returns
-    (created, updated). Caller is responsible for committing.
-    """
-    index = _load_stored_index(session)
-    created = updated = 0
-    for label, entry in data.items():
-        members, canons = entry["members"], entry["canon_hashes"]
-        key = tuple(sorted(members))
-        existing = index.get(key)
-        group = existing if existing is not None else DedupGroup()
-        group.label = label
-        group.members = [
-            DedupGroupMember(member_hash=m, canon_hash=c) for m, c in zip(members, canons, strict=True)
-        ]
-        session.add(group)
-        if existing is not None:
-            updated += 1
-        else:
-            created += 1
-            index[key] = group  # collapse duplicate entries within the same file
-    session.flush()
-    stash_mirror_snapshot(session)
-    return created, updated
-
-
-def save_confirmed_groups(session: Session, pages: dict[str, Page]) -> None:
-    """Persist confirmed picks to the DB, keyed by member-hash multiset.
-
-    Only pages materialized in this run are touched: a confirmed page is
-    upserted; a materialized page that matches a stored group but is no
-    longer confirmed (user reset it) is deleted. Stored groups not present
-    in this run are left untouched.
-    """
-    index = _load_stored_index(session)
-    n_saved = 0
-    for key, page in pages.items():
-        hashes = tuple(sorted(t.duplicate_hash for t in page.tracks))
-        existing = index.get(hashes)
-        if not page.confirmed:
-            if existing is not None:
-                session.delete(existing)
-            continue
-        id_to_hash = {t.id: t.duplicate_hash for t in page.tracks}
-        canon_by_member = {
-            t.duplicate_hash: (id_to_hash.get(canon_id) if canon_id is not None else None)
-            for t, canon_id in zip(page.tracks, page.chosen_canons, strict=False)
-        }
-        group = existing if existing is not None else DedupGroup()
-        group.label = key
-        group.members = [
-            DedupGroupMember(member_hash=h, canon_hash=canon_by_member.get(h))
-            for h in (t.duplicate_hash for t in page.tracks)
-        ]
-        session.add(group)
-        n_saved += 1
-    session.flush()
-    stash_mirror_snapshot(session)
-    console.print(f"[dim]Saved {n_saved} confirmed group(s) to DB[/dim]")
-
-
-def load_confirmed_groups(session: Session, pages: dict[str, Page]) -> None:
-    """Restore confirmed picks onto the given pages from stored DedupGroup rows.
-
-    For each page whose member-hash multiset matches a stored group, set
-    `chosen_canons` to the stored canon picks and mark the page confirmed.
-    Pages without a matching stored group are left as-is.
-    """
-    index = _load_stored_index(session)
-    n_restored = 0
-    for page in pages.values():
-        hashes = tuple(sorted(t.duplicate_hash for t in page.tracks))
-        stored = index.get(hashes)
-        if stored is None:
-            continue
-        saved_canon_by_member = {m.member_hash: m.canon_hash for m in stored.members}
-        hash_to_id = {t.duplicate_hash: t.id for t in page.tracks}
-        restored: list[int | None] = []
-        for t in page.tracks:
-            canon_hash = saved_canon_by_member.get(t.duplicate_hash)
-            if canon_hash is None:
-                restored.append(None)
-            else:
-                resolved = hash_to_id.get(canon_hash)
-                if resolved is None:
-                    break
-                restored.append(resolved)
-        else:
-            page.chosen_canons = restored
-            page.confirmed = True
-            page.auto_resolved = False  # human-confirmed overrides auto-resolved status
-            n_restored += 1
-    console.print(f"[dim]Loaded {n_restored}/{len(index)} group(s) from DB[/dim]")
-
-
-def stored_canons(session: Session) -> dict[int, int | None]:
-    """Track id -> the canon its stored group assigns (None: the track is a root of its group).
-
-    Only groups still fully present in the library (same member-hash multiset) govern their
-    tracks, so a partial, possibly-misleading choice is never applied. A member whose stored
-    canon is no longer in the library is left out.
-    """
-    index = _load_stored_index(session)
-    if not index:
-        return {}
-
-    by_hash: dict[str, list[Track]] = {}
-    for t in session.scalars(select(Track)):
-        by_hash.setdefault(t.duplicate_hash, []).append(t)
-
-    governed: dict[int, int | None] = {}
-    for hashes, group in index.items():
-        present = tuple(sorted(h for h in hashes if h in by_hash))
-        if present != hashes:
-            continue
-        for m in group.members:
-            canon_id = None
-            if m.canon_hash is not None:
-                canon_tracks = by_hash.get(m.canon_hash)
-                if not canon_tracks:
-                    continue
-                canon_id = canon_tracks[0].id
-            for t in by_hash[m.member_hash]:
-                governed[t.id] = None if canon_id == t.id else canon_id
-    return governed
-
-
-def apply_manual_overrides(session: Session) -> int:
-    """Apply stored manual dedup choices onto Track.canon_id.
-
-    A stored group governs its tracks entirely (see `stored_canons`): each
-    member's canon_id is set to the stored choice (or cleared), overriding any
-    auto canon. Caller is responsible for committing.
-    """
-    governed = stored_canons(session)
-    changed = 0
-    for tid, new_canon in governed.items():
-        t = session.get_one(Track, tid)
-        if t.canon_id != new_canon:
-            t.canon_id = new_canon
-            changed += 1
-        # The stored choice governs the link even where auto agreed, so the method is
-        # MANUAL either way; a member left without a canon carries no link to describe.
-        linked = new_canon is not None
-        t.canon_method = BindMethod.MANUAL if linked else None
-        t.canon_confidence = 1.0 if linked else None
-        session.add(t)
-    session.flush()
-    return changed
-
-
-def stored_cannot_links(session: Session) -> set[frozenset[int]]:
-    """Track-id pairs a stored group keeps apart: members whose resolved canons differ.
-
-    A member resolves to its stored canon, or to itself when it has none, so an all-NULL
-    ("not duplicates") group vetoes every pair. Unlike `apply_manual_overrides`, a group need not
-    be wholly present: the veto is a hard constraint on whichever of its members remain.
-    """
-    groups = list(session.scalars(select(DedupGroup)))
-    if not groups:
-        return set()
-
-    by_hash: dict[str, list[int]] = {}
-    for t in session.scalars(select(Track)):
-        by_hash.setdefault(t.duplicate_hash, []).append(t.id)
-
-    pairs: set[frozenset[int]] = set()
-    for group in groups:
-        resolved = {m.member_hash: m.canon_hash or m.member_hash for m in group.members}
-        for h1, h2 in combinations(resolved, 2):
-            if resolved[h1] == resolved[h2]:
-                continue
-            pairs.update(
-                frozenset({a, b}) for a in by_hash.get(h1, ()) for b in by_hash.get(h2, ()) if a != b
-            )
-    return pairs
+from airdrome.models import Track, TrackGroup
 
 
 def flatten_canon_chains(session: Session) -> int:
@@ -280,21 +47,28 @@ def flatten_canon_chains(session: Session) -> int:
     return changed
 
 
-def recompute_main_files(session: Session) -> int:
-    """Re-pick the single `is_main` file for every dedup group.
+def recompute_main_files(session: Session, root_ids: Iterable[int] | None = None) -> int:
+    """Re-pick the single `is_main` file for every dedup group (or only the groups rooted at `root_ids`).
 
-    A group's main file must be the best copy across the canon and all its
-    twins; when the canon graph changes (auto or interactive dedup) a merge can
+    A group's main file must be the best copy among the canon's core (the whole group when the core
+    has no file, see `TrackGroup.main_candidates`); when the canon graph changes (a `dedup` run or
+    an MCP point edit) a merge can
     leave two already-organized files marked main, or the best copy can land on
     a member that no longer owns the flag. Walk every canon root (canon_id IS
     NULL — true canons and singletons alike) and let `TrackGroup.recompute_main`
     re-mark exactly one file per group. Returns the number of groups whose main
     file changed; caller commits. (This only updates the flag — files already on
     disk are not relocated; physical re-placement is the reconcile roadmap.)
+
+    `root_ids` scopes the walk to the groups a point edit touched; an id that is no longer a root is
+    skipped (its files now belong to its new root's group, which the caller passes too).
     """
     session.flush()  # make pending canon_id writes visible to the root query
     changed = 0
-    for root in session.scalars(select(Track).where(Track.canon_id.is_(None))):
+    roots = select(Track).where(Track.canon_id.is_(None))
+    if root_ids is not None:
+        roots = roots.where(Track.id.in_(list(root_ids)))
+    for root in session.scalars(roots):
         group = TrackGroup.of(root)
         # Compare the full set so a cleared stale second main also counts.
         before = {f.id for m in group.members for f in m.files if f.is_main}

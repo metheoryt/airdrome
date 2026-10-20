@@ -11,7 +11,6 @@ track becomes its own ``Track`` and is linked as a twin of the album track's gro
 
 import contextlib
 from collections import Counter, defaultdict
-from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -21,7 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 from airdrome.console import detail
 from airdrome.enums import BindMethod
 from airdrome.library.fingerprint import FP_MATCH, FingerprintIndex
-from airdrome.models import DedupGroupMember, Track, TrackFile
+from airdrome.models import Track, TrackFile
 
 
 # A fingerprint match links silently only when the two durations are this close (spec, *Automatic vs
@@ -32,39 +31,23 @@ FP_MAX_DURATION_GAP = 2.0
 MBID_CONFIDENCE = {BindMethod.MBID: 1.0, BindMethod.ACOUSTID: 0.9}
 
 
-# The Track fields that feed ``duplicate_hash`` (beyond the tags key), which stored dedup groups are
-# keyed on.
-_HASHED_DEFAULTS = ("track_n", "disc_n", "year", "duration")
-
-
-def stored_member_hashes(s: Session) -> set[str]:
-    """Every ``duplicate_hash`` a stored (hand-made) dedup group names."""
-    return set(s.scalars(select(DedupGroupMember.member_hash)))
-
-
-def backfill(track: Track, defaults: dict, stored_hashes: AbstractSet[str]) -> bool:
+def backfill(track: Track, defaults: dict) -> bool:
     """Fill ``track``'s NULL fields from ``defaults``; return whether any changed.
 
-    A track whose current ``duplicate_hash`` a stored dedup group names keeps its NULL hashed fields:
-    filling one would change the hash, and the hand-made group would silently stop governing
-    (``stored_canons``) or vetoing (``stored_cannot_links``) it. Elsewhere the backfill stays — a
-    fresh-DB ``land`` (no stored groups yet) relies on it to reproduce the mirror's hashes.
+    Safe for hand-made decisions: they name tracks by their natural key (title, artist, album,
+    album artist), which a backfill never touches, so filling year or duration moves no decision.
     """
-    if track.duplicate_hash in stored_hashes:
-        defaults = {k: v for k, v in defaults.items() if k not in _HASHED_DEFAULTS}
     return track.fill_nulls(defaults)
 
 
-def upsert_track(
-    s: Session, *, defaults: dict, stored_hashes: AbstractSet[str] = frozenset(), **key: object
-) -> tuple[Track, bool, bool]:
+def upsert_track(s: Session, *, defaults: dict, **key: object) -> tuple[Track, bool, bool]:
     """Get-or-create a canonical Track by ``key``, backfilling NULLs from ``defaults`` (see ``backfill``).
 
     Returns ``(track, created, updated)``: ``created`` if a new row was made, ``updated`` if an
     existing row had any NULL fields filled. Unify's source-track stage; the ladder splits the two steps.
     """
     track, created = Track.get_or_create(s, defaults=defaults, **key)
-    updated = not created and backfill(track, defaults, stored_hashes)
+    updated = not created and backfill(track, defaults)
     return track, created, updated
 
 
@@ -120,8 +103,6 @@ class LadderContext:
     fp_index: FingerprintIndex  # keyed by TrackFile.id
     file_track: dict[int, Track]
     fp_duration: dict[int, float]  # TrackFile.id → fp_duration, for the duration gate
-    # duplicate_hash values a stored (hand-made) dedup group names; see ``backfill``.
-    stored_hashes: set[str] = field(default_factory=set)
     stats: Counter[str] = field(default_factory=Counter)  # created / updated / per method
 
     @classmethod
@@ -140,7 +121,7 @@ class LadderContext:
         )
         for tf in s.scalars(fingerprinted):
             cls._index_file(tf, fp_index, file_track, fp_duration)
-        return cls(by_mbid, fp_index, file_track, fp_duration, stored_member_hashes(s))
+        return cls(by_mbid, fp_index, file_track, fp_duration)
 
     @staticmethod
     def _index_file(
@@ -199,7 +180,7 @@ def _track_from_tags(s: Session, tf: TrackFile, ctx: LadderContext) -> tuple[Tra
 
 def _backfill(track: Track, tf: TrackFile, ctx: LadderContext) -> None:
     """Fill ``track``'s NULL fields from the file it is about to receive (``backfill``), counting it."""
-    ctx.stats["updated"] += backfill(track, _file_defaults(tf), ctx.stored_hashes)
+    ctx.stats["updated"] += backfill(track, _file_defaults(tf))
 
 
 def _bind(

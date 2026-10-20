@@ -7,16 +7,15 @@ from pathlib import Path
 import pytest
 
 from airdrome import console as console_mod
-from airdrome.enums import BindMethod
+from airdrome.enums import BindMethod, DecisionKind
 from airdrome.library.fingerprint import FP_MATCH, similarity
 from airdrome.models import Track, TrackFile
 from airdrome.normalize.dedup import RECOMMENDED_SETS
 from airdrome.normalize.dedup.auto import auto_deduplicate
 from airdrome.normalize.dedup.grouping import CanonStrategy
-from airdrome.normalize.dedup.persistence import stored_cannot_links
 from airdrome.normalize.dedup.recording import compute_recording_groups, scan_recordings
 
-from factories import make_dedup_group, make_track
+from factories import add_canon, add_pair, make_track, old_hash
 
 
 X = "11111111-1111-1111-1111-111111111111"
@@ -221,19 +220,10 @@ def test_fingerprint_bridge_cannot_chain_two_ids(session, track, add_file) -> No
 # ── manual veto ─────────────────────────────────────────────────────────────────
 
 
-def test_stored_cannot_links_pairs_members_with_different_canons(session, track) -> None:
-    """Members resolving to different canons are cannot-link pairs; a twin and its canon are not."""
-    a, b, c = track(), track(), track()
-    make_dedup_group(session, [(a, None), (b, a), (c, None)])
-
-    assert stored_cannot_links(session) == {frozenset({a.id, c.id}), frozenset({b.id, c.id})}
-
-
 def test_not_duplicates_veto_transitive(session, track, add_file) -> None:
-    """A and B stored as "not duplicates"; C shares their id: A and B still end apart.
+    """A and B decided different; C shares their id: A and B still end apart.
 
-    The stored group also names a member that is no longer in the library, so the manual override
-    does not apply and only the cannot-link veto keeps A and B apart.
+    A dead decision (naming a track no longer in the library) beside it changes nothing.
     """
     a = track(added=2021)
     b = track(added=2022)
@@ -241,7 +231,8 @@ def test_not_duplicates_veto_transitive(session, track, add_file) -> None:
     gone = track(title="Gone")
     for t in (a, b, c):
         add_file(t, recording_mbid=X)
-    make_dedup_group(session, [(a, None), (b, None), (gone, None)])
+    add_pair(session, a, b, DecisionKind.DIFFERENT)
+    add_pair(session, a, gone, DecisionKind.SAME)
     session.delete(gone)
     session.flush()
 
@@ -249,6 +240,7 @@ def test_not_duplicates_veto_transitive(session, track, add_file) -> None:
 
     assert not _together(result.groups, a, b)
     assert _root(a) != _root(b)
+    assert result.dead == 1
 
 
 # ── conflicts ───────────────────────────────────────────────────────────────────
@@ -302,134 +294,84 @@ def test_recording_groups_survive_rerun(session, track, add_file) -> None:
 
 
 def test_mirror_hashes_unchanged(session, track, add_file) -> None:
-    """Recording grouping links tracks without touching the fields `duplicate_hash` is built from."""
+    """Recording grouping links tracks without touching the fields the old group hash is built from."""
     tracks = [track(added=2020 + i) for i in range(3)]
     for t in tracks:
         add_file(t, recording_mbid=X)
-    before = {t.id: t.duplicate_hash for t in tracks}
+    before = {t.id: old_hash(t) for t in tracks}
 
     auto_deduplicate(session, flag_sets=RECOMMENDED_SETS, strategy=CanonStrategy.YEAR)
 
-    assert {t.id: t.duplicate_hash for t in tracks} == before
+    assert {t.id: old_hash(t) for t in tracks} == before
     assert sum(t.canon_id is not None for t in tracks) == 2
 
 
-def test_review_shows_fingerprint_candidates_as_unconfirmed_pages(session, track, add_file) -> None:
-    """`dedup --review` offers a larger-gap fingerprint match as an unconfirmed page."""
-    from airdrome.normalize.dedup.manual import Deduplicator
-
-    a = track(added=2020)
-    b = track(added=2021)
-    add_file(a, fingerprint=_fp(1), fp_duration=200.0)
-    add_file(b, fingerprint=_fp(1), fp_duration=210.0)
-
-    dd = Deduplicator(session)
-    dd.fill_state()
-
-    [page] = [p for p in dd.state.pages.values() if a in p.tracks]
-    assert page.tracks == [a, b]
-    assert not page.confirmed and not page.auto_resolved
+# ── newcomers to manually decided groups ────────────────────────────────────────
 
 
-# ── newcomers to hand-made groups ───────────────────────────────────────────────
+def test_newcomer_joins_under_chosen_canon(session, track, add_file) -> None:
+    """A track recording identity adds to a manual group joins under that group's canon choice.
 
-
-def test_newcomer_joins_under_stored_canon(session, track, add_file) -> None:
-    """A track recording identity adds to a hand-made group joins under that group's stored canon.
-
-    N sorts first, so it would be the automatic canon; the stored choice (A canon, B→A) wins and N
-    becomes A's twin instead of being stranded on its own when the override re-points A and B.
+    N sorts first, so canon order alone would make it canon; the canon choice keeps A. A's core is
+    A alone (no automatic evidence reaches it), so B and N are both folded in: MANUAL links.
     """
     a = track(added=2021)
     b = track(added=2022)
     n = track(added=2019)
     add_file(b, recording_mbid=X)
     add_file(n, recording_mbid=X)
-    make_dedup_group(session, [(a, None), (b, a)])
+    add_pair(session, a, b, DecisionKind.SAME)
+    add_canon(session, a)
 
     _dedup(session)
 
     assert (a.canon_id, b.canon_id, n.canon_id) == (None, a.id, a.id)
-    assert (n.canon_method, n.canon_confidence) == (BindMethod.MBID, 1.0)
+    assert (n.canon_method, n.canon_confidence, n.canon_folded) == (BindMethod.MANUAL, 1.0, True)
     assert b.canon_method == BindMethod.MANUAL
 
 
+def test_newcomer_without_canon_choice_leads_by_canon_order(session, track, add_file) -> None:
+    """Without a canon choice, the newcomer N that sorts first becomes the canon of the joined group."""
+    a = track(added=2021)
+    b = track(added=2022)
+    n = track(added=2019)
+    add_file(b, recording_mbid=X)
+    add_file(n, recording_mbid=X)
+    add_pair(session, a, b, DecisionKind.SAME)
+
+    _dedup(session)
+
+    assert (n.canon_id, a.canon_id, b.canon_id) == (None, n.id, n.id)
+    assert (b.canon_method, b.canon_folded) == (BindMethod.MBID, False)  # in N's core: recording evidence
+    assert (a.canon_method, a.canon_folded) == (BindMethod.MANUAL, True)
+
+
 def test_newcomer_joins_one_side_of_not_duplicates(session, track, add_file) -> None:
-    """With A, B stored as "not duplicates", a newcomer sharing their id joins one of them, not neither."""
+    """With A, B decided different, a newcomer sharing their id joins one of them, not both."""
     a = track(added=2021)
     b = track(added=2022)
     c = track(added=2019)
     for t in (a, b, c):
         add_file(t, recording_mbid=X)
-    make_dedup_group(session, [(a, None), (b, None)])
+    add_pair(session, a, b, DecisionKind.DIFFERENT)
 
     _dedup(session)
 
-    assert a.canon_id is None and b.canon_id is None
-    assert c.canon_id in {a.id, b.id}
+    assert _root(a) != _root(b)
+    assert _root(c) in {_root(a), _root(b)}
 
 
-def test_stored_canon_never_bypasses_the_veto(session, track, add_file) -> None:
-    """A newcomer is not anchored onto a stored canon that a "not duplicates" choice keeps it from.
-
-    Stored: {A canon, B→A}, and a partial "not duplicates" {A, C, gone}. B and C share an id.
-    """
+def test_manual_same_never_bypasses_the_veto(session, track, add_file) -> None:
+    """same(A,B) and different(A,C): C, sharing B's id, is kept from the whole manual group."""
     a = track(added=2021)
     b = track(added=2022)
     c = track(added=2019)
-    gone = track(title="Gone", added=2018)
     add_file(b, recording_mbid=X)
     add_file(c, recording_mbid=X)
-    make_dedup_group(session, [(a, None), (b, a)])
-    make_dedup_group(session, [(a, None), (c, None), (gone, None)])
-    session.delete(gone)
-    session.flush()
+    add_pair(session, a, b, DecisionKind.SAME)
+    add_pair(session, a, c, DecisionKind.DIFFERENT)
 
     _dedup(session)
 
     assert _root(c) != _root(a)
     assert b.canon_id == a.id
-
-
-def test_flag_set_newcomer_keeps_canon_order(session) -> None:
-    """A flag-set group is not re-canoned onto a member that is a stored canon elsewhere.
-
-    R is a single-track compilation copy (lowest canon rank) and the root of an unrelated
-    hand-made group; N, the album copy, shares R's flags and stays canon of that pair.
-    """
-    n = make_track(session, "Song", "Band", "Album", album_artist="Band", duration=200, date_added=_at(2022))
-    r = make_track(
-        session, "Song", "Band", "Hits", album_artist="Various Artists", duration=200, date_added=_at(2019)
-    )
-    q = make_track(session, "Elsewhere", "Other", "X", duration=50)
-    make_dedup_group(session, [(r, None), (q, r)])
-
-    result = _dedup(session)
-
-    assert any(g[0] is n and r in g for g in result.groups)
-    assert n.canon_id is None
-    assert r.canon_id is None  # the override keeps R the root of its own hand-made group
-
-
-def test_flag_reached_stored_canon_does_not_recanon_a_recording_group(session, add_file) -> None:
-    """A stored canon reached only by the flag sets does not re-canon a group recording identity touched.
-
-    B is the album copy; R, a Various Artists copy with B's flags, is the root of an unrelated
-    hand-made group {R, Q}; N joins B only through a shared recording id.
-    """
-    b = make_track(session, "Song", "Band", "Album", album_artist="Band", duration=200, date_added=_at(2022))
-    r = make_track(
-        session, "Song", "Band", "Hits", album_artist="Various Artists", duration=200, date_added=_at(2019)
-    )
-    n = make_track(
-        session, "Song (Remaster)", "Band X", "Other", duration=900, year=1999, date_added=_at(2023)
-    )
-    q = make_track(session, "Elsewhere", "Other", "X", duration=50)
-    add_file(b, recording_mbid=X)
-    add_file(n, recording_mbid=X)
-    make_dedup_group(session, [(r, None), (q, r)])
-
-    _dedup(session)
-
-    assert b.canon_id is None
-    assert n.canon_id == b.id

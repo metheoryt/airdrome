@@ -49,7 +49,7 @@ from airdrome.cloud.sources import SourcePlaylist, SourceTrack
 from airdrome.console import console, detail, make_progress
 from airdrome.enums import BindMethod, Source
 from airdrome.library.enrich import fingerprint_files
-from airdrome.library.ladder import LadderContext, resolve_file, stored_member_hashes, upsert_track
+from airdrome.library.ladder import LadderContext, resolve_file, upsert_track
 from airdrome.library.pathindex import PathTailIndex
 from airdrome.models import AwareDatetime, Playlist, PlaylistLink, PlaylistTrack, TrackFile
 
@@ -107,8 +107,6 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
     # for canonical metadata — the earliest-inserted source row creates the Track and sets its defaults,
     # later siblings only backfill NULLs (see upsert_track).
     index = PathTailIndex.build(s)
-    # Empty on a fresh DB (groups are restored by `dedup`), so a first `land` backfills everything.
-    stored_hashes = stored_member_hashes(s)
     stmt = select(SourceTrack).where(SourceTrack.track_id.is_(None)).order_by(SourceTrack.id)
     for st in s.scalars(stmt):
         st: SourceTrack
@@ -131,7 +129,6 @@ def _unify_source_tracks(s: Session) -> Iterator[tuple[bool, bool, int]]:
             album=st.album,
             album_artist=st.album_artist,
             defaults=defaults,
-            stored_hashes=stored_hashes,
         )
         st.track = track
 
