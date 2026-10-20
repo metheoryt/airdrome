@@ -11,17 +11,24 @@ indirectly; **none** — no test. Area prefixes are the draft `REQ-*` families.
 
 | Status | Count |
 |---|---|
-| covered | 50 |
-| partial | 6 |
-| none | 9 |
+| covered | 53 |
+| partial | 5 |
+| none | 7 |
+
+## Defects the gap tests found (2026-10-20)
+
+- **Fixed:** `sync -n` committed anyway — `reconcile` commits once per playlist — and `sync navidrome -n`
+  wrote Navidrome's DB for real. `reconcile` and `NavidromeAdapter` now take `dry_run`.
+- **Fixed:** `dedup` had no `--dry-run` although the CLI help promises it on every write command.
+- **Open:** a read-only source playlist never reconciles. `_sync_pair` returns early without a
+  `PlaylistLink`, and nothing creates one for a source (`land` seeds the playlist but no link), so
+  `sync apple_xml` / `sync apple_ms` are no-ops. The live DB has 317 canonical playlists and 0 links.
+- **Dead code:** `Base.truncate_cascade` (commits on its own) has no caller.
 
 ## Gaps (none / partial), worst first
 
 | Rule | Status | Why it matters |
 |---|---|---|
-| NAVI-1 `navi push` refuses while Navidrome is running (unless `-y` after the prompt) | none | writing a live SQLite DB under Navidrome corrupts it |
-| NAVI-2 WAL is checkpointed before writing Navidrome's DB | none | same |
-| CLI-1 `--dry-run` rolls back on every write command (`import`, `land`, `dedup`, `sync`, `maint *`, `dedup-import`) | partial | tested for `organize` and the import swap only |
 | IMPORT-1 every path is resolved before anything is written; one unrecognized path writes nothing | partial | only `detect` is tested, not "nothing written" |
 | IMPORT-2 Spotify plays under 30 s are not imported | none | no Spotify, Last.fm or ListenBrainz parser test at all (only LB ids) |
 | LAND-1 `augment_aliases` and `copy_plays` (alias plays become `TrackPlay` history) | none | play counts pushed to Navidrome come from here |
@@ -78,6 +85,9 @@ indirectly; **none** — no test. Area prefixes are the draft `REQ-*` families.
 | ORG-3 the upgrade swap never overwrites; a failed swap puts the old main back | `test_organize.py::test_failed_swap_*`, `test_failed_cross_extension_swap_removes_the_partial_upgrade` |
 | ORG-4 `--dry-run` touches no file and plans the real path | `test_dry_run_touches_no_files_but_still_reports`, `test_dry_run_plans_the_same_path_a_real_run_would_write` |
 | ORG-5 a folded-in better file is not swapped in | `test_organize_does_not_swap_in_folded_upgrade` |
+| NAVI-1 `navi push` and `sync navidrome`/`all` refuse while Navidrome listens, even with `-y`; without `-y` a no aborts | `test_navi_guard.py::test_refuses_while_navidrome_runs`, `test_push_asks_and_a_no_writes_nothing` |
+| NAVI-2 the WAL is checkpointed (truncated) before writing Navidrome's DB | `test_push_checkpoints_before_writing`, `test_checkpoint_wal_empties_the_wal` |
+| CLI-1 `--dry-run` writes nothing on every write command, Navidrome's DB included | `test_cli_dry_run.py` (each command with and without `-n`) |
 | NAVI-3 plays are summed and rating/loved aggregated across the group | `test_navidrome_sync.py` |
 | PLAY-2 a read-only remote is never written and stores `theirs` as base | `test_readonly_remote_pulls_without_writing`, `test_resurrection_bug_is_dead` |
 | PLAY-3 a conflict goes to the last remote that edited the track; an untouched remote abstains | `test_playlist_conflicts.py` |

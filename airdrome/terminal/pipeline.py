@@ -81,6 +81,7 @@ def dedup(
         '("artist,duration" + "artist,year" + "album_artist,duration").',
     ),
     canon: CanonStrategy = typer.Option(CanonStrategy.ADDED, "--canon", "-c", help=_CANON_HELP),
+    dry_run: bool = DRY_RUN,
 ) -> None:
     """Rebuild Track.canon_id from the manual decisions + recording identity + N flag-sets.
 
@@ -93,6 +94,7 @@ def dedup(
     Manual decisions are made through the MCP tools, not here.
     """
     state: AppState = ctx.obj
+    state.dry_run = dry_run  # writes only the DB (the mirror follows the commit), so the rollback is enough
     # A rebuilt DB has no decisions; seed them from the mirror before the batch pass
     # reads them, or a schema rebuild would silently drop every manual decision.
     try:

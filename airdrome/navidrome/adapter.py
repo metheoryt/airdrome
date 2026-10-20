@@ -28,9 +28,11 @@ def _to_external(nv_pl: NVPlaylist) -> ExternalPlaylist:
 class NavidromeAdapter(PlaylistAdapter):
     remote = Source.NAVIDROME
 
-    def __init__(self, airdrome_session: Session, username: str) -> None:
+    def __init__(self, airdrome_session: Session, username: str, *, dry_run: bool = False) -> None:
         self._s = airdrome_session
         self._username = username
+        # Navidrome's DB is outside the Airdrome session, so `--dry-run` must skip its commits here.
+        self._dry_run = dry_run
         self._nvs: Session | None = None
         self._user_id: str | None = None
         self._dirty_playlists: set[str] = set()
@@ -59,6 +61,10 @@ class NavidromeAdapter(PlaylistAdapter):
         return self._nvs
 
     def commit(self) -> None:
+        """Write the pending playlist edits to Navidrome's DB; under a dry run, discard them."""
+        if self._dry_run:
+            self.rollback()
+            return
         for nv_pl_id in self._dirty_playlists:
             self._recompute_totals(nv_pl_id)
         self._dirty_playlists.clear()

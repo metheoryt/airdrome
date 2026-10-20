@@ -35,7 +35,7 @@ ALL_REMOTES = (Source.APPLE_XML, Source.APPLE_MS, Source.NAVIDROME)
 
 def _build_adapter(remote: Source, state: AppState) -> PlaylistAdapter:
     if remote is Source.NAVIDROME:
-        return NavidromeAdapter(state.session, _require_user())
+        return NavidromeAdapter(state.session, _require_user(), dry_run=state.dry_run)
     return SourcePlaylistRemote(state.session, remote)
 
 
@@ -50,7 +50,7 @@ def _run(ctx: typer.Context, remotes: tuple[Source, ...], *, dry_run: bool, yes:
 
     with contextlib.ExitStack() as stack:
         adapters = [stack.enter_context(_build_adapter(r, state)) for r in remotes]
-        reconcile(state.session, adapters)
+        reconcile(state.session, adapters, dry_run=dry_run)
 
 
 def _command(remotes: tuple[Source, ...]) -> Callable[..., None]:

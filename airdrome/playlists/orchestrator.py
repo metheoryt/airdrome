@@ -111,7 +111,7 @@ def _apply_override(s: Session, playlist: Playlist, ctxs: list[_Ctx], final: lis
     return True
 
 
-def _pull_backend_only(s: Session, adapter: PlaylistAdapter, seen: set[str]) -> int:
+def _pull_backend_only(s: Session, adapter: PlaylistAdapter, seen: set[str], dry_run: bool) -> int:
     """Create canonical playlists for backend playlists Airdrome doesn't mirror yet."""
     pulled = 0
     for ext in adapter.list_playlists():
@@ -126,17 +126,27 @@ def _pull_backend_only(s: Session, adapter: PlaylistAdapter, seen: set[str]) -> 
             adapter.rollback()
             s.rollback()
             raise
-        s.commit()
+        _commit(s, dry_run)
         console.print(f"  [cyan]<[/cyan]  {playlist.name}")
         pulled += 1
     return pulled
 
 
-def reconcile(s: Session, adapters: list[PlaylistAdapter]) -> None:
+def _commit(s: Session, dry_run: bool) -> None:
+    """Commit one playlist's reconcile; under a dry run only flush, so the close hook's rollback undoes it."""
+    if dry_run:
+        s.flush()
+    else:
+        s.commit()
+
+
+def reconcile(s: Session, adapters: list[PlaylistAdapter], *, dry_run: bool = False) -> None:
     """Reconcile every canonical playlist against `adapters`, in order.
 
     Single pass, no prompting: a playlist with no hard conflict auto-merges pairwise; a
-    conflicted one is settled by `resolve_latest` and that membership forced outward.
+    conflicted one is settled by `resolve_latest` and that membership forced outward. Each playlist
+    commits on its own (the backend has already committed its half); `dry_run` keeps every one of
+    them in the session instead, and a writable adapter must be built with its own dry run.
     """
     playlist_ids = list(s.scalars(select(Playlist.id).order_by(Playlist.name)).all())
 
@@ -167,7 +177,7 @@ def reconcile(s: Session, adapters: list[PlaylistAdapter]) -> None:
                 ctx.adapter.rollback()
             s.rollback()
             raise
-        s.commit()
+        _commit(s, dry_run)
         for ctx in ctxs:
             link = _get_link(s, playlist.id, ctx.adapter.remote)
             if link and link.external_id:
@@ -179,7 +189,7 @@ def reconcile(s: Session, adapters: list[PlaylistAdapter]) -> None:
     # Backend-only playlists are pulled in; sources don't create canonical playlists (land does).
     for adapter in adapters:
         if adapter.writable:
-            pulled = _pull_backend_only(s, adapter, seen[adapter.remote])
+            pulled = _pull_backend_only(s, adapter, seen[adapter.remote], dry_run)
             changed += pulled
             total += pulled
 

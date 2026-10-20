@@ -211,15 +211,17 @@ code (and MCP tools building their answer) can read them without a reload.
 **When adding a CLI command:** take `ctx: typer.Context` first, read `state: AppState =
 ctx.obj`, set `state.dry_run = dry_run` if exposed, pass `state.session` to business logic.
 Business logic takes `s: Session` and uses `s.flush()` for intermediate persistence — it
-must **not** call `s.commit()`. Intentional exceptions: `auto_deduplicate` commits (with a behavioral `dry_run`);
-Navidrome sync manages its own SQLite session and ignores `--dry-run`. The MCP server is the
+must **not** call `s.commit()`. Intentional exception: `reconcile` (`sync`) commits once per playlist, right
+after the backend committed its half, so it takes a behavioral `dry_run` (flush instead), and
+`NavidromeAdapter(dry_run=True)` discards its own Navidrome commits; `navi push` has no `--dry-run`.
+`test_cli_dry_run.py` runs every write command with and without `-n` on the real callback. The MCP server is the
 second session owner outside the callback: `mcpserver.session.tool_session` opens one session per
 tool call (with the dedup mirror installed), commits on success, rolls back on any exception — so a
 tool call is one transaction, and the domain functions it wraps still only flush.
 
 **A rollback only undoes the DB.** A command that also writes outside the session — files,
 an external backend — must take `dry_run` as a *behavioral* argument and skip the side effect
-itself; `state.dry_run` alone is not enough (see `organize`, and `auto_deduplicate`).
+itself; `state.dry_run` alone is not enough (see `organize`, and `sync navidrome`).
 The other way to satisfy the rule is to hang the side effect off the commit itself, so a
 rollback never reaches it — what the dedup decision mirror does.
 
