@@ -9,7 +9,6 @@ command makes on its own would survive the dry run here exactly as it would in p
 import json
 import socket
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -24,7 +23,7 @@ from airdrome.cloud.sources import SourcePlaylist, SourcePlaylistTrack, SourceTr
 from airdrome.conf import settings
 from airdrome.enums import Source
 from airdrome.library.unify import unify_source_playlists, unify_source_tracks
-from airdrome.models import PairDecision, Playlist, PlaylistLink, PlaylistTrack, Track, TrackFile
+from airdrome.models import PairDecision, Playlist, PlaylistTrack, Track, TrackFile
 from airdrome.navidrome import models as nv_models
 from airdrome.navidrome.models import NavidromeBase, Playlist as NVPlaylist
 from airdrome.terminal.app import app
@@ -103,22 +102,6 @@ def test_sync_dry_run(cli, session) -> None:
         select(SourceTrack).where(SourceTrack.source_id == str(added["Track ID"]))
     ).one()
     session.add(SourcePlaylistTrack(playlist=source_playlist, track=added_row, position=2))
-    # Nothing creates a source's link today (see the inventory), so the case seeds the one a sync would use.
-    playlist = session.scalars(select(Playlist)).one()
-    first_track = session.scalars(
-        select(SourceTrack.track_id).where(SourceTrack.source_id == str(first["Track ID"]))
-    ).one()
-    session.add(
-        PlaylistLink(
-            playlist_id=playlist.id,
-            remote=Source.APPLE_XML,
-            external_id=source_playlist.source_id,
-            synced_track_ids=[first_track],
-            synced_at=datetime.now(UTC),
-        )
-    )
-    session.flush()
-
     _assert_dry_then_real(cli, session, ["sync", "apple_xml"], lambda: _count(session, PlaylistTrack))
 
 

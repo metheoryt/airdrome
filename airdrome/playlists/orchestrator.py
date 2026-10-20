@@ -51,6 +51,10 @@ def _gather(s: Session, playlist: Playlist, adapters: list[PlaylistAdapter]) -> 
     for adapter in adapters:
         link = _get_link(s, playlist.id, adapter.remote)
         ext = adapter.get(link.external_id) if (link and link.external_id) else None
+        if link is None and not adapter.writable and playlist.platform == adapter.remote:
+            # `land` never links a source playlist, so its first sync finds it by the source the
+            # canonical was landed from; the empty base then unions and `_sync_pair` writes the link.
+            ext = adapter.get(playlist.source_id)
         if link is not None and ext is None and adapter.writable:
             # Backend playlist vanished — drop the stale link so the apply pass recreates it.
             console.print(f"  [yellow]?[/yellow]  {playlist.name} (backend missing — relinking)")

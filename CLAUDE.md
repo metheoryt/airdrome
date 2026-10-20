@@ -364,7 +364,8 @@ rows), pull-only, never written; backends are read-write (`NavidromeAdapter`).
   The result is forced outward by priming each base to `theirs`, so the same `_sync_pair`
   propagates it. Each auto-resolution prints the track and the remote that won it.
 - **`land` seeds, `sync` updates**: `unify_source_playlists` only writes membership when it
-  *creates* a canonical playlist; existing playlists are owned by `sync`. Re-importing a
+  *creates* a canonical playlist; existing playlists are owned by `sync`. No source `PlaylistLink` exists after `land`: the first `sync` finds the source by the
+  playlist's `platform`/`source_id` and links it. Re-importing a
   snapshot never re-unions, so a downstream delete sticks.
 
 ### Migrations

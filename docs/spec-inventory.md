@@ -20,9 +20,11 @@ indirectly; **none** — no test. Area prefixes are the draft `REQ-*` families.
 - **Fixed:** `sync -n` committed anyway — `reconcile` commits once per playlist — and `sync navidrome -n`
   wrote Navidrome's DB for real. `reconcile` and `NavidromeAdapter` now take `dry_run`.
 - **Fixed:** `dedup` had no `--dry-run` although the CLI help promises it on every write command.
-- **Open:** a read-only source playlist never reconciles. `_sync_pair` returns early without a
-  `PlaylistLink`, and nothing creates one for a source (`land` seeds the playlist but no link), so
-  `sync apple_xml` / `sync apple_ms` are no-ops. The live DB has 317 canonical playlists and 0 links.
+- **Fixed (2026-10-20):** a read-only source playlist never reconciled. `_gather` looked a source up
+  only through its `PlaylistLink`, and nothing creates one for a source (`land` seeds the playlist but no
+  link), so `sync apple_xml` / `sync apple_ms` were no-ops since they were built (317 playlists, 0 links).
+  The first sync now finds the source by the playlist's own `platform`/`source_id`. Every earlier test
+  seeded the link by hand; `test_first_source_sync_links_the_playlist_it_was_landed_from` does not.
 - **Dead code:** `Base.truncate_cascade` (commits on its own) has no caller.
 
 ## Gaps (none / partial), worst first

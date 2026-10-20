@@ -8,7 +8,7 @@ here. The pairwise merge and `resolve_latest` are unit-tested elsewhere; this fi
 the orchestration wiring around them.
 """
 
-from test_playlist_sync import FakeBackend, FakeSource, _playlist, _pt_rows, _seed_link
+from test_playlist_sync import FakeBackend, FakeSource, _link, _playlist, _pt_rows, _seed_link
 
 from airdrome.enums import Source
 from airdrome.playlists.orchestrator import reconcile
@@ -62,6 +62,36 @@ def test_single_source_pulls_into_canonical(session):
     reconcile(session, [src])
 
     assert _pt_rows(session, pl) == [x.id]
+
+
+def test_first_source_sync_links_the_playlist_it_was_landed_from(session):
+    """`land` creates no source link: the first sync finds the source by the playlist's origin."""
+    x, y = make_track(session, "x"), make_track(session, "y")
+    src = FakeSource()
+    src.canon_of |= {"s1": x.id, "s2": y.id}
+    src.seed("sp", "P", ["s1", "s2"])  # the newer export gained y
+    pl = _playlist(session, [x])
+    pl.platform, pl.source_id = Source.APPLE_XML, "sp"
+
+    reconcile(session, [src])
+
+    assert _pt_rows(session, pl) == [x.id, y.id]
+    assert _link(session, pl, Source.APPLE_XML).synced_track_ids == [x.id, y.id]
+
+
+def test_source_sync_skips_a_playlist_landed_from_another_source(session):
+    """A playlist that came from Spotify has nothing to reconcile against in an Apple export."""
+    x = make_track(session, "x")
+    src = FakeSource()
+    src.canon_of["s1"] = x.id
+    src.seed("sp", "P", ["s1"])
+    pl = _playlist(session, [])
+    pl.source_id = "sp"  # same id, but `_playlist` lands it from Spotify
+
+    reconcile(session, [src])
+
+    assert _pt_rows(session, pl) == []
+    assert _link(session, pl, Source.APPLE_XML) is None
 
 
 def test_conflict_goes_to_the_last_remote_that_edited_the_track(session, capsys):

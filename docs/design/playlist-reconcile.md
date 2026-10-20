@@ -120,7 +120,11 @@ the complexity worth cutting.
 ## Deviation from the original plan (as built)
 
 `land` does **not** create source `PlaylistLink`s. The source base is seeded by the first `sync`
-(empty base → union), which fixes the resurrection bug just as well and is simpler. So
+(empty base → union), which fixes the resurrection bug just as well and is simpler. That first `sync` finds the
+source playlist by the canonical's own `platform`/`source_id` (`orchestrator._gather`); until
+2026-10-20 it looked only through the missing link, so source sync silently did nothing. A source
+playlist folded in by `land --merge-playlists` keeps no canonical of its own and so is still never
+reconciled — the `playlist_merge` tombstone work in ROADMAP covers it. So
 `unify_source_playlists` only writes membership when it *creates* a canonical playlist; existing
 playlists are owned by `sync`.
 
