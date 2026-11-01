@@ -205,7 +205,9 @@ Sessions are created centrally in the root `app` callback (`terminal/app.py`) an
 `AppState(session, dry_run)` on `ctx.obj`; a close hook commits, or rolls back under
 `--dry-run`. A commit that fails there is rolled back, reported in red ("nothing was saved") and
 exits 1 — the command has already printed its summary by then. The close hook also runs when a
-command raises, so a crash commits what it flushed (#8). `upgrade_to_head()` runs inside the
+command raises, so a crash commits what it flushed — and when the crash left the session in a failed
+flush, the close-time commit fails too, so the user sees only "Commit failed" and never the command's
+own traceback (both #8). <!-- src: metheoryt/airdrome sleep 2026-11-01 g15 --> `upgrade_to_head()` runs inside the
 callback (not at import), so a bare `airdrome`, `status`, `mcp` and any help request skip it. Click
 runs the root callback *before* a subcommand parses its own `--help`, so the root group
 (`_RootGroup`) keeps the raw argv in `ctx.meta` and `_wants_help` returns early on a help token
