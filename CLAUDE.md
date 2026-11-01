@@ -203,9 +203,18 @@ Off the pipeline, for the owner's AI client:
 
 Sessions are created centrally in the root `app` callback (`terminal/app.py`) and stored as
 `AppState(session, dry_run)` on `ctx.obj`; a close hook commits, or rolls back under
-`--dry-run`. `upgrade_to_head()` runs inside the callback (not at import), so a bare `airdrome`
-/ `airdrome --help` and `status` skip it — but `airdrome <sub> --help` passes through the callback
-and connects to `DB_DSN` and migrates (an `alembic` crash against the live DB, 2026-10-17). <!-- src: metheoryt/airdrome sleep 2026-10-17 g15 --> `expire_on_commit=False` keeps ORM objects populated after a commit, so
+`--dry-run`. A commit that fails there is rolled back, reported in red ("nothing was saved") and
+exits 1 — the command has already printed its summary by then. The close hook also runs when a
+command raises, so a crash commits what it flushed (#8). `upgrade_to_head()` runs inside the
+callback (not at import), so a bare `airdrome`, `status`, `mcp` and any help request skip it. Click
+runs the root callback *before* a subcommand parses its own `--help`, so the root group
+(`_RootGroup`) keeps the raw argv in `ctx.meta` and `_wants_help` returns early on a help token
+before any `--`; without it `<sub> --help` migrated the live DB (an `alembic` crash, 2026-10-17).
+A bare group (`airdrome maint`) still migrates before printing its help.
+`upgrade_to_head` asks `schema_state()` first and raises `UnknownRevisionError` on an unknown stamp;
+the callback prints `RECREATE_HINT` (shared with `mcp`) and exits 1 instead of alembic's traceback.
+Typer vendors its own Click (`typer._click`): use `typer.Context`, never `import click`.
+`expire_on_commit=False` keeps ORM objects populated after a commit, so
 code (and MCP tools building their answer) can read them without a reload.
 
 **When adding a CLI command:** take `ctx: typer.Context` first, read `state: AppState =

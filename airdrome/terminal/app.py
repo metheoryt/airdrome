@@ -1,14 +1,16 @@
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 from sqlalchemy.orm import Session
+from typer.core import TyperGroup
 
 from airdrome.conf import settings
 from airdrome.console import console, done, set_verbosity, step
 from airdrome.ingest import BY_NAME, DataKind, Importer, detect
 from airdrome.ingest.sources import MusicFolderImporter
 from airdrome.library.unify import do_unify
-from airdrome.migrations import upgrade_to_head
+from airdrome.migrations import UnknownRevisionError, upgrade_to_head
 from airdrome.models import engine
 from airdrome.normalize.dedup.mirror import install_mirror
 from airdrome.scrobbles.augment_aliases import augment_aliases
@@ -39,7 +41,34 @@ Typical flow (run in order):
 Run `status` anytime for a read-only snapshot of config and pipeline progress.
 Every write command is idempotent and takes --dry-run/-n. Run any command with --help."""
 
-app = typer.Typer(help=_HELP, pretty_exceptions_show_locals=False)
+_ARGV_KEY = "airdrome.argv"
+
+
+class _RootGroup(TyperGroup):
+    """The root group; keeps the raw command line in `ctx.meta` for the callback to read."""
+
+    # The base takes Typer's vendored `_click.Context`, a private name; `typer.Context` is its public
+    # subclass and the one Typer actually passes, so the narrowing is safe.
+    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:  # ty: ignore[invalid-method-override]
+        """Record the args before Click splits them: the callback sees none of the subcommand's."""
+        ctx.meta[_ARGV_KEY] = list(args)
+        return super().parse_args(ctx, args)
+
+
+def _wants_help(ctx: typer.Context) -> bool:
+    """True when the command line asks for help anywhere (`land --help`, `maint enrich --help`).
+
+    Click runs the root callback before the subcommand parses its own args, and the subcommand's
+    eager help option exits only then — so without this check every `<cmd> --help` would open the
+    DB and migrate first. Tokens after a `--` are arguments, not options, and do not count.
+    """
+    argv = ctx.meta.get(_ARGV_KEY, [])
+    if "--" in argv:
+        argv = argv[: argv.index("--")]
+    return any(token in ctx.help_option_names for token in argv)
+
+
+app = typer.Typer(cls=_RootGroup, help=_HELP, pretty_exceptions_show_locals=False)
 app.command("status")(status)
 app.command("mcp")(mcp)
 pipeline.register(app)
@@ -62,9 +91,14 @@ def main(
     # `status` is a read-only diagnostic that opens its own (defensive) session, so it can
     # report an unreachable DB or un-applied migrations instead of crashing in the setup below.
     # `mcp` opens one session per tool call and must never migrate (it refuses unless at head).
-    if ctx.invoked_subcommand in ("status", "mcp"):
+    # A help request prints and exits in the subcommand's own parsing, after this callback.
+    if ctx.invoked_subcommand in ("status", "mcp") or _wants_help(ctx):
         return
-    upgrade_to_head()
+    try:
+        upgrade_to_head()
+    except UnknownRevisionError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
     # expire_on_commit=False keeps ORM objects populated after a commit; without it, reading a
     # track after `auto_deduplicate` commits would re-load it one row at a time (an N+1 storm that
     # looks like a freeze on a large library).
@@ -81,8 +115,12 @@ def main(
         else:
             try:
                 session.commit()
-            except Exception:
+            except Exception as exc:
                 session.rollback()
+                # The command has already printed its summary; say plainly that none of it was saved,
+                # and fail the exit code so a script chaining commands stops here.
+                console.print(f"[red]Commit failed — nothing was saved: {escape(str(exc))}[/red]")
+                raise typer.Exit(1) from exc
 
     ctx.call_on_close(_finalize)
 

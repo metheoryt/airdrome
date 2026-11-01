@@ -7,7 +7,7 @@ from rich.markup import escape
 from airdrome.conf import settings
 from airdrome.console import console
 from airdrome.mcpserver.server import build_server, seed_decisions
-from airdrome.migrations import schema_state
+from airdrome.migrations import RECREATE_HINT, schema_state
 from airdrome.models import engine
 
 
@@ -18,11 +18,7 @@ def mcp() -> None:
         raise typer.Exit(1)
     state = schema_state()
     if state == "unknown":
-        console.print(
-            "[red]the DB predates the current schema; recreate it (see *Recreating the database* in "
-            'README) — first keep a pg_dump of this DB and, if the mirror has no "version", convert '
-            "its dedup groups with scripts/migrate_dedup_groups.py[/red]"
-        )
+        console.print(f"[red]{escape(RECREATE_HINT)}[/red]")
         raise typer.Exit(1)
     if state == "behind":
         console.print("[red]schema is not at head — run `uv run alembic upgrade head` first[/red]")

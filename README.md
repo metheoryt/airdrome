@@ -182,7 +182,7 @@ airdrome navi push
 
 ## Command reference
 
-Run any command with `--help` for its full options.
+Run any command with `--help` for its full options; help never connects to the database.
 
 ### `airdrome status`
 
@@ -389,6 +389,8 @@ uv run alembic downgrade -1
 There is no production database, so a schema change (or a database carrying a revision the scripts
 no longer know) means recreating it rather than migrating. Everything in it is rebuilt from your
 exports; the one hand-made part, your dedup decisions, comes back from the mirror.
+Every command refuses a database stamped with an unknown revision and points here, instead of
+migrating it.
 
 ```bash
 # 0. Only if the mirror has no "version" (an install from before pair decisions): convert the
