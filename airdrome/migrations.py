@@ -22,8 +22,26 @@ def _build_config() -> Config:
     return cfg
 
 
+RECREATE_HINT = (
+    "the DB predates the current schema; recreate it (see *Recreating the database* in README) — first "
+    'keep a pg_dump of this DB and, if the mirror has no "version", convert its dedup groups with '
+    "scripts/migrate_dedup_groups.py"
+)
+
+
+class UnknownRevisionError(RuntimeError):
+    """The DB is stamped with an alembic revision the scripts don't know; no upgrade can reach head."""
+
+
 def upgrade_to_head() -> None:
-    command.upgrade(_build_config(), "head")
+    """Apply pending migrations; raise `UnknownRevisionError` instead of alembic's traceback when none can."""
+    # Asked first rather than catching alembic's CommandError: that error class also covers a broken
+    # script directory, and only `schema_state` tells an unknown stamp from any other failure.
+    state = schema_state()
+    if state == "unknown":
+        raise UnknownRevisionError(RECREATE_HINT)
+    if state == "behind":
+        command.upgrade(_build_config(), "head")
 
 
 SchemaState = Literal["head", "behind", "unknown"]
